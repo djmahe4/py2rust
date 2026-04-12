@@ -10,6 +10,7 @@ from ..ir.ir_nodes import (
     IRListType,
     IRDictType,
     IRFileType,
+    IRClassType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
@@ -29,6 +30,7 @@ from ..ir.ir_nodes import (
     IRFileMethod,
     IRVarDecl,
     IRAssign,
+    IRFieldAssign,
     IRAugAssign,
     IRIf,
     IRWhile,
@@ -38,6 +40,12 @@ from ..ir.ir_nodes import (
     IRBreak,
     IRContinue,
     IRDictDelete,
+    IRStructLit,
+    IRStructAccess,
+    IRMethodCall,
+    IRNew,
+    IRSelf,
+    IRClassDefinition,
 )
 
 
@@ -56,6 +64,8 @@ def _rust_type(t) -> str:
         return f"HashMap<{_rust_type(t.key_type)}, {_rust_type(t.value_type)}>"
     if isinstance(t, IRFileType):
         return "FileHandle"
+    if isinstance(t, IRClassType):
+        return t.name
     raise ValueError(f"Unknown type {type(t).__name__}")
 
 
@@ -216,6 +226,11 @@ class RustCodegen:
         self._emit("use std::fs::{File, OpenOptions};")
         self._emit("use std::io::{BufRead, BufReader, Read, Write, Seek, SeekFrom};")
         self._emit("")
+
+        for cls in module.classes:
+            self._gen_class(cls)
+            self._emit_blank()
+
         self._emit("struct FileHandle {")
         self._emit("    file: File,")
         self._emit("}")
@@ -283,6 +298,82 @@ class RustCodegen:
                 self._emit_blank()
             self._gen_function(func)
         return "\n".join(self._lines) + "\n"
+
+    def _gen_class(self, cls: IRClassDefinition) -> None:
+        self._emit(f"struct {cls.name} {{")
+        self._indent += 1
+        for field_name, field_type in cls.fields:
+            self._emit(f"{_mangle(field_name)}: {_rust_type(field_type)},")
+        self._indent -= 1
+        self._emit("}")
+        self._emit("")
+        self._emit(f"impl {cls.name} {{")
+        self._indent += 1
+        for method in cls.methods:
+            self._gen_method(method)
+        for ctor in cls.constructors:
+            self._gen_method(ctor, is_init=True)
+        self._indent -= 1
+        self._emit("}")
+
+    def _gen_method(self, func: IRFunction, is_init: bool = False) -> None:
+        self._mutated_vars = _collect_mutated_vars(func.body)
+        decls = _collect_decls(func.body)
+
+        param_strs = ["&self"]
+        for p in func.params:
+            mut = "mut " if p.name in func.mutated_params else ""
+            param_strs.append(f"{mut}{_mangle(p.name)}: {_rust_type(p.type_)}")
+        params = ", ".join(param_strs)
+
+        if is_init:
+            self._emit(f"fn new({params}) -> Self {{")
+        else:
+            ret = _rust_type(func.return_type)
+            self._emit(f"fn {_mangle(func.name)}({params}) -> {ret} {{")
+
+        self._indent += 1
+
+        self._decl_types = dict(decls)
+        self._loop_vars = _vars_declared_in_loop(func.body)
+
+        for name, type_ in decls.items():
+            if name == "_":
+                continue
+            if name in self._loop_vars:
+                continue
+            mut = "mut " if name in self._mutated_vars else ""
+            default = self._default_value(type_)
+            self._emit(f"let {mut}{_mangle(name)}: {_rust_type(type_)} = {default};")
+
+        if any(name not in self._loop_vars for name in decls):
+            self._emit_blank()
+
+        if is_init:
+            self._gen_init_body(func)
+        else:
+            self._at_top_level = True
+            for stmt in func.body:
+                self._gen_stmt(stmt)
+
+        self._indent -= 1
+        self._emit("}")
+
+    def _gen_init_body(self, func: IRFunction) -> None:
+        field_values = {}
+        other_stmts = []
+        for stmt in func.body:
+            if isinstance(stmt, IRFieldAssign):
+                field_values[_mangle(stmt.field)] = self._strip_parens(
+                    self._gen_expr(stmt.value)
+                )
+            else:
+                other_stmts.append(stmt)
+        for stmt in other_stmts:
+            self._gen_stmt(stmt)
+        self._emit(
+            f"return Self {{ {', '.join(f'{k}: {v}' for k, v in field_values.items())} }};"
+        )
 
     def _gen_function(self, func: IRFunction) -> None:
         self._mutated_vars = _collect_mutated_vars(func.body)
@@ -355,6 +446,10 @@ class RustCodegen:
             else:
                 val = self._strip_parens(self._gen_expr(stmt.value))
             self._emit(f"{_mangle(stmt.target)} = {val};")
+
+        elif isinstance(stmt, IRFieldAssign):
+            val = self._strip_parens(self._gen_expr(stmt.value))
+            self._emit(f"{_mangle(stmt.obj)}.{_mangle(stmt.field)} = {val};")
 
         elif isinstance(stmt, IRAugAssign):
             val = self._strip_parens(self._gen_expr(stmt.value))
@@ -641,6 +736,18 @@ class RustCodegen:
             if method == "seek":
                 return f"{file_val}.seek({args})"
             return f"{file_val}.{method}()"
+        elif isinstance(expr, IRSelf):
+            return "self"
+        elif isinstance(expr, IRStructAccess):
+            val = self._gen_expr(expr.value)
+            return f"{val}.{_mangle(expr.field)}"
+        elif isinstance(expr, IRMethodCall):
+            val = self._gen_expr(expr.value)
+            args = ", ".join(self._gen_expr(a) for a in expr.args)
+            return f"{val}.{_mangle(expr.method)}({args})"
+        elif isinstance(expr, IRNew):
+            args = ", ".join(self._gen_expr(a) for a in expr.args)
+            return f"{expr.class_name}::new({args})"
         return f"/* unknown expr {type(expr).__name__} */"
 
     def _gen_binop(self, expr) -> str:

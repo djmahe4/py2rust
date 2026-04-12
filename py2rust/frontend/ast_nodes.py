@@ -50,7 +50,20 @@ class FileType:
         return "FileHandle"
 
 
-AnyType = Union[IntType, FloatType, BoolType, StrType, ListType, DictType, FileType]
+@dataclass(frozen=True)
+class ClassType:
+    name: str
+    base: Optional[str] = None
+
+    def __str__(self):
+        if self.base:
+            return f"{self.name} ({self.base})"
+        return self.name
+
+
+AnyType = Union[
+    IntType, FloatType, BoolType, StrType, ListType, DictType, FileType, ClassType
+]
 
 
 @dataclass(frozen=True)
@@ -152,6 +165,37 @@ class FunctionCall:
     col: int = 0
 
 
+@dataclass(frozen=True)
+class AttributeExpr:
+    value: object
+    attr: str
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class MethodCall:
+    value: object
+    method: str
+    args: tuple
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class NewExpr:
+    class_name: str
+    args: tuple
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class SelfExpr:
+    line: int = 0
+    col: int = 0
+
+
 Expr = Union[
     IntLiteral,
     FloatLiteral,
@@ -166,6 +210,10 @@ Expr = Union[
     DictLiteral,
     Subscript,
     FunctionCall,
+    AttributeExpr,
+    MethodCall,
+    NewExpr,
+    SelfExpr,
 ]
 
 
@@ -180,7 +228,7 @@ class VarDecl:
 
 @dataclass(frozen=True)
 class Assign:
-    target: str
+    target: Union[str, tuple]
     value: object
     line: int = 0
     col: int = 0
@@ -302,6 +350,16 @@ class FunctionDef:
 
 
 @dataclass(frozen=True)
+class ClassDef:
+    name: str
+    base: Optional[str] = None
+    body: tuple = ()
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
 class Module:
     functions: tuple
+    classes: tuple = ()
     filename: str = "<unknown>"

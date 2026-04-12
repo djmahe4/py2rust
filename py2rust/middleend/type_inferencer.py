@@ -8,6 +8,7 @@ from ..frontend.ast_nodes import (
     ListType,
     DictType,
     FileType,
+    ClassType,
 )
 from .symbol_table import SymbolTable
 
@@ -45,6 +46,12 @@ class TypeInferencer:
                 return self._infer_subscript(expr)
             case "FunctionCall":
                 return self._infer_call(expr)
+            case "AttributeExpr":
+                return self._infer_attribute(expr)
+            case "MethodCall":
+                return self._infer_method_call(expr)
+            case "SelfExpr":
+                return self._infer_self(expr)
         return None
 
     def _infer_binop(self, expr):
@@ -112,6 +119,34 @@ class TypeInferencer:
         if sig:
             _, ret = sig
             return ret
+        cls = self.st.lookup_class(expr.name)
+        if cls:
+            return ClassType(name=expr.name, base=cls.base)
+        return None
+
+    def _infer_attribute(self, expr):
+        val_type = self.infer(expr.value)
+        if isinstance(val_type, ClassType):
+            field_type = self.st.get_field_type(val_type.name, expr.attr)
+            if field_type:
+                return field_type
+        return None
+
+    def _infer_method_call(self, expr):
+        val_type = self.infer(expr.value)
+        if isinstance(val_type, ClassType):
+            arity = len(expr.args)
+            method = self.st.lookup_method(val_type.name, expr.method, arity)
+            if method:
+                return method.return_type
+        if isinstance(val_type, FileType):
+            return self.infer_file_method(expr.method)
+        return None
+
+    def _infer_self(self, expr):
+        current_class = self.st.get_current_class()
+        if current_class:
+            return ClassType(name=current_class)
         return None
 
     def infer_dict_contains(self, key_expr, dict_expr):

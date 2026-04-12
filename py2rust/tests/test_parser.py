@@ -1,10 +1,28 @@
 import pytest
 from py2rust.frontend.parser import parse
 from py2rust.frontend.ast_nodes import (
-    Module, FunctionDef, Param, ReturnStmt, VarDecl, Assign,
-    IntLiteral, FloatLiteral, BoolLiteral, StrLiteral, Name, BinOp,
-    IntType, FloatType, BoolType, StrType, ListType,
-    IfStmt, WhileStmt, ForRangeStmt, PrintStmt, AugAssign,
+    Module,
+    FunctionDef,
+    Param,
+    ReturnStmt,
+    VarDecl,
+    Assign,
+    IntLiteral,
+    FloatLiteral,
+    BoolLiteral,
+    StrLiteral,
+    Name,
+    BinOp,
+    IntType,
+    FloatType,
+    BoolType,
+    StrType,
+    ListType,
+    IfStmt,
+    WhileStmt,
+    ForRangeStmt,
+    PrintStmt,
+    AugAssign,
 )
 from py2rust.utils.errors import ParseError, UnsupportedFeatureError
 
@@ -27,7 +45,7 @@ def add(x: int, y: int) -> int:
     r = f.body[0]
     assert isinstance(r, ReturnStmt)
     assert isinstance(r.value, BinOp)
-    assert r.value.op == '+'
+    assert r.value.op == "+"
 
 
 def test_parse_float_type():
@@ -232,10 +250,11 @@ def f(x: int):
 def test_parse_class_rejected():
     src = """
 class Foo:
-    pass
+    x: int = 1
 """
-    with pytest.raises(UnsupportedFeatureError):
-        parse(src)
+    m = parse(src)
+    assert len(m.classes) == 1
+    assert m.classes[0].name == "Foo"
 
 
 def test_parse_import_rejected():

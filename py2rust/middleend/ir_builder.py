@@ -7,6 +7,12 @@ from ..frontend.ast_nodes import (
     ListType,
     DictType,
     FileType,
+    ClassType,
+    ClassDef,
+    AttributeExpr,
+    MethodCall,
+    SelfExpr,
+    NewExpr,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -19,6 +25,7 @@ from ..ir.ir_nodes import (
     IRListType,
     IRDictType,
     IRFileType,
+    IRClassType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
@@ -38,6 +45,7 @@ from ..ir.ir_nodes import (
     IRFileMethod,
     IRVarDecl,
     IRAssign,
+    IRFieldAssign,
     IRAugAssign,
     IRIf,
     IRWhile,
@@ -47,6 +55,12 @@ from ..ir.ir_nodes import (
     IRBreak,
     IRContinue,
     IRDictDelete,
+    IRStructLit,
+    IRStructAccess,
+    IRMethodCall,
+    IRNew,
+    IRSelf,
+    IRClassDefinition,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -72,6 +86,8 @@ def _to_ir_type(t):
         )
     if isinstance(t, FileType):
         return IRFileType()
+    if isinstance(t, ClassType):
+        return IRClassType(name=t.name, base=t.base)
     raise SemanticError(f"Unknown type: {t}")
 
 
@@ -96,10 +112,69 @@ class IRBuilder:
         checker = TypeChecker(self.st, self.filename, self.source_lines)
         checker.check_module(module)
 
+        ir_classes = []
+        for cls in module.classes:
+            ir_classes.append(self._build_class(cls))
+
         ir_funcs = []
         for func in module.functions:
             ir_funcs.append(self._build_function(func))
-        return IRModule(functions=tuple(ir_funcs), filename=module.filename)
+        return IRModule(
+            functions=tuple(ir_funcs),
+            classes=tuple(ir_classes),
+            filename=module.filename,
+        )
+
+    def _build_class(self, cls: ClassDef) -> IRClassDefinition:
+        fields = []
+        methods = []
+        constructors = []
+        for item in cls.body:
+            if hasattr(item, "__class__"):
+                item_name = type(item).__name__
+                if item_name == "VarDecl":
+                    ir_type = _to_ir_type(item.type_annotation)
+                    fields.append((item.name, ir_type))
+                elif item_name == "FunctionDef":
+                    ir_func = self._build_method(cls.name, item)
+                    if item.name == "__init__":
+                        constructors.append(ir_func)
+                    else:
+                        methods.append(ir_func)
+        return IRClassDefinition(
+            name=cls.name,
+            base=cls.base,
+            fields=tuple(fields),
+            methods=tuple(methods),
+            constructors=tuple(constructors),
+        )
+
+    def _build_method(self, class_name: str, func) -> IRFunction:
+        self.st.enter_scope(f"{class_name}.{func.name}")
+        self.st.define("self", ClassType(name=class_name))
+
+        params = []
+        for p in func.params:
+            ir_t = _to_ir_type(p.type_annotation)
+            self.st.define(p.name, p.type_annotation)
+            params.append(IRParam(name=p.name, type_=ir_t))
+
+        ret_type = _to_ir_type(func.return_type)
+        body = self._build_stmts(func.body, ret_type)
+
+        mutated_params = tuple(
+            n for n in [p.name for p in func.params] if self._is_param_mutated(body, n)
+        )
+
+        self.st.exit_scope()
+        return IRFunction(
+            name=func.name,
+            params=tuple(params),
+            return_type=ret_type,
+            body=tuple(body),
+            mutated_params=mutated_params,
+            is_method=True,
+        )
 
     def _build_function(self, func) -> IRFunction:
         self.st.enter_scope(func.name)
@@ -179,6 +254,13 @@ class IRBuilder:
             return IRVarDecl(name=stmt.name, type_=ir_type, value=ir_val)
 
         elif name == "Assign":
+            if isinstance(stmt.target, tuple) and stmt.target[0] == "attr":
+                _, obj_name, field_name = stmt.target
+                val = self._build_expr(stmt.value)
+                return IRFieldAssign(obj=obj_name, field=field_name, value=val)
+            if stmt.target == "_":
+                ir_val = self._build_expr(stmt.value)
+                return IRVarDecl(name="_", type_=IRIntType(), value=ir_val)
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
 
@@ -425,6 +507,11 @@ class IRBuilder:
 
             sig = self.st.lookup_function(expr.name)
             if sig is None:
+                if self.st.lookup_class(expr.name):
+                    args = []
+                    for a in expr.args:
+                        args.append(self._build_expr(a))
+                    return IRNew(class_name=expr.name, args=tuple(args))
                 raise self._err(
                     f"Undefined function '{expr.name}'", expr.line, expr.col
                 )
@@ -435,6 +522,64 @@ class IRBuilder:
                 pt = _to_ir_type(param_types[i]) if i < len(param_types) else None
                 args.append(self._build_expr(a, pt))
             return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret)
+
+        elif name == "AttributeExpr":
+            val = self._build_expr(expr.value)
+            val_type = self.inferencer.infer(expr.value)
+            if isinstance(val_type, ClassType):
+                field_type = self.st.get_field_type(val_type.name, expr.attr)
+                if field_type:
+                    ir_result = _to_ir_type(field_type)
+                    return IRStructAccess(
+                        value=val, field=expr.attr, result_type=ir_result
+                    )
+            raise self._err(
+                f"Unknown field '{expr.attr}' in class",
+                expr.line,
+                expr.col,
+            )
+
+        elif name == "MethodCall":
+            val = self._build_expr(expr.value)
+            val_type = self.inferencer.infer(expr.value)
+            if isinstance(val_type, ClassType):
+                arity = len(expr.args)
+                method = self.st.lookup_method(val_type.name, expr.method, arity)
+                if method:
+                    ir_args = []
+                    for i, arg in enumerate(expr.args):
+                        if i < len(method.params):
+                            pt = _to_ir_type(method.params[i].type_annotation)
+                            ir_args.append(self._build_expr(arg, pt))
+                        else:
+                            ir_args.append(self._build_expr(arg))
+                    ir_ret = _to_ir_type(method.return_type)
+                    return IRMethodCall(
+                        value=val,
+                        method=expr.method,
+                        args=tuple(ir_args),
+                        result_type=ir_ret,
+                    )
+            if isinstance(val_type, FileType):
+                file_val = self._build_expr(expr.value)
+                ir_args = [self._build_expr(a) for a in expr.args]
+                return IRFileMethod(
+                    file=file_val, method=expr.method, args=tuple(ir_args)
+                )
+            raise self._err(
+                f"Unknown method '{expr.method}' in class",
+                expr.line,
+                expr.col,
+            )
+
+        elif name == "SelfExpr":
+            return IRSelf()
+
+        elif name == "NewExpr":
+            args = []
+            for a in expr.args:
+                args.append(self._build_expr(a))
+            return IRNew(class_name=expr.class_name, args=tuple(args))
 
         else:
             raise self._err(f"Unknown expression type: {name}")

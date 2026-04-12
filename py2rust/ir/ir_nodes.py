@@ -50,8 +50,26 @@ class IRFileType:
         return "FileHandle"
 
 
+@dataclass(frozen=True)
+class IRClassType:
+    name: str
+    base: Optional[str] = None
+    fields: tuple = ()
+    methods: tuple = ()
+
+    def __str__(self):
+        return self.name
+
+
 IRType = Union[
-    IRIntType, IRFloatType, IRBoolType, IRStrType, IRListType, IRDictType, IRFileType
+    IRIntType,
+    IRFloatType,
+    IRBoolType,
+    IRStrType,
+    IRListType,
+    IRDictType,
+    IRFileType,
+    IRClassType,
 ]
 
 
@@ -155,6 +173,38 @@ class IRFileMethod:
     args: tuple
 
 
+@dataclass(frozen=True)
+class IRStructLit:
+    class_name: str
+    field_values: tuple
+
+
+@dataclass(frozen=True)
+class IRStructAccess:
+    value: object
+    field: str
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRMethodCall:
+    value: object
+    method: str
+    args: tuple
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRNew:
+    class_name: str
+    args: tuple
+
+
+@dataclass(frozen=True)
+class IRSelf:
+    pass
+
+
 IRExpr = Union[
     IRIntLit,
     IRFloatLit,
@@ -172,6 +222,11 @@ IRExpr = Union[
     IRFunctionCall,
     IRFileOpen,
     IRFileMethod,
+    IRStructLit,
+    IRStructAccess,
+    IRMethodCall,
+    IRNew,
+    IRSelf,
 ]
 
 
@@ -185,6 +240,13 @@ class IRVarDecl:
 @dataclass(frozen=True)
 class IRAssign:
     target: str
+    value: object
+
+
+@dataclass(frozen=True)
+class IRFieldAssign:
+    obj: str
+    field: str
     value: object
 
 
@@ -284,9 +346,20 @@ class IRFunction:
     return_type: object
     body: tuple
     mutated_params: tuple = ()
+    is_method: bool = False
+
+
+@dataclass(frozen=True)
+class IRClassDefinition:
+    name: str
+    base: Optional[str] = None
+    fields: tuple = ()
+    methods: tuple = ()
+    constructors: tuple = ()
 
 
 @dataclass(frozen=True)
 class IRModule:
     functions: tuple
+    classes: tuple = ()
     filename: str = "<unknown>"

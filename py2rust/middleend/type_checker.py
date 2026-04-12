@@ -7,6 +7,8 @@ from ..frontend.ast_nodes import (
     StrType,
     ListType,
     DictType,
+    ClassType,
+    ClassDef,
 )
 from ..utils.errors import Py2RustTypeError, SemanticError
 from .symbol_table import SymbolTable
@@ -69,12 +71,57 @@ class TypeChecker:
         )
 
     def check_module(self, module) -> None:
+        for cls in module.classes:
+            fields = {}
+            methods = {}
+            constructors = {}
+            for item in cls.body:
+                if hasattr(item, "__class__"):
+                    item_name = type(item).__name__
+                    if item_name == "VarDecl":
+                        fields[item.name] = item.type_annotation
+                    elif item_name == "FunctionDef":
+                        arity = len(item.params)
+                        if item.name == "__init__":
+                            constructors[arity] = item
+                        else:
+                            if item.name not in methods:
+                                methods[item.name] = {}
+                            methods[item.name][arity] = item
+            self.st.define_class(cls.name, cls.base, fields, methods, constructors)
+
+        for cls in module.classes:
+            self.check_class(cls)
+
         for func in module.functions:
             param_types = [p.type_annotation for p in func.params]
             self.st.define_function(func.name, param_types, func.return_type)
 
         for func in module.functions:
             self.check_function(func)
+
+    def check_class(self, cls: ClassDef) -> None:
+        self.st.set_current_class(cls.name)
+        for item in cls.body:
+            if hasattr(item, "__class__"):
+                item_name = type(item).__name__
+                if item_name == "FunctionDef":
+                    self.check_method(cls.name, item)
+        self.st.set_current_class(None)
+
+    def check_method(self, class_name: str, func) -> None:
+        self.st.enter_scope(f"{class_name}.{func.name}")
+        self._current_return_type = func.return_type
+        self.st.define("self", ClassType(name=class_name))
+
+        for param in func.params:
+            self.st.define(param.name, param.type_annotation)
+
+        for stmt in func.body:
+            self.check_stmt(stmt)
+
+        self.st.exit_scope()
+        self._current_return_type = None
 
     def check_function(self, func) -> None:
         self.st.enter_scope(func.name)
@@ -104,6 +151,10 @@ class TypeChecker:
             DictLiteral,
             Subscript,
             FunctionCall,
+            AttributeExpr,
+            MethodCall,
+            SelfExpr,
+            NewExpr,
         )
 
         if isinstance(expr, Name):
@@ -113,6 +164,47 @@ class TypeChecker:
                     expr.line,
                     expr.col,
                     cls=SemanticError,
+                )
+        elif isinstance(expr, AttributeExpr):
+            self.check_expr(expr.value)
+        elif isinstance(expr, MethodCall):
+            self.check_expr(expr.value)
+            for arg in expr.args:
+                self.check_expr(arg)
+            val_type = self.inferencer.infer(expr.value)
+            if isinstance(val_type, ClassType):
+                arity = len(expr.args)
+                method = self.st.lookup_method(val_type.name, expr.method, arity)
+                if method is None:
+                    raise self._err(
+                        f"Method '{expr.method}' with {arity} args not found in class '{val_type.name}'",
+                        expr.line,
+                        expr.col,
+                    )
+        elif isinstance(expr, SelfExpr):
+            if self.st.get_current_class() is None:
+                raise self._err(
+                    "'self' can only be used inside a class method",
+                    expr.line,
+                    expr.col,
+                )
+        elif isinstance(expr, NewExpr):
+            for arg in expr.args:
+                self.check_expr(arg)
+            cls = self.st.lookup_class(expr.class_name)
+            if cls is None:
+                raise self._err(
+                    f"Unknown class: '{expr.class_name}'",
+                    expr.line,
+                    expr.col,
+                )
+            arity = len(expr.args)
+            ctor = self.st.lookup_constructor(expr.class_name, arity)
+            if ctor is None:
+                raise self._err(
+                    f"No constructor found for '{expr.class_name}' with {arity} arguments",
+                    expr.line,
+                    expr.col,
                 )
         elif isinstance(expr, BinOp):
             self.check_expr(expr.left)
@@ -241,28 +333,32 @@ class TypeChecker:
             else:
                 sig = self.st.lookup_function(expr.name)
                 if sig is None:
-                    raise self._err(
-                        f"Undefined function: '{expr.name}'",
-                        expr.line,
-                        expr.col,
-                        cls=SemanticError,
-                    )
-                params, _ = sig
-                if len(expr.args) != len(params):
-                    raise self._err(
-                        f"Function '{expr.name}' expected {len(params)} arguments, got {len(expr.args)}",
-                        expr.line,
-                        expr.col,
-                    )
-                for i, arg in enumerate(expr.args):
-                    self.check_expr(arg)
-                    arg_t = self.inferencer.infer(arg)
-                    if not _types_compatible(params[i], arg_t):
+                    if self.st.lookup_class(expr.name):
+                        pass  # It's a constructor call, handled in type inferencer
+                    else:
                         raise self._err(
-                            f"Argument type mismatch for '{expr.name}': expected {params[i]}, got {arg_t}",
-                            arg.line,
-                            arg.col,
+                            f"Undefined function: '{expr.name}'",
+                            expr.line,
+                            expr.col,
+                            cls=SemanticError,
                         )
+                else:
+                    params, _ = sig
+                    if len(expr.args) != len(params):
+                        raise self._err(
+                            f"Function '{expr.name}' expected {len(params)} arguments, got {len(expr.args)}",
+                            expr.line,
+                            expr.col,
+                        )
+                    for i, arg in enumerate(expr.args):
+                        self.check_expr(arg)
+                        arg_t = self.inferencer.infer(arg)
+                        if not _types_compatible(params[i], arg_t):
+                            raise self._err(
+                                f"Argument type mismatch for '{expr.name}': expected {params[i]}, got {arg_t}",
+                                arg.line,
+                                arg.col,
+                            )
 
     def check_stmt(self, stmt) -> None:
         from ..frontend.ast_nodes import (
@@ -298,6 +394,8 @@ class TypeChecker:
 
         elif isinstance(stmt, Assign):
             self.check_expr(stmt.value)
+            if stmt.target == "_":
+                return
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
             if existing is None:

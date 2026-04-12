@@ -1024,3 +1024,150 @@ def main() -> int:
     assert "fn close(" in code
     assert "fn tell(" in code
     assert "fn seek(" in code
+
+
+def test_simple_class_parsing():
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+"""
+    m = parse(src)
+    assert len(m.classes) == 1
+    assert m.classes[0].name == "Point"
+
+
+def test_class_with_init():
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+    
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+"""
+    code = _compile(src)
+    assert "struct Point" in code
+    assert "fn new(" in code
+
+
+def test_class_instantiation():
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+    
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+def main() -> int:
+    p: Point = Point(1, 2)
+    return 0
+"""
+    code = _compile(src)
+    assert "struct Point" in code
+    assert "Point::new(1, 2)" in code
+
+
+def test_class_field_access():
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+    
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+def main() -> int:
+    p: Point = Point(1, 2)
+    return p.x
+"""
+    code = _compile(src)
+    assert "struct Point" in code
+    assert "p.x" in code
+
+
+def test_class_method_call():
+    src = """
+class Counter:
+    count: int = 0
+    
+    def __init__(self) -> None:
+        self.count = 0
+    
+    def increment(self) -> None:
+        self.count = self.count + 1
+
+def main() -> int:
+    c: Counter = Counter()
+    c.increment()
+    return 0
+"""
+    code = _compile(src)
+    assert "struct Counter" in code
+    assert "c.increment()" in code
+
+
+def test_class_method_with_return():
+    src = """
+class Calculator:
+    value: int = 0
+    
+    def __init__(self) -> None:
+        self.value = 0
+    
+    def get_value(self) -> int:
+        return self.value
+
+def main() -> int:
+    c: Calculator = Calculator()
+    result: int = c.get_value()
+    return result
+"""
+    code = _compile(src)
+    assert "struct Calculator" in code
+    assert "fn get_value(" in code
+    assert "c.get_value()" in code
+
+
+def test_class_with_method_overloading():
+    src = """
+class Adder:
+    def add_two(self, a: int, b: int) -> int:
+        return a + b
+    
+    def add_three(self, a: int, b: int, c: int) -> int:
+        return a + b + c
+
+def main() -> int:
+    a: Adder = Adder()
+    return a.add_two(1, 2)
+"""
+    code = _compile(src)
+    assert "struct Adder" in code
+    assert "fn add_two(" in code
+    assert "fn add_three(" in code
+
+
+def test_class_multiple_instances():
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+    
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+def main() -> int:
+    p1: Point = Point(1, 2)
+    p2: Point = Point(3, 4)
+    return p1.x + p2.x
+"""
+    code = _compile(src)
+    assert "struct Point" in code
+    assert "Point::new(1, 2)" in code
+    assert "Point::new(3, 4)" in code
