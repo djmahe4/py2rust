@@ -110,7 +110,7 @@ def f() -> int:
 """
     code = _compile(src)
     assert "i = 0;" in code
-    assert "while if (1) > 0 { i < (10) } else { i > (10) } {" in code
+    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
 
 
 def test_codegen_for_range_step():
@@ -122,7 +122,8 @@ def f() -> int:
     return s
 """
     code = _compile(src)
-    assert "while if (2) > 0 { i < (10) } else { i > (10) } {" in code
+    assert "let __stop = 10;" in code
+    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
 
 
 def test_codegen_bool_ops():

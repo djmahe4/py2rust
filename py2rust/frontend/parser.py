@@ -221,6 +221,17 @@ class Parser:
                         raise self._err("print() must have exactly one argument", node, UnsupportedFeatureError)
                     val = self._parse_expr(call.args[0])
                     return PrintStmt(value=val, line=node.lineno, col=node.col_offset + 1)
+                
+                # Support general function calls as statements by treating them as assignment to discard
+                # We'll re-use _parse_stmt by creating a synthetic assignment node
+                fake_assign = ast.Assign(
+                    targets=[ast.Name(id='_', ctx=ast.Store(), lineno=node.lineno, col_offset=node.col_offset)],
+                    value=node.value,
+                    lineno=node.lineno,
+                    col_offset=node.col_offset
+                )
+                return self._parse_stmt(fake_assign)
+            
             raise self._err("Unsupported expression statement", node, UnsupportedFeatureError)
 
         if isinstance(node, ast.FunctionDef):

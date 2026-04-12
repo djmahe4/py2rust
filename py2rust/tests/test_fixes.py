@@ -34,8 +34,9 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "while if ((-(1))) > 0 { i < (0) } else { i > (0) } {" in code
-    assert "i += (-(1));" in code
+    assert "let __stop = 0;" in code
+    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
+    assert "i += __step;" in code
 
 def test_operator_precedence():
     src = """
@@ -89,7 +90,7 @@ def main() -> int:
 """
     code = _compile(src)
     # x should be declared at the top of the function
-    assert "let mut x: i32 = 0;" in code
+    assert "let x: i32;" in code
     # And then assigned inside the if
     assert "x = 42;" in code
 
@@ -102,7 +103,7 @@ def main() -> int:
 """
     code = _compile(src)
     assert "i = 0;" in code
-    assert "while if (1) > 0 { i < (10) } else { i > (10) } {" in code
+    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
 
 def test_string_indexing():
     src = """
@@ -201,7 +202,7 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "let mut x: i32 = 0;" in code
+    assert "let x: i32;" in code
     assert "x = 42;" in code
 
 def test_loop_target_persistence():
@@ -221,7 +222,7 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "let mut i: i32 = 0;" in code
+    assert "let mut i: i32;" in code
     assert "println!(\"{}\", i);" in code
 
 def test_negative_indexing_runtime():
@@ -251,6 +252,63 @@ def main() -> int:
     # Target initialized
     assert "i = 10;" in code
     # Condition handles negative step
-    assert "while if ((-(1))) > 0" in code
+    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
     # Increment
-    assert "i += (-(1));" in code
+    assert "i += __step;" in code
+
+def test_range_single_evaluation():
+    src = """
+def stop_fn() -> int:
+    return 10
+
+def main() -> int:
+    s = 0
+    for i in range(0, stop_fn()):
+        s += i
+    return s
+"""
+    code = _compile(src)
+    # Check that stop_fn() is evaluated into a temp variable exactly once
+    assert "let __stop = stop_fn();" in code
+    # Check that the loop condition uses the temp variable
+    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) }" in code
+
+def test_idiomatic_mut_generation():
+    src = """
+def main() -> int:
+    x: int = 42
+    print(x)
+    return 0
+"""
+    code = _compile(src)
+    # x is only initialized, never reassigned. Should NOT be mut.
+    assert "let x: i32;" in code
+    assert "mut x" not in code
+
+def test_standalone_function_call():
+    src = """
+def helper(x: int) -> int:
+    print(x)
+    return x
+
+def main() -> int:
+    helper(42)
+    return 0
+"""
+    code = _compile(src)
+    # Should be converted to _ = helper(42);
+    assert "_ = helper(42);" in code
+    # _ is used as target in parse_stmt, but it's a discard. 
+    # Actually, in our current IRVarDecl logic, _ will be caught as a declaration.
+    # It might or might not be mut depending on _collect_mutated_vars.
+    assert "let _: i32;" in code or "let mut _: i32;" in code
+
+def test_semantic_error_in_ir_builder():
+    from py2rust.utils.errors import SemanticError
+    # We need a case that triggers _to_ir_type's catch-all
+    # This is hard to trigger from parser because parser limits types,
+    # but we can test the function directly.
+    from py2rust.middleend.ir_builder import _to_ir_type
+    class JunkType: pass
+    with pytest.raises(SemanticError):
+        _to_ir_type(JunkType())

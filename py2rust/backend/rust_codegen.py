@@ -109,8 +109,10 @@ class RustCodegen:
         
         # Emit pre-declarations
         for name, type_ in decls.items():
-            mut = "mut " # Pre-declared vars must be mut if we assign them later
-            self._emit(f"let {mut}{name}: {_rust_type(type_)} = {_default_value(type_)};")
+            # Only use mut if the variable is modified after initialization or is a loop target
+            mut = "mut " if name in self._mutated_vars else ""
+            # Omit default value to avoid unnecessary work and enable better Rust optimization
+            self._emit(f"let {mut}{name}: {_rust_type(type_)};")
         
         if decls:
             self._emit_blank()
@@ -171,14 +173,16 @@ class RustCodegen:
             stop = self._gen_expr(stmt.stop)
             step = self._gen_expr(stmt.step) if stmt.step is not None else "1"
             
-            # Use while loop to emulate Python's loop variable scoping and persistence
+            # Evaluate bounds exactly once to match Python range() semantics
+            self._emit(f"let __stop = {stop};")
+            self._emit(f"let __step = {step};")
             self._emit(f"{stmt.target} = {start};")
-            # Step can be negative, so we need a robust condition
-            self._emit(f"while if ({step}) > 0 {{ {stmt.target} < ({stop}) }} else {{ {stmt.target} > ({stop}) }} {{")
+            
+            self._emit(f"while if (__step) > 0 {{ {stmt.target} < (__stop) }} else {{ {stmt.target} > (__stop) }} {{")
             self._indent += 1
             for s in stmt.body:
                 self._gen_stmt(s)
-            self._emit(f"{stmt.target} += {step};")
+            self._emit(f"{stmt.target} += __step;")
             self._indent -= 1
             self._emit("}")
 

@@ -21,7 +21,7 @@ def _to_ir_type(t):
     if isinstance(t, BoolType): return IRBoolType()
     if isinstance(t, StrType): return IRStrType()
     if isinstance(t, ListType): return IRListType(element_type=_to_ir_type(t.element_type))
-    raise ValueError(f"Unknown type: {t}")
+    raise SemanticError(f"Unknown type: {t}")
 
 
 class IRBuilder:
