@@ -17,13 +17,19 @@ def _rust_type(t) -> str:
     raise ValueError(f"Unknown type {type(t).__name__}")
 
 
-def _default_value(t) -> str:
-    if isinstance(t, IRIntType): return "0"
-    if isinstance(t, IRFloatType): return "0.0"
-    if isinstance(t, IRBoolType): return "false"
-    if isinstance(t, IRStrType): return '"".to_string()'
-    if isinstance(t, IRListType): return "vec![]"
-    return "/* unknown */"
+# Rust reserved keywords that must be escaped if used as variable names
+_RUST_KEYWORDS = frozenset({
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn",
+    "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
+    "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+    "self", "Self", "static", "struct", "super", "trait", "true", "type",
+    "union", "unsafe", "use", "where", "while",
+})
+
+
+def _mangle(name: str) -> str:
+    """Escape Python identifiers that collide with Rust keywords."""
+    return name + "_" if name in _RUST_KEYWORDS else name
 
 
 def _collect_mutated_vars(stmts) -> set:
@@ -107,14 +113,13 @@ class RustCodegen:
         
         self._indent += 1
         
-        # Emit pre-declarations
+        # Emit pre-declarations — also track types for casting in assignment
+        self._decl_types = dict(decls)   # name -> IR type
         for name, type_ in decls.items():
             if name == "_":
                 continue
-            # Only use mut if the variable is modified after initialization or is a loop target
             mut = "mut " if name in self._mutated_vars else ""
-            # Omit default value to avoid unnecessary work and enable better Rust optimization
-            self._emit(f"let {mut}{name}: {_rust_type(type_)};")
+            self._emit(f"let {mut}{_mangle(name)}: {_rust_type(type_)};")
         
         if decls:
             self._emit_blank()
@@ -129,15 +134,20 @@ class RustCodegen:
         if isinstance(stmt, IRVarDecl):
             val = self._gen_expr(stmt.value, stmt.type_)
             # Already declared at top, so just assign
-            self._emit(f"{stmt.name} = {val};")
+            self._emit(f"{_mangle(stmt.name)} = {val};")
 
         elif isinstance(stmt, IRAssign):
-            val = self._gen_expr(stmt.value)
-            self._emit(f"{stmt.target} = {val};")
+            # Look up target's type via the declaration tracker for int→float casting
+            target_type = self._decl_types.get(stmt.target)
+            if isinstance(target_type, IRFloatType):
+                val = self._gen_expr_as_float(stmt.value)
+            else:
+                val = self._gen_expr(stmt.value)
+            self._emit(f"{_mangle(stmt.target)} = {val};")
 
         elif isinstance(stmt, IRAugAssign):
             val = self._gen_expr(stmt.value)
-            self._emit(f"{stmt.target} {stmt.op} {val};")
+            self._emit(f"{_mangle(stmt.target)} {stmt.op} {val};")
 
         elif isinstance(stmt, IRIf):
             cond = self._gen_expr(stmt.condition)
@@ -210,7 +220,7 @@ class RustCodegen:
             self._emit(f'println!("{fmt}", {val});')
 
         else:
-            self._emit(f"// unknown stmt: {type(stmt).__name__}")
+            raise ValueError(f"Unsupported IR statement: {type(stmt).__name__}")
 
     def _gen_expr(self, expr, expected_type=None) -> str:
         if isinstance(expr, IRIntLit):

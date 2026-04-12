@@ -11,7 +11,8 @@ from .type_inferencer import TypeInferencer
 def _types_compatible(a, b) -> bool:
     if type(a) is type(b):
         if isinstance(a, ListType) and isinstance(b, ListType):
-            return _types_compatible(a.element_type, b.element_type)
+            # Rust Vec<T> is invariant — element types must match exactly
+            return type(a.element_type) is type(b.element_type)
         return True
     if isinstance(a, FloatType) and isinstance(b, IntType):
         return True
