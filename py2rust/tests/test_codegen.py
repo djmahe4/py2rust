@@ -15,7 +15,7 @@ def add(x: int, y: int) -> int:
 """
     code = _compile(src)
     assert "fn add(x: i32, y: i32) -> i32 {" in code
-    assert "return x + y;" in code
+    assert "return (x + y);" in code
 
 
 def test_codegen_main_function():
@@ -56,8 +56,8 @@ def f(a: int, b: int) -> int:
     return a // b
 """
     code = _compile(src)
-    # Floor div maps to / in Rust for integers
-    assert "a / b" in code
+    # Python floor division: (a as f64 / b as f64).floor() as i32
+    assert ".floor() as i32" in code
 
 
 def test_codegen_var_decl_types():
@@ -83,7 +83,7 @@ def abs_val(x: int) -> int:
         return x
 """
     code = _compile(src)
-    assert "if x < 0 {" in code
+    assert "if (x < 0) {" in code
     assert "} else {" in code
 
 
@@ -96,7 +96,7 @@ def f() -> int:
     return x
 """
     code = _compile(src)
-    assert "while x < 10 {" in code
+    assert "while (x < 10) {" in code
     assert "x += 1;" in code
 
 
@@ -130,7 +130,7 @@ def f(a: bool, b: bool) -> bool:
     return a and b
 """
     code = _compile(src)
-    assert "&&" in code
+    assert " (a && b)" in code
 
 
 def test_codegen_or_op():
@@ -210,4 +210,4 @@ def fib(n: int) -> int:
 """
     code = _compile(src)
     assert "fn fib(n: i32) -> i32 {" in code
-    assert "while i <= n {" in code
+    assert "while (i <= n) {" in code

@@ -16,7 +16,7 @@ class NodeVisitor:
         if is_dataclass(node):
             for f in fields(node):
                 val = getattr(node, f.name)
-                if isinstance(val, list):
+                if isinstance(val, (list, tuple)):
                     for item in val:
                         if hasattr(item, '__dataclass_fields__'):
                             self.visit(item)

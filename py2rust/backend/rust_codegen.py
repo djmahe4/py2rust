@@ -21,20 +21,19 @@ def _collect_mutated_vars(stmts) -> set:
     """Recursively collect all variable names that are reassigned (not just declared)."""
     mutated: set = set()
     for stmt in stmts:
-        sname = type(stmt).__name__
-        if sname == 'IRAssign':
+        if isinstance(stmt, IRAssign):
             mutated.add(stmt.target)
-        elif sname == 'IRAugAssign':
+        elif isinstance(stmt, IRAugAssign):
             mutated.add(stmt.target)
-        elif sname == 'IRIf':
+        elif isinstance(stmt, IRIf):
             mutated |= _collect_mutated_vars(stmt.then_body)
             for _, elif_body in stmt.elif_clauses:
                 mutated |= _collect_mutated_vars(elif_body)
             if stmt.else_body:
                 mutated |= _collect_mutated_vars(stmt.else_body)
-        elif sname == 'IRWhile':
+        elif isinstance(stmt, IRWhile):
             mutated |= _collect_mutated_vars(stmt.body)
-        elif sname == 'IRForRange':
+        elif isinstance(stmt, IRForRange):
             mutated |= _collect_mutated_vars(stmt.body)
     return mutated
 
@@ -81,22 +80,20 @@ class RustCodegen:
         self._emit("}")
 
     def _gen_stmt(self, stmt) -> None:
-        name = type(stmt).__name__
-
-        if name == 'IRVarDecl':
+        if isinstance(stmt, IRVarDecl):
             val = self._gen_expr(stmt.value, stmt.type_)
             mut = "mut " if stmt.name in self._mutated_vars else ""
             self._emit(f"let {mut}{stmt.name}: {_rust_type(stmt.type_)} = {val};")
 
-        elif name == 'IRAssign':
+        elif isinstance(stmt, IRAssign):
             val = self._gen_expr(stmt.value)
             self._emit(f"{stmt.target} = {val};")
 
-        elif name == 'IRAugAssign':
+        elif isinstance(stmt, IRAugAssign):
             val = self._gen_expr(stmt.value)
             self._emit(f"{stmt.target} {stmt.op} {val};")
 
-        elif name == 'IRIf':
+        elif isinstance(stmt, IRIf):
             cond = self._gen_expr(stmt.condition)
             self._emit(f"if {cond} {{")
             self._indent += 1
@@ -118,7 +115,7 @@ class RustCodegen:
                 self._indent -= 1
             self._emit("}")
 
-        elif name == 'IRWhile':
+        elif isinstance(stmt, IRWhile):
             cond = self._gen_expr(stmt.condition)
             self._emit(f"while {cond} {{")
             self._indent += 1
@@ -127,12 +124,28 @@ class RustCodegen:
             self._indent -= 1
             self._emit("}")
 
-        elif name == 'IRForRange':
+        elif isinstance(stmt, IRForRange):
             start = self._gen_expr(stmt.start)
             stop = self._gen_expr(stmt.stop)
             if stmt.step is not None:
-                step = self._gen_expr(stmt.step)
-                self._emit(f"for {stmt.target} in ({start}..{stop}).step_by({step} as usize) {{")
+                step_expr = self._gen_expr(stmt.step)
+                
+                # Try to determine if the step is a negative constant
+                is_neg_const = False
+                pos_step_val = None
+                
+                if isinstance(stmt.step, IRIntLit) and stmt.step.value < 0:
+                    is_neg_const = True
+                    pos_step_val = -stmt.step.value
+                elif isinstance(stmt.step, IRUnaryOpExpr) and stmt.step.op == '-' and isinstance(stmt.step.operand, IRIntLit):
+                    is_neg_const = True
+                    pos_step_val = stmt.step.operand.value
+                
+                if is_neg_const:
+                    # Python range(start, stop, -step) -> Rust (stop + 1..start + 1).rev().step_by(step)
+                    self._emit(f"for {stmt.target} in (({stop}) + 1..({start}) + 1).rev().step_by({pos_step_val} as usize) {{")
+                else:
+                    self._emit(f"for {stmt.target} in ({start}..{stop}).step_by({step_expr} as usize) {{")
             else:
                 self._emit(f"for {stmt.target} in {start}..{stop} {{")
             self._indent += 1
@@ -141,7 +154,7 @@ class RustCodegen:
             self._indent -= 1
             self._emit("}")
 
-        elif name == 'IRReturn':
+        elif isinstance(stmt, IRReturn):
             if self._in_main:
                 # Rust's main() returns (), so drop the return value
                 self._emit("return;")
@@ -151,60 +164,62 @@ class RustCodegen:
             else:
                 self._emit("return;")
 
-        elif name == 'IRPrint':
+        elif isinstance(stmt, IRPrint):
             val = self._gen_expr(stmt.value)
-            self._emit(f'println!("{{}}", {val});')
+            # Use Debug formatting for Vec, Display for others
+            fmt = "{:?}" if isinstance(stmt.value_type, IRListType) else "{}"
+            self._emit(f'println!("{fmt}", {val});')
 
         else:
-            self._emit(f"// unknown stmt: {name}")
+            self._emit(f"// unknown stmt: {type(stmt).__name__}")
 
     def _gen_expr(self, expr, expected_type=None) -> str:
-        name = type(expr).__name__
-
-        if name == 'IRIntLit':
+        if isinstance(expr, IRIntLit):
             return str(expr.value)
-        elif name == 'IRFloatLit':
+        elif isinstance(expr, IRFloatLit):
             v = expr.value
             s = repr(v)
             if '.' not in s and 'e' not in s.lower():
                 s += ".0"
             return s
-        elif name == 'IRBoolLit':
+        elif isinstance(expr, IRBoolLit):
             return "true" if expr.value else "false"
-        elif name == 'IRStrLit':
+        elif isinstance(expr, IRStrLit):
             escaped = expr.value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
             return f'"{escaped}".to_string()'
-        elif name == 'IRName':
+        elif isinstance(expr, IRName):
             return expr.name
-        elif name == 'IRBinOp':
-            return self._gen_binop(expr)
-        elif name == 'IRUnaryOpExpr':
+        elif isinstance(expr, IRBinOp):
+            return f"({self._gen_binop(expr)})"
+        elif isinstance(expr, IRUnaryOpExpr):
             operand = self._gen_expr(expr.operand)
             if expr.op == 'not':
-                return f"!{operand}"
+                return f"(!({operand}))"
             if expr.op == '-':
-                return f"-{operand}"
+                return f"(-({operand}))"
             return operand
-        elif name == 'IRCompare':
+        elif isinstance(expr, IRCompare):
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
-            return f"{left} {expr.op} {right}"
-        elif name == 'IRBoolOp':
+            return f"({left} {expr.op} {right})"
+        elif isinstance(expr, IRBoolOp):
+            op = f" {expr.op} "
             parts = [self._gen_expr(v) for v in expr.values]
-            return f" {expr.op} ".join(parts)
-        elif name == 'IRListLit':
+            return f"({op.join(parts)})"
+        elif isinstance(expr, IRListLit):
             if not expr.elements:
                 return f"Vec::<{_rust_type(expr.element_type)}>::new()"
             elems = ", ".join(self._gen_expr(e) for e in expr.elements)
             return f"vec![{elems}]"
-        elif name == 'IRSubscript':
+        elif isinstance(expr, IRSubscript):
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
-            return f"{val}[{idx} as usize]"
-        elif name == 'IRFunctionCall':
+            # idx as usize has high precedence, so wrap it
+            return f"{val}[({idx}) as usize]"
+        elif isinstance(expr, IRFunctionCall):
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             return f"{expr.name}({args})"
-        return f"/* unknown expr {name} */"
+        return f"/* unknown expr {type(expr).__name__} */"
 
     def _gen_binop(self, expr) -> str:
         if expr.op == '/':
@@ -214,21 +229,21 @@ class RustCodegen:
         if expr.op == '//':
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
-            return f"{left} / {right}"
+            # Python floor division: (a as f64 / b as f64).floor() as i32
+            return f"({left} as f64 / {right} as f64).floor() as i32"
         left = self._gen_expr(expr.left)
         right = self._gen_expr(expr.right)
         return f"{left} {expr.op} {right}"
 
     def _gen_expr_as_float(self, expr) -> str:
-        name = type(expr).__name__
-        if name == 'IRIntLit':
+        if isinstance(expr, IRIntLit):
             return f"{expr.value}.0_f64"
-        if name == 'IRFloatLit':
+        if isinstance(expr, IRFloatLit):
             return self._gen_expr(expr)
-        if name == 'IRName':
-            return f"{expr.name} as f64"
+        if isinstance(expr, IRName):
+            return f"({expr.name} as f64)"
         inner = self._gen_expr(expr)
-        if name == 'IRBinOp' and isinstance(expr.result_type, IRFloatType):
+        if isinstance(expr, IRBinOp) and isinstance(expr.result_type, IRFloatType):
             return inner
         return f"({inner}) as f64"
 

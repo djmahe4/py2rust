@@ -9,7 +9,7 @@ from .type_inferencer import TypeInferencer
 
 
 def _types_compatible(a, b) -> bool:
-    if type(a) == type(b):
+    if type(a) is type(b):
         if isinstance(a, ListType) and isinstance(b, ListType):
             return _types_compatible(a.element_type, b.element_type)
         return True
@@ -67,8 +67,11 @@ class TypeChecker:
         self._current_return_type = None
 
     def check_stmt(self, stmt) -> None:
-        name = type(stmt).__name__
-        if name == 'VarDecl':
+        from ..frontend.ast_nodes import (
+            VarDecl, Assign, AugAssign, IfStmt, WhileStmt, ForRangeStmt, ReturnStmt, PrintStmt,
+            FunctionCall, Name
+        )
+        if isinstance(stmt, VarDecl):
             inferred = self.inferencer.infer(stmt.value)
             ann = stmt.type_annotation
             if ann is not None and inferred is not None:
@@ -82,7 +85,7 @@ class TypeChecker:
                 raise self._err(f"Cannot infer type for '{stmt.name}'", stmt.line, stmt.col)
             self.st.define(stmt.name, actual_type)
 
-        elif name == 'Assign':
+        elif isinstance(stmt, Assign):
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
             if existing is None:
@@ -96,12 +99,18 @@ class TypeChecker:
                         stmt.line, stmt.col
                     )
 
-        elif name == 'AugAssign':
+        elif isinstance(stmt, AugAssign):
             existing = self.st.lookup(stmt.target)
             if existing is None:
                 raise self._sem_err(f"Undefined variable '{stmt.target}'", stmt.line, stmt.col)
+            inferred = self.inferencer.infer(stmt.value)
+            if inferred is not None and not _types_compatible(existing, inferred):
+                raise self._err(
+                    f"Type mismatch in augmented assignment: cannot apply operation to {existing} and {inferred}",
+                    stmt.line, stmt.col
+                )
 
-        elif name == 'IfStmt':
+        elif isinstance(stmt, IfStmt):
             for s in stmt.then_body:
                 self.check_stmt(s)
             for (cond, body) in stmt.elif_clauses:
@@ -111,16 +120,30 @@ class TypeChecker:
                 for s in stmt.else_body:
                     self.check_stmt(s)
 
-        elif name == 'WhileStmt':
+        elif isinstance(stmt, WhileStmt):
             for s in stmt.body:
                 self.check_stmt(s)
 
-        elif name == 'ForRangeStmt':
+        elif isinstance(stmt, ForRangeStmt):
+            # Check that start, stop, and step are integers
+            start_type = self.inferencer.infer(stmt.start)
+            if start_type is not None and not isinstance(start_type, IntType):
+                raise self._err(f"range() start must be int, got {start_type}", stmt.line, stmt.col)
+            
+            stop_type = self.inferencer.infer(stmt.stop)
+            if stop_type is not None and not isinstance(stop_type, IntType):
+                raise self._err(f"range() stop must be int, got {stop_type}", stmt.line, stmt.col)
+            
+            if stmt.step is not None:
+                step_type = self.inferencer.infer(stmt.step)
+                if step_type is not None and not isinstance(step_type, IntType):
+                    raise self._err(f"range() step must be int, got {step_type}", stmt.line, stmt.col)
+
             self.st.define(stmt.target, IntType())
             for s in stmt.body:
                 self.check_stmt(s)
 
-        elif name == 'ReturnStmt':
+        elif isinstance(stmt, ReturnStmt):
             if stmt.value is not None:
                 ret_type = self.inferencer.infer(stmt.value)
                 if ret_type is not None and self._current_return_type is not None:
@@ -130,5 +153,5 @@ class TypeChecker:
                             stmt.line, stmt.col
                         )
 
-        elif name == 'PrintStmt':
+        elif isinstance(stmt, PrintStmt):
             pass
