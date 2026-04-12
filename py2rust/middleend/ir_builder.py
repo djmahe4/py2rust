@@ -83,7 +83,7 @@ class IRBuilder:
             ir_val = self._build_expr(stmt.value, expected_type=ir_type)
             return IRVarDecl(name=stmt.name, type_=ir_type, value=ir_val)
 
-        if name == 'Assign':
+        elif name == 'Assign':
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
             if existing is None:
@@ -96,7 +96,7 @@ class IRBuilder:
             ir_val = self._build_expr(stmt.value, expected_type=ir_type)
             return IRAssign(target=stmt.target, value=ir_val)
 
-        if name == 'AugAssign':
+        elif name == 'AugAssign':
             existing = self.st.lookup(stmt.target)
             if existing is None:
                 raise self._err(f"Undefined variable '{stmt.target}'", stmt.line, stmt.col)
@@ -104,7 +104,7 @@ class IRBuilder:
             ir_val = self._build_expr(stmt.value, expected_type=ir_type)
             return IRAugAssign(target=stmt.target, op=stmt.op, value=ir_val)
 
-        if name == 'IfStmt':
+        elif name == 'IfStmt':
             cond = self._build_expr(stmt.condition)
             then_body = tuple(self._build_stmts(stmt.then_body))
             elif_clauses = tuple(
@@ -114,12 +114,12 @@ class IRBuilder:
             else_body = tuple(self._build_stmts(stmt.else_body)) if stmt.else_body else None
             return IRIf(condition=cond, then_body=then_body, elif_clauses=elif_clauses, else_body=else_body)
 
-        if name == 'WhileStmt':
+        elif name == 'WhileStmt':
             cond = self._build_expr(stmt.condition)
             body = tuple(self._build_stmts(stmt.body))
             return IRWhile(condition=cond, body=body)
 
-        if name == 'ForRangeStmt':
+        elif name == 'ForRangeStmt':
             self.st.define(stmt.target, IntType())
             start = self._build_expr(stmt.start)
             stop = self._build_expr(stmt.stop)
@@ -127,18 +127,19 @@ class IRBuilder:
             body = tuple(self._build_stmts(stmt.body))
             return IRForRange(target=stmt.target, start=start, stop=stop, step=step, body=body)
 
-        if name == 'ReturnStmt':
+        elif name == 'ReturnStmt':
             val = self._build_expr(stmt.value) if stmt.value else None
             return IRReturn(value=val)
 
-        if name == 'PrintStmt':
+        elif name == 'PrintStmt':
             val = self._build_expr(stmt.value)
             val_type = self.inferencer.infer(stmt.value)
             if val_type is None:
                 val_type = IntType()
             return IRPrint(value=val, value_type=_to_ir_type(val_type))
 
-        raise self._err(f"Unknown statement type: {name}")
+        else:
+            raise self._err(f"Unknown statement type: {name}")
 
     def _build_expr(self, expr, expected_type=None):
         name = type(expr).__name__
@@ -148,19 +149,19 @@ class IRBuilder:
                 return IRFloatLit(value=float(expr.value))
             return IRIntLit(value=expr.value)
 
-        if name == 'FloatLiteral':
+        elif name == 'FloatLiteral':
             return IRFloatLit(value=expr.value)
 
-        if name == 'BoolLiteral':
+        elif name == 'BoolLiteral':
             return IRBoolLit(value=expr.value)
 
-        if name == 'StrLiteral':
+        elif name == 'StrLiteral':
             return IRStrLit(value=expr.value)
 
-        if name == 'Name':
+        elif name == 'Name':
             return IRName(name=expr.name)
 
-        if name == 'BinOp':
+        elif name == 'BinOp':
             result_type = self.inferencer.infer(expr)
             if result_type is None:
                 result_type = IntType()
@@ -169,7 +170,7 @@ class IRBuilder:
             right = self._build_expr(expr.right, ir_result)
             return IRBinOp(op=expr.op, left=left, right=right, result_type=ir_result)
 
-        if name == 'UnaryOp':
+        elif name == 'UnaryOp':
             operand_type = self.inferencer.infer(expr.operand)
             if expr.op == 'not':
                 ir_result = IRBoolType()
@@ -178,19 +179,19 @@ class IRBuilder:
             operand = self._build_expr(expr.operand, ir_result)
             return IRUnaryOpExpr(op=expr.op, operand=operand, result_type=ir_result)
 
-        if name == 'Comparison':
+        elif name == 'Comparison':
             left_type = self.inferencer.infer(expr.left)
             ir_left_t = _to_ir_type(left_type) if left_type else IRIntType()
             left = self._build_expr(expr.left, ir_left_t)
             right = self._build_expr(expr.right, ir_left_t)
             return IRCompare(op=expr.op, left=left, right=right)
 
-        if name == 'BoolOp':
+        elif name == 'BoolOp':
             op_map = {'and': '&&', 'or': '||'}
             values = tuple(self._build_expr(v) for v in expr.values)
             return IRBoolOp(op=op_map[expr.op], values=values)
 
-        if name == 'ListLiteral':
+        elif name == 'ListLiteral':
             if not expr.elements:
                 elem_type = IRIntType()
                 if isinstance(expected_type, IRListType):
@@ -201,7 +202,7 @@ class IRBuilder:
             elems = tuple(self._build_expr(e, ir_elem_t) for e in expr.elements)
             return IRListLit(elements=elems, element_type=ir_elem_t)
 
-        if name == 'Subscript':
+        elif name == 'Subscript':
             val = self._build_expr(expr.value)
             idx = self._build_expr(expr.index)
             val_type = self.inferencer.infer(expr.value)
@@ -211,7 +212,7 @@ class IRBuilder:
                 result_type = IRIntType()
             return IRSubscript(value=val, index=idx, result_type=result_type)
 
-        if name == 'FunctionCall':
+        elif name == 'FunctionCall':
             sig = self.st.lookup_function(expr.name)
             if sig is None:
                 raise self._err(f"Undefined function '{expr.name}'", expr.line, expr.col)
@@ -223,7 +224,8 @@ class IRBuilder:
                 args.append(self._build_expr(a, pt))
             return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret)
 
-        raise self._err(f"Unknown expression type: {name}")
+        else:
+            raise self._err(f"Unknown expression type: {name}")
 
 
 def build_ir(module, filename: str = "<unknown>", source_lines: list = None):

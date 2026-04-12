@@ -124,45 +124,45 @@ class RustCodegen:
 
         if name == 'IRIntLit':
             return str(expr.value)
-        if name == 'IRFloatLit':
+        elif name == 'IRFloatLit':
             v = expr.value
             s = repr(v)
             if '.' not in s and 'e' not in s.lower():
                 s += ".0"
             return s
-        if name == 'IRBoolLit':
+        elif name == 'IRBoolLit':
             return "true" if expr.value else "false"
-        if name == 'IRStrLit':
+        elif name == 'IRStrLit':
             escaped = expr.value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
             return f'"{escaped}".to_string()'
-        if name == 'IRName':
+        elif name == 'IRName':
             return expr.name
-        if name == 'IRBinOp':
+        elif name == 'IRBinOp':
             return self._gen_binop(expr)
-        if name == 'IRUnaryOpExpr':
+        elif name == 'IRUnaryOpExpr':
             operand = self._gen_expr(expr.operand)
             if expr.op == 'not':
                 return f"!{operand}"
             if expr.op == '-':
                 return f"-{operand}"
             return operand
-        if name == 'IRCompare':
+        elif name == 'IRCompare':
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
             return f"{left} {expr.op} {right}"
-        if name == 'IRBoolOp':
+        elif name == 'IRBoolOp':
             parts = [self._gen_expr(v) for v in expr.values]
             return f" {expr.op} ".join(parts)
-        if name == 'IRListLit':
+        elif name == 'IRListLit':
             if not expr.elements:
                 return f"Vec::<{_rust_type(expr.element_type)}>::new()"
             elems = ", ".join(self._gen_expr(e) for e in expr.elements)
             return f"vec![{elems}]"
-        if name == 'IRSubscript':
+        elif name == 'IRSubscript':
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
             return f"{val}[{idx} as usize]"
-        if name == 'IRFunctionCall':
+        elif name == 'IRFunctionCall':
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             return f"{expr.name}({args})"
         return f"/* unknown expr {name} */"

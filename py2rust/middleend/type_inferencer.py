@@ -13,17 +13,17 @@ class TypeInferencer:
     def infer(self, expr):
         name = type(expr).__name__
         if name == 'IntLiteral': return IntType()
-        if name == 'FloatLiteral': return FloatType()
-        if name == 'BoolLiteral': return BoolType()
-        if name == 'StrLiteral': return StrType()
-        if name == 'Name': return self.st.lookup(expr.name)
-        if name == 'BinOp': return self._infer_binop(expr)
-        if name == 'UnaryOp': return self._infer_unaryop(expr)
-        if name == 'Comparison': return BoolType()
-        if name == 'BoolOp': return BoolType()
-        if name == 'ListLiteral': return self._infer_list(expr)
-        if name == 'Subscript': return self._infer_subscript(expr)
-        if name == 'FunctionCall': return self._infer_call(expr)
+        elif name == 'FloatLiteral': return FloatType()
+        elif name == 'BoolLiteral': return BoolType()
+        elif name == 'StrLiteral': return StrType()
+        elif name == 'Name': return self.st.lookup(expr.name)
+        elif name == 'BinOp': return self._infer_binop(expr)
+        elif name == 'UnaryOp': return self._infer_unaryop(expr)
+        elif name == 'Comparison': return BoolType()
+        elif name == 'BoolOp': return BoolType()
+        elif name == 'ListLiteral': return self._infer_list(expr)
+        elif name == 'Subscript': return self._infer_subscript(expr)
+        elif name == 'FunctionCall': return self._infer_call(expr)
         return None
 
     def _infer_binop(self, expr):
