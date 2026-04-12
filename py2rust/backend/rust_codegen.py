@@ -296,12 +296,8 @@ class RustCodegen:
 
         is_main = func.name == "main"
         self._in_main = is_main
-        if is_main:
-            ret = _rust_type(func.return_type)
-            self._emit(f"fn {func.name}({params}) -> {ret} {{")
-        else:
-            ret = _rust_type(func.return_type)
-            self._emit(f"fn {func.name}({params}) -> {ret} {{")
+        ret = _rust_type(func.return_type)
+        self._emit(f"fn {func.name}({params}) -> {ret} {{")
 
         self._indent += 1
 
@@ -409,29 +405,40 @@ class RustCodegen:
         elif isinstance(stmt, IRForRange):
             start = self._gen_expr(stmt.start)
             stop = self._gen_expr(stmt.stop)
-            step = self._gen_expr(stmt.step) if stmt.step is not None else "1"
-            label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
+            step_is_one = stmt.step is None
 
-            self._emit("{")
-            self._indent += 1
+            if step_is_one:
+                self._emit(f"for {stmt.target} in {start}..{stop} {{")
+            else:
+                step = self._gen_expr(stmt.step)
+                label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
+                self._emit("{")
+                self._indent += 1
+                self._emit(f"let __stop = {stop};")
+                self._emit(f"let __step = {step};")
+                self._emit(f"{stmt.target} = {start};")
+                self._emit(
+                    f"'{label}: while if (__step) > 0 {{ {stmt.target} < (__stop) }} else {{ {stmt.target} > (__stop) }} {{"
+                )
+                self._indent += 1
+                old_top_level = self._at_top_level
+                self._at_top_level = False
+                for s in stmt.body:
+                    self._gen_stmt(s)
+                self._at_top_level = old_top_level
+                self._emit(f"{stmt.target} += __step;")
+                self._indent -= 1
+                self._emit("}")
+                self._indent -= 1
+                self._emit("}")
+                return
 
-            self._emit(f"let __stop = {stop};")
-            self._emit(f"let __step = {step};")
-            self._emit(f"{stmt.target} = {start};")
-
-            self._emit(
-                f"'{label}: while if (__step) > 0 {{ {stmt.target} < (__stop) }} else {{ {stmt.target} > (__stop) }} {{"
-            )
             self._indent += 1
             old_top_level = self._at_top_level
             self._at_top_level = False
             for s in stmt.body:
                 self._gen_stmt(s)
             self._at_top_level = old_top_level
-            self._emit(f"{stmt.target} += __step;")
-            self._indent -= 1
-            self._emit("}")
-
             self._indent -= 1
             self._emit("}")
 

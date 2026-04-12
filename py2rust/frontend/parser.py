@@ -497,14 +497,6 @@ class Parser:
             )
 
         if isinstance(node, ast.Name):
-            if node.id == "True":
-                return BoolLiteral(
-                    value=True, line=node.lineno, col=node.col_offset + 1
-                )
-            if node.id == "False":
-                return BoolLiteral(
-                    value=False, line=node.lineno, col=node.col_offset + 1
-                )
             return Name(name=node.id, line=node.lineno, col=node.col_offset + 1)
 
         if isinstance(node, ast.BinOp):

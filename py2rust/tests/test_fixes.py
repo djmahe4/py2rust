@@ -112,8 +112,7 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "i = 0;" in code
-    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
+    assert "for i in 0..10" in code
 
 
 def test_string_indexing():
@@ -228,8 +227,8 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    # i is declared inside the for loop
-    assert "i = 0;" in code
+    # Check for idiomatic for loop
+    assert "for i in 0..5" in code
     assert 'println!("{}", i);' in code
 
 
@@ -278,10 +277,8 @@ def main() -> int:
     return s
 """
     code = _compile(src)
-    # Check that stop_fn() is evaluated into a temp variable exactly once
-    assert "let __stop = stop_fn();" in code
-    # Check that the loop condition uses the temp variable
-    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) }" in code
+    # Check that idiomatic for loop is used
+    assert "for i in 0.." in code
 
 
 def test_idiomatic_mut_generation():
@@ -340,13 +337,9 @@ def main() -> int:
     return s
 """
     code = _compile(src)
-    # Check that there are nested blocks
-    assert (
-        code.count("{") >= 4
-    )  # Func, outer loop block, while block, inner loop block...
-    # Exact check for shadowing prevention: outer __step should not be overwritten
-    # The code should have multiple let __step
-    assert code.count("let __step") >= 2
+    # Check for idiomatic nested for loops
+    assert "for i in 0..2" in code
+    assert "for j in 0..2" in code
 
 
 def test_subscript_side_effects():
@@ -742,8 +735,7 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "let __stop = 5;" in code
-    assert "let __step = 1;" in code
+    assert "for i in 0..5" in code
 
 
 def test_range_two_args():
@@ -754,8 +746,7 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "let __stop = 5;" in code
-    assert "i = 1;" in code
+    assert "for i in 1..5" in code
 
 
 def test_range_three_args():
@@ -768,7 +759,6 @@ def main() -> int:
     code = _compile(src)
     assert "let __stop = 10;" in code
     assert "let __step = 2;" in code
-    assert "i = 0;" in code
 
 
 def test_range_negative_step():
