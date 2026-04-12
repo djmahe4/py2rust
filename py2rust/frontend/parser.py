@@ -11,6 +11,8 @@ from .ast_nodes import (
     Assign,
     AugAssign,
     SubscriptAssign,
+    BreakStmt,
+    ContinueStmt,
     IfStmt,
     WhileStmt,
     ForRangeStmt,
@@ -316,6 +318,12 @@ class Parser:
 
         if isinstance(node, ast.For):
             return self._parse_for(node)
+
+        if isinstance(node, ast.Break):
+            return BreakStmt(line=node.lineno, col=node.col_offset + 1)
+
+        if isinstance(node, ast.Continue):
+            return ContinueStmt(line=node.lineno, col=node.col_offset + 1)
 
         if isinstance(node, ast.Expr):
             if isinstance(node.value, ast.Call):

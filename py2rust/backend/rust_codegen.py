@@ -29,6 +29,8 @@ from ..ir.ir_nodes import (
     IRForRange,
     IRReturn,
     IRPrint,
+    IRBreak,
+    IRContinue,
 )
 
 
@@ -313,7 +315,8 @@ class RustCodegen:
 
         elif isinstance(stmt, IRWhile):
             cond = self._strip_parens(self._gen_expr(stmt.condition))
-            self._emit(f"while {cond} {{")
+            label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
+            self._emit(f"'{label}: while {cond} {{")
             self._indent += 1
             old_top_level = self._at_top_level
             self._at_top_level = False
@@ -327,6 +330,7 @@ class RustCodegen:
             start = self._gen_expr(stmt.start)
             stop = self._gen_expr(stmt.stop)
             step = self._gen_expr(stmt.step) if stmt.step is not None else "1"
+            label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
 
             self._emit("{")
             self._indent += 1
@@ -336,7 +340,7 @@ class RustCodegen:
             self._emit(f"{stmt.target} = {start};")
 
             self._emit(
-                f"while if (__step) > 0 {{ {stmt.target} < (__stop) }} else {{ {stmt.target} > (__stop) }} {{"
+                f"'{label}: while if (__step) > 0 {{ {stmt.target} < (__stop) }} else {{ {stmt.target} > (__stop) }} {{"
             )
             self._indent += 1
             old_top_level = self._at_top_level
@@ -365,6 +369,20 @@ class RustCodegen:
             val = self._gen_expr(stmt.value)
             fmt = "{:?}" if isinstance(stmt.value_type, IRListType) else "{}"
             self._emit(f'println!("{fmt}", {val});')
+
+        elif isinstance(stmt, IRBreak):
+            label = stmt.label if hasattr(stmt, "label") and stmt.label else None
+            if label:
+                self._emit(f"break '{label};")
+            else:
+                self._emit("break;")
+
+        elif isinstance(stmt, IRContinue):
+            label = stmt.label if hasattr(stmt, "label") and stmt.label else None
+            if label:
+                self._emit(f"continue '{label};")
+            else:
+                self._emit("continue;")
 
         elif isinstance(stmt, IRSubscriptAssign):
             if isinstance(stmt.target, IRSubscript):

@@ -36,6 +36,8 @@ from ..ir.ir_nodes import (
     IRForRange,
     IRReturn,
     IRPrint,
+    IRBreak,
+    IRContinue,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -63,6 +65,7 @@ class IRBuilder:
         self.source_lines = source_lines or []
         self.st = SymbolTable()
         self.inferencer = TypeInferencer(self.st)
+        self._loop_stack: list = []
 
     def _err(self, msg: str, line: int = 0, col: int = 0) -> SemanticError:
         return SemanticError(
@@ -209,18 +212,29 @@ class IRBuilder:
             )
 
         elif name == "WhileStmt":
+            label = f"__loop_{len(self._loop_stack)}"
+            self._loop_stack.append(label)
             cond = self._build_expr(stmt.condition)
             body = tuple(self._build_stmts(stmt.body, return_type))
-            return IRWhile(condition=cond, body=body)
+            self._loop_stack.pop()
+            return IRWhile(condition=cond, body=body, label=label)
 
         elif name == "ForRangeStmt":
+            label = f"__loop_{len(self._loop_stack)}"
+            self._loop_stack.append(label)
             self.st.define(stmt.target, IntType())
             start = self._build_expr(stmt.start)
             stop = self._build_expr(stmt.stop)
             step = self._build_expr(stmt.step) if stmt.step else None
             body = tuple(self._build_stmts(stmt.body, return_type))
+            self._loop_stack.pop()
             return IRForRange(
-                target=stmt.target, start=start, stop=stop, step=step, body=body
+                target=stmt.target,
+                start=start,
+                stop=stop,
+                step=step,
+                body=body,
+                label=label,
             )
 
         elif name == "ReturnStmt":
@@ -233,6 +247,16 @@ class IRBuilder:
             if val_type is None:
                 val_type = IntType()
             return IRPrint(value=val, value_type=_to_ir_type(val_type))
+
+        elif name == "BreakStmt":
+            if not self._loop_stack:
+                raise self._err("'break' must be inside a loop", stmt.line, stmt.col)
+            return IRBreak(label=self._loop_stack[-1])
+
+        elif name == "ContinueStmt":
+            if not self._loop_stack:
+                raise self._err("'continue' must be inside a loop", stmt.line, stmt.col)
+            return IRContinue(label=self._loop_stack[-1])
 
         elif name == "SubscriptAssign":
             target_val = self._build_expr(stmt.target)

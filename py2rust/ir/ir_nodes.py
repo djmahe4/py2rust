@@ -160,6 +160,7 @@ class IRIf:
 class IRWhile:
     condition: object
     body: tuple
+    label: str = ""
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,7 @@ class IRForRange:
     stop: object
     step: object
     body: tuple
+    label: str = ""
 
 
 @dataclass(frozen=True)
@@ -183,8 +185,27 @@ class IRPrint:
     value_type: object
 
 
+@dataclass(frozen=True)
+class IRBreak:
+    label: str = ""
+
+
+@dataclass(frozen=True)
+class IRContinue:
+    label: str = ""
+
+
 IRStmt = Union[
-    IRVarDecl, IRAssign, IRAugAssign, IRIf, IRWhile, IRForRange, IRReturn, IRPrint
+    IRVarDecl,
+    IRAssign,
+    IRAugAssign,
+    IRIf,
+    IRWhile,
+    IRForRange,
+    IRReturn,
+    IRPrint,
+    IRBreak,
+    IRContinue,
 ]
 
 

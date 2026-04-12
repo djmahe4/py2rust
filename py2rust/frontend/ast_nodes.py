@@ -224,6 +224,18 @@ class SubscriptAssign:
     col: int = 0
 
 
+@dataclass(frozen=True)
+class BreakStmt:
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class ContinueStmt:
+    line: int = 0
+    col: int = 0
+
+
 Stmt = Union[
     VarDecl,
     Assign,
@@ -234,6 +246,8 @@ Stmt = Union[
     ReturnStmt,
     PrintStmt,
     SubscriptAssign,
+    BreakStmt,
+    ContinueStmt,
 ]
 
 
