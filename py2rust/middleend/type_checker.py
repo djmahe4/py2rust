@@ -111,9 +111,18 @@ class TypeChecker:
                 )
 
         elif isinstance(stmt, IfStmt):
+            cond_type = self.inferencer.infer(stmt.condition)
+            if cond_type is None:
+                raise self._err("Cannot infer type for 'if' condition", stmt.line, stmt.col)
+            if not isinstance(cond_type, BoolType):
+                raise self._err(f"'if' condition must be bool, got {cond_type}", stmt.line, stmt.col)
+            
             for s in stmt.then_body:
                 self.check_stmt(s)
             for (cond, body) in stmt.elif_clauses:
+                elif_cond_type = self.inferencer.infer(cond)
+                if not isinstance(elif_cond_type, BoolType):
+                    raise self._err(f"'elif' condition must be bool, got {elif_cond_type}", stmt.line, stmt.col)
                 for s in body:
                     self.check_stmt(s)
             if stmt.else_body:
@@ -121,6 +130,12 @@ class TypeChecker:
                     self.check_stmt(s)
 
         elif isinstance(stmt, WhileStmt):
+            cond_type = self.inferencer.infer(stmt.condition)
+            if cond_type is None:
+                raise self._err("Cannot infer type for 'while' condition", stmt.line, stmt.col)
+            if not isinstance(cond_type, BoolType):
+                raise self._err(f"'while' condition must be bool, got {cond_type}", stmt.line, stmt.col)
+            
             for s in stmt.body:
                 self.check_stmt(s)
 

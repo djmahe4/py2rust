@@ -33,7 +33,7 @@ def main() -> int:
     # Rust's main() must return () - no return type annotation
     assert "fn main() {" in code
     assert "fn main() -> i32 {" not in code
-    assert "let result: i32 = add(3, 4);" in code
+    assert "result = add(3, 4);" in code
     assert 'println!("{}", result);' in code
     # return 0 is dropped (main returns () in Rust)
     assert "return;" in code
@@ -69,9 +69,9 @@ def f() -> int:
     return x
 """
     code = _compile(src)
-    assert "let x: i32 = 1;" in code
-    assert "let y: f64 = 2.0;" in code
-    assert "let z: bool = true;" in code
+    assert "x = 1;" in code
+    assert "y = 2.0;" in code
+    assert "z = true;" in code
 
 
 def test_codegen_if_else():
@@ -109,7 +109,7 @@ def f() -> int:
     return s
 """
     code = _compile(src)
-    assert "for i in 0..10 {" in code
+    assert "for mut i in 0..10 {" in code
 
 
 def test_codegen_for_range_step():

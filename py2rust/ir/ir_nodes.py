@@ -80,6 +80,7 @@ class IRListLit:
 class IRSubscript:
     value: object
     index: object
+    value_type: object
     result_type: object
 
 @dataclass(frozen=True)

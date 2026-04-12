@@ -14,7 +14,16 @@ def _rust_type(t) -> str:
     if isinstance(t, IRBoolType): return "bool"
     if isinstance(t, IRStrType): return "String"
     if isinstance(t, IRListType): return f"Vec<{_rust_type(t.element_type)}>"
-    return "i32"
+    return f"/* unknown type {type(t).__name__} */"
+
+
+def _default_value(t) -> str:
+    if isinstance(t, IRIntType): return "0"
+    if isinstance(t, IRFloatType): return "0.0"
+    if isinstance(t, IRBoolType): return "false"
+    if isinstance(t, IRStrType): return '"".to_string()'
+    if isinstance(t, IRListType): return "vec![]"
+    return "/* unknown */"
 
 
 def _collect_mutated_vars(stmts) -> set:
@@ -34,8 +43,31 @@ def _collect_mutated_vars(stmts) -> set:
         elif isinstance(stmt, IRWhile):
             mutated |= _collect_mutated_vars(stmt.body)
         elif isinstance(stmt, IRForRange):
+            mutated.add(stmt.target) # Loops always assign
             mutated |= _collect_mutated_vars(stmt.body)
     return mutated
+
+
+def _collect_decls(stmts) -> dict[str, object]:
+    """Collect all variables that are declared in the function body."""
+    decls: dict[str, object] = {}
+    for stmt in stmts:
+        if isinstance(stmt, IRVarDecl):
+            decls[stmt.name] = stmt.type_
+        elif isinstance(stmt, IRIf):
+            decls.update(_collect_decls(stmt.then_body))
+            for _, elif_body in stmt.elif_clauses:
+                decls.update(_collect_decls(elif_body))
+            if stmt.else_body:
+                decls.update(_collect_decls(stmt.else_body))
+        elif isinstance(stmt, IRWhile):
+            decls.update(_collect_decls(stmt.body))
+        elif isinstance(stmt, IRForRange):
+            # IRBuilder defines the target in symbol table, so it should be in VarDecls
+            # if it was used before. In our subset, loop targets are often implicit.
+            # But let's assume IRVarDecl handles most. Loop target is handled separately.
+            decls.update(_collect_decls(stmt.body))
+    return decls
 
 
 class RustCodegen:
@@ -59,13 +91,14 @@ class RustCodegen:
         return "\n".join(self._lines) + "\n"
 
     def _gen_function(self, func: IRFunction) -> None:
-        # Collect all variables that are reassigned in this function body
+        # Collect all variables that are reassigned or used as loop targets
         self._mutated_vars = _collect_mutated_vars(func.body)
-        # Also collect for-loop variables that need mut if reassigned inside the loop body
+        
+        # Emulate Python function scoping by pre-declaring all variables at the top
+        decls = _collect_decls(func.body)
+        
         params = ", ".join(f"{p.name}: {_rust_type(p.type_)}" for p in func.params)
 
-        # Special-case: Rust's `main` must return () or implement Termination.
-        # If user wrote `def main() -> int`, emit `fn main()` with no return type.
         is_main = func.name == "main"
         self._in_main = is_main
         if is_main:
@@ -73,17 +106,28 @@ class RustCodegen:
         else:
             ret = _rust_type(func.return_type)
             self._emit(f"fn {func.name}({params}) -> {ret} {{")
+        
         self._indent += 1
+        
+        # Emit pre-declarations
+        for name, type_ in decls.items():
+            mut = "mut " # Pre-declared vars must be mut if we assign them later
+            self._emit(f"let {mut}{name}: {_rust_type(type_)} = {_default_value(type_)};")
+        
+        if decls:
+            self._emit_blank()
+
         for stmt in func.body:
             self._gen_stmt(stmt)
+            
         self._indent -= 1
         self._emit("}")
 
     def _gen_stmt(self, stmt) -> None:
         if isinstance(stmt, IRVarDecl):
             val = self._gen_expr(stmt.value, stmt.type_)
-            mut = "mut " if stmt.name in self._mutated_vars else ""
-            self._emit(f"let {mut}{stmt.name}: {_rust_type(stmt.type_)} = {val};")
+            # Already declared at top, so just assign
+            self._emit(f"{stmt.name} = {val};")
 
         elif isinstance(stmt, IRAssign):
             val = self._gen_expr(stmt.value)
@@ -127,13 +171,15 @@ class RustCodegen:
         elif isinstance(stmt, IRForRange):
             start = self._gen_expr(stmt.start)
             stop = self._gen_expr(stmt.stop)
+            # Loop target in Rust is local to loop. Python loop target is function-scoped.
+            # We can't easily fix this without making loop target a manual increment,
+            # but for-loop itself can have mut target if reassigned inside.
+            mut = "mut " if stmt.target in self._mutated_vars else ""
+            
             if stmt.step is not None:
                 step_expr = self._gen_expr(stmt.step)
-                
-                # Try to determine if the step is a negative constant
                 is_neg_const = False
                 pos_step_val = None
-                
                 if isinstance(stmt.step, IRIntLit) and stmt.step.value < 0:
                     is_neg_const = True
                     pos_step_val = -stmt.step.value
@@ -142,12 +188,12 @@ class RustCodegen:
                     pos_step_val = stmt.step.operand.value
                 
                 if is_neg_const:
-                    # Python range(start, stop, -step) -> Rust (stop + 1..start + 1).rev().step_by(step)
-                    self._emit(f"for {stmt.target} in (({stop}) + 1..({start}) + 1).rev().step_by({pos_step_val} as usize) {{")
+                    self._emit(f"for {mut}{stmt.target} in (({stop}) + 1..({start}) + 1).rev().step_by({pos_step_val} as usize) {{")
                 else:
-                    self._emit(f"for {stmt.target} in ({start}..{stop}).step_by({step_expr} as usize) {{")
+                    self._emit(f"for {mut}{stmt.target} in ({start}..{stop}).step_by({step_expr} as usize) {{")
             else:
-                self._emit(f"for {stmt.target} in {start}..{stop} {{")
+                self._emit(f"for {mut}{stmt.target} in {start}..{stop} {{")
+            
             self._indent += 1
             for s in stmt.body:
                 self._gen_stmt(s)
@@ -156,7 +202,6 @@ class RustCodegen:
 
         elif isinstance(stmt, IRReturn):
             if self._in_main:
-                # Rust's main() returns (), so drop the return value
                 self._emit("return;")
             elif stmt.value is not None:
                 val = self._gen_expr(stmt.value)
@@ -166,7 +211,6 @@ class RustCodegen:
 
         elif isinstance(stmt, IRPrint):
             val = self._gen_expr(stmt.value)
-            # Use Debug formatting for Vec, Display for others
             fmt = "{:?}" if isinstance(stmt.value_type, IRListType) else "{}"
             self._emit(f'println!("{fmt}", {val});')
 
@@ -203,9 +247,8 @@ class RustCodegen:
             right = self._gen_expr(expr.right)
             return f"({left} {expr.op} {right})"
         elif isinstance(expr, IRBoolOp):
-            op = f" {expr.op} "
             parts = [self._gen_expr(v) for v in expr.values]
-            return f"({op.join(parts)})"
+            return f"({(f' {expr.op} ').join(parts)})"
         elif isinstance(expr, IRListLit):
             if not expr.elements:
                 return f"Vec::<{_rust_type(expr.element_type)}>::new()"
@@ -214,8 +257,13 @@ class RustCodegen:
         elif isinstance(expr, IRSubscript):
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
-            # idx as usize has high precedence, so wrap it
-            return f"{val}[({idx}) as usize]"
+            if isinstance(expr.value_type, IRStrType):
+                return f"({val}.chars().nth(({idx}) as usize).unwrap().to_string())"
+            
+            res = f"{val}[({idx}) as usize]"
+            if isinstance(expr.result_type, (IRStrType, IRListType)):
+                return f"({res}).clone()"
+            return res
         elif isinstance(expr, IRFunctionCall):
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             return f"{expr.name}({args})"
@@ -229,7 +277,6 @@ class RustCodegen:
         if expr.op == '//':
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
-            # Python floor division: (a as f64 / b as f64).floor() as i32
             return f"({left} as f64 / {right} as f64).floor() as i32"
         left = self._gen_expr(expr.left)
         right = self._gen_expr(expr.right)

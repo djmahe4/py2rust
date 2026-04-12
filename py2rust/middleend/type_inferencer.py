@@ -59,6 +59,8 @@ class TypeInferencer:
         t = self.infer(expr.value)
         if isinstance(t, ListType):
             return t.element_type
+        if isinstance(t, StrType):
+            return StrType()
         return None
 
     def _infer_call(self, expr):

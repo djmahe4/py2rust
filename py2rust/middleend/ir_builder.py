@@ -206,11 +206,14 @@ class IRBuilder:
             val = self._build_expr(expr.value)
             idx = self._build_expr(expr.index)
             val_type = self.inferencer.infer(expr.value)
+            ir_val_type = _to_ir_type(val_type) if val_type else IRIntType()
             if isinstance(val_type, ListType):
                 result_type = _to_ir_type(val_type.element_type)
+            elif isinstance(val_type, StrType):
+                result_type = IRStrType()
             else:
                 result_type = IRIntType()
-            return IRSubscript(value=val, index=idx, result_type=result_type)
+            return IRSubscript(value=val, index=idx, value_type=ir_val_type, result_type=result_type)
 
         elif name == 'FunctionCall':
             sig = self.st.lookup_function(expr.name)
