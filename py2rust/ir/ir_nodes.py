@@ -35,7 +35,16 @@ class IRListType:
         return f"Vec<{self.element_type}>"
 
 
-IRType = Union[IRIntType, IRFloatType, IRBoolType, IRStrType, IRListType]
+@dataclass(frozen=True)
+class IRDictType:
+    key_type: object
+    value_type: object
+
+    def __str__(self):
+        return f"HashMap<{self.key_type}, {self.value_type}>"
+
+
+IRType = Union[IRIntType, IRFloatType, IRBoolType, IRStrType, IRListType, IRDictType]
 
 
 @dataclass(frozen=True)
@@ -92,9 +101,22 @@ class IRBoolOp:
 
 
 @dataclass(frozen=True)
+class IRDictContains:
+    key: object
+    dict: object
+
+
+@dataclass(frozen=True)
 class IRListLit:
     elements: tuple
     element_type: object
+
+
+@dataclass(frozen=True)
+class IRDictLit:
+    pairs: tuple
+    key_type: object
+    value_type: object
 
 
 @dataclass(frozen=True)
@@ -123,6 +145,8 @@ IRExpr = Union[
     IRCompare,
     IRBoolOp,
     IRListLit,
+    IRDictLit,
+    IRDictContains,
     IRSubscript,
     IRFunctionCall,
 ]
@@ -195,6 +219,12 @@ class IRContinue:
     label: str = ""
 
 
+@dataclass(frozen=True)
+class IRDictDelete:
+    target: object
+    key: object
+
+
 IRStmt = Union[
     IRVarDecl,
     IRAssign,
@@ -206,6 +236,7 @@ IRStmt = Union[
     IRPrint,
     IRBreak,
     IRContinue,
+    IRDictDelete,
 ]
 
 

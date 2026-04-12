@@ -13,6 +13,7 @@ from .ast_nodes import (
     SubscriptAssign,
     BreakStmt,
     ContinueStmt,
+    DelStmt,
     IfStmt,
     WhileStmt,
     ForRangeStmt,
@@ -28,6 +29,7 @@ from .ast_nodes import (
     Comparison,
     BoolOp,
     ListLiteral,
+    DictLiteral,
     Subscript,
     FunctionCall,
     IntType,
@@ -35,6 +37,7 @@ from .ast_nodes import (
     BoolType,
     StrType,
     ListType,
+    DictType,
 )
 
 _BINOP_MAP = {
@@ -184,6 +187,16 @@ class Parser:
             if isinstance(node.value, ast.Name) and node.value.id == "list":
                 elem_type = self._parse_type(node.slice)
                 return ListType(element_type=elem_type)
+            if isinstance(node.value, ast.Name) and node.value.id == "dict":
+                if isinstance(node.slice, ast.Tuple):
+                    key_type = self._parse_type(node.slice.elts[0])
+                    value_type = self._parse_type(node.slice.elts[1])
+                    return DictType(key_type=key_type, value_type=value_type)
+                raise self._err(
+                    "dict type requires two type arguments: dict[K, V]",
+                    node,
+                    UnsupportedFeatureError,
+                )
             raise self._err("Unsupported generic type", node, UnsupportedFeatureError)
         elif isinstance(node, ast.Constant) and node.value is None:
             raise self._err(
@@ -324,6 +337,27 @@ class Parser:
 
         if isinstance(node, ast.Continue):
             return ContinueStmt(line=node.lineno, col=node.col_offset + 1)
+
+        if isinstance(node, ast.Delete):
+            if len(node.targets) != 1:
+                raise self._err(
+                    "Only single-target delete supported",
+                    node,
+                    UnsupportedFeatureError,
+                )
+            target = node.targets[0]
+            if isinstance(target, ast.Subscript):
+                return DelStmt(
+                    target=self._parse_expr(target.value),
+                    key=self._parse_expr(target.slice),
+                    line=node.lineno,
+                    col=node.col_offset + 1,
+                )
+            raise self._err(
+                "Only subscript deletion supported (del d[key])",
+                node,
+                UnsupportedFeatureError,
+            )
 
         if isinstance(node, ast.Expr):
             if isinstance(node.value, ast.Call):
@@ -512,10 +546,32 @@ class Parser:
                     node,
                     UnsupportedFeatureError,
                 )
-            op = _CMP_MAP.get(type(node.ops[0]))
+            op_node = node.ops[0]
+            op = _CMP_MAP.get(type(op_node))
             if op is None:
+                # Handle 'in' and 'not in' operators for dict membership
+                if isinstance(op_node, ast.In):
+                    left = self._parse_expr(node.left)
+                    right = self._parse_expr(node.comparators[0])
+                    return Comparison(
+                        op="in",
+                        left=left,
+                        right=right,
+                        line=node.lineno,
+                        col=node.col_offset + 1,
+                    )
+                if isinstance(op_node, ast.NotIn):
+                    left = self._parse_expr(node.left)
+                    right = self._parse_expr(node.comparators[0])
+                    return Comparison(
+                        op="not_in",
+                        left=left,
+                        right=right,
+                        line=node.lineno,
+                        col=node.col_offset + 1,
+                    )
                 raise self._err(
-                    f"Unsupported comparison operator: {type(node.ops[0]).__name__}",
+                    f"Unsupported comparison operator: {type(op_node).__name__}",
                     node,
                     UnsupportedFeatureError,
                 )
@@ -537,6 +593,13 @@ class Parser:
             return ListLiteral(
                 elements=elems, line=node.lineno, col=node.col_offset + 1
             )
+
+        if isinstance(node, ast.Dict):
+            pairs = tuple(
+                (self._parse_expr(k), self._parse_expr(v))
+                for k, v in zip(node.keys, node.values)
+            )
+            return DictLiteral(pairs=pairs, line=node.lineno, col=node.col_offset + 1)
 
         if isinstance(node, ast.Subscript):
             value = self._parse_expr(node.value)

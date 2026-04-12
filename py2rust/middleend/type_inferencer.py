@@ -6,6 +6,7 @@ from ..frontend.ast_nodes import (
     BoolType,
     StrType,
     ListType,
+    DictType,
 )
 from .symbol_table import SymbolTable
 
@@ -37,6 +38,8 @@ class TypeInferencer:
                 return BoolType()
             case "ListLiteral":
                 return self._infer_list(expr)
+            case "DictLiteral":
+                return self._infer_dict(expr)
             case "Subscript":
                 return self._infer_subscript(expr)
             case "FunctionCall":
@@ -78,21 +81,36 @@ class TypeInferencer:
             return None
         return ListType(element_type=elem_t)
 
+    def _infer_dict(self, expr):
+        if not expr.pairs:
+            return None
+        key_t = self.infer(expr.pairs[0][0])
+        val_t = self.infer(expr.pairs[0][1])
+        if key_t is None or val_t is None:
+            return None
+        return DictType(key_type=key_t, value_type=val_t)
+
     def _infer_subscript(self, expr):
         t = self.infer(expr.value)
         if isinstance(t, ListType):
             return t.element_type
         if isinstance(t, StrType):
             return StrType()
+        if isinstance(t, DictType):
+            return t.value_type
         return None
 
     def _infer_call(self, expr):
         if expr.name == "len" and len(expr.args) == 1:
             arg_type = self.infer(expr.args[0])
-            if isinstance(arg_type, (ListType, StrType)):
+            if isinstance(arg_type, (ListType, StrType, DictType)):
                 return IntType()
         sig = self.st.lookup_function(expr.name)
         if sig:
             _, ret = sig
             return ret
         return None
+
+    def infer_dict_contains(self, key_expr, dict_expr):
+        """Infer type for dict membership check. Returns BoolType."""
+        return BoolType()

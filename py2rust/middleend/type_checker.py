@@ -6,6 +6,7 @@ from ..frontend.ast_nodes import (
     BoolType,
     StrType,
     ListType,
+    DictType,
 )
 from ..utils.errors import Py2RustTypeError, SemanticError
 from .symbol_table import SymbolTable
@@ -17,6 +18,11 @@ def _types_compatible(a, b) -> bool:
         if isinstance(a, ListType) and isinstance(b, ListType):
             # Rust Vec<T> is invariant — element types must match exactly
             return type(a.element_type) is type(b.element_type)
+        if isinstance(a, DictType) and isinstance(b, DictType):
+            # HashMap<K, V> requires exact key/value type match
+            return type(a.key_type) is type(b.key_type) and type(a.value_type) is type(
+                b.value_type
+            )
         return True
     if isinstance(a, FloatType) and isinstance(b, IntType):
         return True
@@ -95,6 +101,7 @@ class TypeChecker:
             Comparison,
             BoolOp,
             ListLiteral,
+            DictLiteral,
             Subscript,
             FunctionCall,
         )
@@ -168,20 +175,31 @@ class TypeChecker:
         elif isinstance(expr, Comparison):
             self.check_expr(expr.left)
             self.check_expr(expr.right)
+            # Dict membership checks are valid (key in dict, key not in dict)
+            # Type checking happens at runtime
         elif isinstance(expr, BoolOp):
             for val in expr.values:
                 self.check_expr(val)
         elif isinstance(expr, ListLiteral):
             for elem in expr.elements:
                 self.check_expr(elem)
+        elif isinstance(expr, DictLiteral):
+            for key, val in expr.pairs:
+                self.check_expr(key)
+                self.check_expr(val)
         elif isinstance(expr, Subscript):
             self.check_expr(expr.value)
             self.check_expr(expr.index)
-            it = self.inferencer.infer(expr.index)
-            if not isinstance(it, IntType):
-                raise self._err(
-                    f"Subscript index must be int, got {it}", expr.line, expr.col
-                )
+            vt = self.inferencer.infer(expr.value)
+            # For dicts, index can be any hashable type (int, str, float, bool)
+            # For lists/strings, index must be int
+            if isinstance(vt, ListType) or isinstance(vt, StrType):
+                it = self.inferencer.infer(expr.index)
+                if not isinstance(it, IntType):
+                    raise self._err(
+                        f"Subscript index must be int, got {it}", expr.line, expr.col
+                    )
+            # For dicts, any key type is allowed (type checking happens at runtime)
         elif isinstance(expr, FunctionCall):
             if expr.name == "len":
                 if len(expr.args) != 1:
@@ -192,9 +210,9 @@ class TypeChecker:
                     )
                 self.check_expr(expr.args[0])
                 arg_t = self.inferencer.infer(expr.args[0])
-                if not isinstance(arg_t, (ListType, StrType)):
+                if not isinstance(arg_t, (ListType, StrType, DictType)):
                     raise self._err(
-                        f"len() argument must be list or str, got {arg_t}",
+                        f"len() argument must be list, str, or dict, got {arg_t}",
                         expr.line,
                         expr.col,
                     )

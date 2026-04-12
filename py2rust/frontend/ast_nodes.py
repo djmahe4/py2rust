@@ -35,7 +35,16 @@ class ListType:
         return f"list[{self.element_type}]"
 
 
-AnyType = Union[IntType, FloatType, BoolType, StrType, ListType]
+@dataclass(frozen=True)
+class DictType:
+    key_type: object
+    value_type: object
+
+    def __str__(self):
+        return f"dict[{self.key_type}, {self.value_type}]"
+
+
+AnyType = Union[IntType, FloatType, BoolType, StrType, ListType, DictType]
 
 
 @dataclass(frozen=True)
@@ -115,6 +124,13 @@ class ListLiteral:
 
 
 @dataclass(frozen=True)
+class DictLiteral:
+    pairs: tuple
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
 class Subscript:
     value: object
     index: object
@@ -141,6 +157,7 @@ Expr = Union[
     Comparison,
     BoolOp,
     ListLiteral,
+    DictLiteral,
     Subscript,
     FunctionCall,
 ]
@@ -236,6 +253,14 @@ class ContinueStmt:
     col: int = 0
 
 
+@dataclass(frozen=True)
+class DelStmt:
+    target: object
+    key: object
+    line: int = 0
+    col: int = 0
+
+
 Stmt = Union[
     VarDecl,
     Assign,
@@ -248,6 +273,7 @@ Stmt = Union[
     SubscriptAssign,
     BreakStmt,
     ContinueStmt,
+    DelStmt,
 ]
 
 

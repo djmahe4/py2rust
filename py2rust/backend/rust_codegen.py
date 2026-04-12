@@ -8,6 +8,7 @@ from ..ir.ir_nodes import (
     IRBoolType,
     IRStrType,
     IRListType,
+    IRDictType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
@@ -18,6 +19,8 @@ from ..ir.ir_nodes import (
     IRCompare,
     IRBoolOp,
     IRListLit,
+    IRDictLit,
+    IRDictContains,
     IRSubscript,
     IRSubscriptAssign,
     IRFunctionCall,
@@ -31,6 +34,7 @@ from ..ir.ir_nodes import (
     IRPrint,
     IRBreak,
     IRContinue,
+    IRDictDelete,
 )
 
 
@@ -45,6 +49,8 @@ def _rust_type(t) -> str:
         return "String"
     if isinstance(t, IRListType):
         return f"Vec<{_rust_type(t.element_type)}>"
+    if isinstance(t, IRDictType):
+        return f"HashMap<{_rust_type(t.key_type)}, {_rust_type(t.value_type)}>"
     raise ValueError(f"Unknown type {type(t).__name__}")
 
 
@@ -260,6 +266,8 @@ class RustCodegen:
             return "String::new()"
         if isinstance(ir_type, IRListType):
             return f"Vec::<{_rust_type(ir_type.element_type)}>::new()"
+        if isinstance(ir_type, IRDictType):
+            return f"HashMap::<{_rust_type(ir_type.key_type)}, {_rust_type(ir_type.value_type)}>::new()"
         return "0"
 
     def _gen_stmt(self, stmt) -> None:
@@ -384,11 +392,23 @@ class RustCodegen:
             else:
                 self._emit("continue;")
 
+        elif isinstance(stmt, IRDictDelete):
+            target = self._gen_expr(stmt.target)
+            key = self._gen_expr(stmt.key)
+            self._emit(f"{target}.remove(&{key});")
+
         elif isinstance(stmt, IRSubscriptAssign):
             if isinstance(stmt.target, IRSubscript):
                 target_val = self._gen_expr(stmt.target.value)
                 idx_raw = self._gen_expr(stmt.index)
                 value_val = self._gen_expr(stmt.value)
+
+                # Handle dict assignment: d[key] = value -> d.insert(key, value)
+                if isinstance(stmt.target.value_type, IRDictType):
+                    self._emit(f"{target_val}.insert({idx_raw}, {value_val});")
+                    if isinstance(stmt.target.value, IRName):
+                        self._mutated_vars.add(stmt.target.value.name)
+                    return
 
                 if isinstance(stmt.target.value_type, IRStrType):
                     len_expr = f"{target_val}.chars().count() as i32"
@@ -408,7 +428,16 @@ class RustCodegen:
                 target = self._gen_expr(stmt.target)
                 index = self._gen_expr(stmt.index)
                 value = self._gen_expr(stmt.value)
-                self._emit(f"{target}[{index}] = {value};")
+                # Check if target is a dict by looking up its declaration type
+                target_type = (
+                    self._decl_types.get(stmt.target.name)
+                    if isinstance(stmt.target, IRName)
+                    else None
+                )
+                if isinstance(target_type, IRDictType):
+                    self._emit(f"{target}.insert({index}, {value});")
+                else:
+                    self._emit(f"{target}[{index}] = {value};")
                 if isinstance(stmt.target, IRName):
                     self._mutated_vars.add(stmt.target.name)
 
@@ -456,9 +485,29 @@ class RustCodegen:
                 return f"Vec::<{_rust_type(expr.element_type)}>::new()"
             elems = ", ".join(self._gen_expr(e) for e in expr.elements)
             return f"vec![{elems}]"
+        elif isinstance(expr, IRDictLit):
+            key_t = _rust_type(expr.key_type)
+            val_t = _rust_type(expr.value_type)
+            if not expr.pairs:
+                return f"HashMap::<{key_t}, {val_t}>::new()"
+            pairs = []
+            for k, v in expr.pairs:
+                key_str = self._gen_expr(k)
+                val_str = self._gen_expr(v)
+                pairs.append(f"({key_str}, {val_str})")
+            return f"({{ let mut __d: HashMap<{key_t}, {val_t}> = HashMap::new(); {''.join(f'__d.insert({p}); ' for p in pairs)} __d }})"
+        elif isinstance(expr, IRDictContains):
+            key = self._gen_expr(expr.key)
+            dict_val = self._gen_expr(expr.dict)
+            return f"{dict_val}.contains_key(&{key})"
         elif isinstance(expr, IRSubscript):
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
+
+            # Handle dict subscript: d[key] -> __d.get(&key).unwrap().clone()
+            if isinstance(expr.value_type, IRDictType):
+                val_t = _rust_type(expr.value_type.value_type)
+                return f"({val}.get(&{idx}).unwrap().clone())"
 
             # Robust Python indexing: bind collection to a temp reference to avoid redundant evaluations
             # and then calculate actual usize index relative to length if negative.

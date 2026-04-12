@@ -5,6 +5,7 @@ from ..frontend.ast_nodes import (
     BoolType,
     StrType,
     ListType,
+    DictType,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -15,6 +16,7 @@ from ..ir.ir_nodes import (
     IRBoolType,
     IRStrType,
     IRListType,
+    IRDictType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
@@ -25,6 +27,8 @@ from ..ir.ir_nodes import (
     IRCompare,
     IRBoolOp,
     IRListLit,
+    IRDictLit,
+    IRDictContains,
     IRSubscript,
     IRSubscriptAssign,
     IRFunctionCall,
@@ -38,6 +42,7 @@ from ..ir.ir_nodes import (
     IRPrint,
     IRBreak,
     IRContinue,
+    IRDictDelete,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -56,6 +61,11 @@ def _to_ir_type(t):
         return IRStrType()
     if isinstance(t, ListType):
         return IRListType(element_type=_to_ir_type(t.element_type))
+    if isinstance(t, DictType):
+        return IRDictType(
+            key_type=_to_ir_type(t.key_type),
+            value_type=_to_ir_type(t.value_type),
+        )
     raise SemanticError(f"Unknown type: {t}")
 
 
@@ -258,6 +268,11 @@ class IRBuilder:
                 raise self._err("'continue' must be inside a loop", stmt.line, stmt.col)
             return IRContinue(label=self._loop_stack[-1])
 
+        elif name == "DelStmt":
+            target_val = self._build_expr(stmt.target)
+            key_val = self._build_expr(stmt.key)
+            return IRDictDelete(target=target_val, key=key_val)
+
         elif name == "SubscriptAssign":
             target_val = self._build_expr(stmt.target)
             index_val = self._build_expr(stmt.index)
@@ -265,6 +280,8 @@ class IRBuilder:
             target_type = self.inferencer.infer(stmt.target)
             if isinstance(target_type, ListType):
                 value_type = _to_ir_type(target_type.element_type)
+            elif isinstance(target_type, DictType):
+                value_type = _to_ir_type(target_type.value_type)
             elif isinstance(target_type, StrType):
                 value_type = IRStrType()
             else:
@@ -316,6 +333,24 @@ class IRBuilder:
 
         elif name == "Comparison":
             left_type = self.inferencer.infer(expr.left)
+            right_type = self.inferencer.infer(expr.right)
+
+            # Handle dict membership: key in dict
+            if expr.op == "in" and isinstance(right_type, DictType):
+                key = self._build_expr(expr.left)
+                dict_val = self._build_expr(expr.right)
+                return IRDictContains(key=key, dict=dict_val)
+
+            # Handle dict non-membership: key not in dict
+            if expr.op == "not_in" and isinstance(right_type, DictType):
+                key = self._build_expr(expr.left)
+                dict_val = self._build_expr(expr.right)
+                return IRUnaryOpExpr(
+                    op="not",
+                    operand=IRDictContains(key=key, dict=dict_val),
+                    result_type=IRBoolType(),
+                )
+
             ir_left_t = _to_ir_type(left_type) if left_type else IRIntType()
             left = self._build_expr(expr.left, ir_left_t)
             right = self._build_expr(expr.right, ir_left_t)
@@ -337,6 +372,24 @@ class IRBuilder:
             elems = tuple(self._build_expr(e, ir_elem_t) for e in expr.elements)
             return IRListLit(elements=elems, element_type=ir_elem_t)
 
+        elif name == "DictLiteral":
+            if not expr.pairs:
+                key_t = IRIntType()
+                val_t = IRIntType()
+                if isinstance(expected_type, IRDictType):
+                    key_t = expected_type.key_type
+                    val_t = expected_type.value_type
+                return IRDictLit(pairs=(), key_type=key_t, value_type=val_t)
+            first_key_t = self.inferencer.infer(expr.pairs[0][0])
+            first_val_t = self.inferencer.infer(expr.pairs[0][1])
+            ir_key_t = _to_ir_type(first_key_t) if first_key_t else IRIntType()
+            ir_val_t = _to_ir_type(first_val_t) if first_val_t else IRIntType()
+            pairs = tuple(
+                (self._build_expr(k, ir_key_t), self._build_expr(v, ir_val_t))
+                for k, v in expr.pairs
+            )
+            return IRDictLit(pairs=pairs, key_type=ir_key_t, value_type=ir_val_t)
+
         elif name == "Subscript":
             val = self._build_expr(expr.value)
             idx = self._build_expr(expr.index)
@@ -346,6 +399,8 @@ class IRBuilder:
                 result_type = _to_ir_type(val_type.element_type)
             elif isinstance(val_type, StrType):
                 result_type = IRStrType()
+            elif isinstance(val_type, DictType):
+                result_type = _to_ir_type(val_type.value_type)
             else:
                 result_type = IRIntType()
             return IRSubscript(
