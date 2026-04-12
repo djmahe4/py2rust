@@ -174,4 +174,6 @@ class TypeChecker:
                         )
 
         elif isinstance(stmt, PrintStmt):
-            pass
+            inferred = self.inferencer.infer(stmt.value)
+            if inferred is None:
+                raise self._err("Cannot infer type for expression in print()", stmt.line, stmt.col)

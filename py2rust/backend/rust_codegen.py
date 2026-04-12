@@ -14,7 +14,7 @@ def _rust_type(t) -> str:
     if isinstance(t, IRBoolType): return "bool"
     if isinstance(t, IRStrType): return "String"
     if isinstance(t, IRListType): return f"Vec<{_rust_type(t.element_type)}>"
-    return f"/* unknown type {type(t).__name__} */"
+    raise ValueError(f"Unknown type {type(t).__name__}")
 
 
 def _default_value(t) -> str:
@@ -109,6 +109,8 @@ class RustCodegen:
         
         # Emit pre-declarations
         for name, type_ in decls.items():
+            if name == "_":
+                continue
             # Only use mut if the variable is modified after initialization or is a loop target
             mut = "mut " if name in self._mutated_vars else ""
             # Omit default value to avoid unnecessary work and enable better Rust optimization

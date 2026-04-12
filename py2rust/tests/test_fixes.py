@@ -299,10 +299,9 @@ def main() -> int:
     code = _compile(src)
     # Should be converted to _ = helper(42);
     assert "_ = helper(42);" in code
-    # _ is used as target in parse_stmt, but it's a discard. 
-    # Actually, in our current IRVarDecl logic, _ will be caught as a declaration.
-    # It might or might not be mut depending on _collect_mutated_vars.
-    assert "let _: i32;" in code or "let mut _: i32;" in code
+    # _ is a discard, should NOT have a let declaration
+    assert "let _: i32;" not in code
+    assert "let mut _: i32;" not in code
 
 def test_semantic_error_in_ir_builder():
     from py2rust.utils.errors import SemanticError
@@ -365,3 +364,37 @@ def main() -> int:
 """
     with pytest.raises(Py2RustTypeError):
         _check(src)
+
+def test_discard_variable_predeclaration_skipped():
+    src = """
+def helper(x: int) -> int:
+    return x
+
+def main() -> int:
+    helper(42)
+    return 0
+"""
+    code = _compile(src)
+    # _ is a discard variable in helper(42) call statement, 
+    # it should not have a let declaration.
+    assert "let mut _: i32;" not in code
+    assert "let _: i32;" not in code
+    # But it should be assigned to
+    assert "_ = helper(42);" in code
+
+def test_print_validation_undefined_var():
+    from py2rust.utils.errors import CompilerError
+    src = """
+def main() -> int:
+    print(undefined_var)
+    return 0
+"""
+    with pytest.raises(CompilerError):
+        _check(src)
+
+def test_unknown_type_marker():
+    from py2rust.backend.rust_codegen import _rust_type
+    class UnknownType: pass
+    with pytest.raises(ValueError) as excinfo:
+        _rust_type(UnknownType())
+    assert "Unknown type UnknownType" in str(excinfo.value)
