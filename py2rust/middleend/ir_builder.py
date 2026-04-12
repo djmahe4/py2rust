@@ -86,13 +86,16 @@ class IRBuilder:
         elif name == 'Assign':
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
+            
             if existing is None:
                 if inferred is None:
                     raise self._err(f"Cannot determine type for '{stmt.target}'", stmt.line, stmt.col)
                 self.st.define(stmt.target, inferred)
                 ir_type = _to_ir_type(inferred)
-            else:
-                ir_type = _to_ir_type(existing)
+                ir_val = self._build_expr(stmt.value, expected_type=ir_type)
+                return IRVarDecl(name=stmt.target, type_=ir_type, value=ir_val)
+            
+            ir_type = _to_ir_type(existing)
             ir_val = self._build_expr(stmt.value, expected_type=ir_type)
             return IRAssign(target=stmt.target, value=ir_val)
 

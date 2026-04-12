@@ -63,9 +63,7 @@ def _collect_decls(stmts) -> dict[str, object]:
         elif isinstance(stmt, IRWhile):
             decls.update(_collect_decls(stmt.body))
         elif isinstance(stmt, IRForRange):
-            # IRBuilder defines the target in symbol table, so it should be in VarDecls
-            # if it was used before. In our subset, loop targets are often implicit.
-            # But let's assume IRVarDecl handles most. Loop target is handled separately.
+            decls[stmt.target] = IRIntType()
             decls.update(_collect_decls(stmt.body))
     return decls
 
@@ -171,32 +169,16 @@ class RustCodegen:
         elif isinstance(stmt, IRForRange):
             start = self._gen_expr(stmt.start)
             stop = self._gen_expr(stmt.stop)
-            # Loop target in Rust is local to loop. Python loop target is function-scoped.
-            # We can't easily fix this without making loop target a manual increment,
-            # but for-loop itself can have mut target if reassigned inside.
-            mut = "mut " if stmt.target in self._mutated_vars else ""
+            step = self._gen_expr(stmt.step) if stmt.step is not None else "1"
             
-            if stmt.step is not None:
-                step_expr = self._gen_expr(stmt.step)
-                is_neg_const = False
-                pos_step_val = None
-                if isinstance(stmt.step, IRIntLit) and stmt.step.value < 0:
-                    is_neg_const = True
-                    pos_step_val = -stmt.step.value
-                elif isinstance(stmt.step, IRUnaryOpExpr) and stmt.step.op == '-' and isinstance(stmt.step.operand, IRIntLit):
-                    is_neg_const = True
-                    pos_step_val = stmt.step.operand.value
-                
-                if is_neg_const:
-                    self._emit(f"for {mut}{stmt.target} in (({stop}) + 1..({start}) + 1).rev().step_by({pos_step_val} as usize) {{")
-                else:
-                    self._emit(f"for {mut}{stmt.target} in ({start}..{stop}).step_by({step_expr} as usize) {{")
-            else:
-                self._emit(f"for {mut}{stmt.target} in {start}..{stop} {{")
-            
+            # Use while loop to emulate Python's loop variable scoping and persistence
+            self._emit(f"{stmt.target} = {start};")
+            # Step can be negative, so we need a robust condition
+            self._emit(f"while if ({step}) > 0 {{ {stmt.target} < ({stop}) }} else {{ {stmt.target} > ({stop}) }} {{")
             self._indent += 1
             for s in stmt.body:
                 self._gen_stmt(s)
+            self._emit(f"{stmt.target} += {step};")
             self._indent -= 1
             self._emit("}")
 
@@ -257,10 +239,20 @@ class RustCodegen:
         elif isinstance(expr, IRSubscript):
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
-            if isinstance(expr.value_type, IRStrType):
-                return f"({val}.chars().nth(({idx}) as usize).unwrap().to_string())"
             
-            res = f"{val}[({idx}) as usize]"
+            # Determine length expression
+            if isinstance(expr.value_type, IRStrType):
+                len_expr = f"{val}.chars().count() as i32"
+            else:
+                len_expr = f"{val}.len() as i32"
+            
+            # Robust Python indexing: calculate actual usize index
+            actual_idx = f"({{ let i = {idx}; if i < 0 {{ (i + ({len_expr})) as usize }} else {{ i as usize }} }})"
+            
+            if isinstance(expr.value_type, IRStrType):
+                return f"({val}.chars().nth({actual_idx}).unwrap().to_string())"
+            
+            res = f"{val}[{actual_idx}]"
             if isinstance(expr.result_type, (IRStrType, IRListType)):
                 return f"({res}).clone()"
             return res

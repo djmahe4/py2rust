@@ -34,7 +34,8 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert ".rev().step_by(1 as usize)" in code
+    assert "while if ((-(1))) > 0 { i < (0) } else { i > (0) } {" in code
+    assert "i += (-(1));" in code
 
 def test_operator_precedence():
     src = """
@@ -100,7 +101,8 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "for mut i in 0..10 {" in code
+    assert "i = 0;" in code
+    assert "while if (1) > 0 { i < (10) } else { i > (10) } {" in code
 
 def test_string_indexing():
     src = """
@@ -110,7 +112,11 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "s.chars().nth((0) as usize).unwrap().to_string()" in code
+    assert "chars().nth" in code
+    assert "let i = 0;" in code
+    assert "i < 0" in code
+    assert "s.chars().count()" in code
+    assert "unwrap().to_string()" in code
 
 def test_list_move_semantics():
     src = """
@@ -121,7 +127,9 @@ def main() -> int:
 """
     code = _compile(src)
     # Should uses .clone() because String is not Copy
-    assert "(lst[(0) as usize]).clone()" in code
+    assert "lst[" in code
+    assert "len() as i32" in code
+    assert ").clone()" in code
 
 def test_invalid_condition_type():
     src = """
@@ -183,3 +191,66 @@ def test_visitor_tuple_traversal():
     visitor = TestVisitor()
     visitor.visit(node)
     assert visitor.visited_ints == 1
+
+def test_unannotated_var_scoping():
+    src = """
+def main() -> int:
+    if True:
+        x = 42
+    print(x)
+    return 0
+"""
+    code = _compile(src)
+    assert "let mut x: i32 = 0;" in code
+    assert "x = 42;" in code
+
+def test_loop_target_persistence():
+    src = """
+def main() -> int:
+    for i in range(0, 10):
+        pass
+    print(i)
+    return 0
+"""
+    # Replace pass
+    src = """
+def main() -> int:
+    for i in range(0, 5):
+        s = i
+    print(i)
+    return 0
+"""
+    code = _compile(src)
+    assert "let mut i: i32 = 0;" in code
+    assert "println!(\"{}\", i);" in code
+
+def test_negative_indexing_runtime():
+    src = """
+def main() -> int:
+    s: str = "abc"
+    last: str = s[-1]
+    lst: list[int] = [1, 2, 3]
+    last_val: int = lst[-1]
+    return 0
+"""
+    code = _compile(src)
+    # Check for negative index handling logic
+    assert "if i < 0" in code
+    assert "s.chars().count()" in code
+    assert "lst.len()" in code
+
+def test_while_loop_range_semantics():
+    src = """
+def main() -> int:
+    s = 0
+    for i in range(10, 0, -1):
+        s += i
+    return s
+"""
+    code = _compile(src)
+    # Target initialized
+    assert "i = 10;" in code
+    # Condition handles negative step
+    assert "while if ((-(1))) > 0" in code
+    # Increment
+    assert "i += (-(1));" in code

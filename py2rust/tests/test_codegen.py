@@ -109,7 +109,8 @@ def f() -> int:
     return s
 """
     code = _compile(src)
-    assert "for mut i in 0..10 {" in code
+    assert "i = 0;" in code
+    assert "while if (1) > 0 { i < (10) } else { i > (10) } {" in code
 
 
 def test_codegen_for_range_step():
@@ -121,7 +122,7 @@ def f() -> int:
     return s
 """
     code = _compile(src)
-    assert "step_by" in code
+    assert "while if (2) > 0 { i < (10) } else { i > (10) } {" in code
 
 
 def test_codegen_bool_ops():
