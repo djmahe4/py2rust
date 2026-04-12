@@ -9,6 +9,7 @@ from ..ir.ir_nodes import (
     IRStrType,
     IRListType,
     IRDictType,
+    IRFileType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
@@ -24,6 +25,8 @@ from ..ir.ir_nodes import (
     IRSubscript,
     IRSubscriptAssign,
     IRFunctionCall,
+    IRFileOpen,
+    IRFileMethod,
     IRVarDecl,
     IRAssign,
     IRAugAssign,
@@ -51,6 +54,8 @@ def _rust_type(t) -> str:
         return f"Vec<{_rust_type(t.element_type)}>"
     if isinstance(t, IRDictType):
         return f"HashMap<{_rust_type(t.key_type)}, {_rust_type(t.value_type)}>"
+    if isinstance(t, IRFileType):
+        return "FileHandle"
     raise ValueError(f"Unknown type {type(t).__name__}")
 
 
@@ -207,6 +212,72 @@ class RustCodegen:
         return s
 
     def generate(self, module: IRModule) -> str:
+        self._emit("use std::collections::HashMap;")
+        self._emit("use std::fs::{File, OpenOptions};")
+        self._emit("use std::io::{BufRead, BufReader, Read, Write, Seek, SeekFrom};")
+        self._emit("")
+        self._emit("struct FileHandle {")
+        self._emit("    file: File,")
+        self._emit("}")
+        self._emit("")
+        self._emit("impl FileHandle {")
+        self._emit("    fn open(path: &str, mode: &str) -> std::io::Result<Self> {")
+        self._emit("        let file = match mode {")
+        self._emit('            "r" => File::open(path)?,')
+        self._emit('            "w" => {')
+        self._emit("                let f = File::create(path)?;")
+        self._emit("                f")
+        self._emit("            },")
+        self._emit('            "a" => {')
+        self._emit(
+            "                let f = OpenOptions::new().append(true).open(path)?;"
+        )
+        self._emit("                f")
+        self._emit("            },")
+        self._emit('            "rb" => File::open(path)?,')
+        self._emit('            "wb" => File::create(path)?,')
+        self._emit('            "ab" => {')
+        self._emit(
+            "                let f = OpenOptions::new().append(true).open(path)?;"
+        )
+        self._emit("                f")
+        self._emit("            },")
+        self._emit("            _ => File::open(path)?,")
+        self._emit("        };")
+        self._emit("        Ok(FileHandle { file })")
+        self._emit("    }")
+        self._emit("")
+        self._emit("    fn read(&mut self) -> std::io::Result<String> {")
+        self._emit("        let mut contents = String::new();")
+        self._emit("        self.file.read_to_string(&mut contents)?;")
+        self._emit("        Ok(contents)")
+        self._emit("    }")
+        self._emit("")
+        self._emit("    fn readline(&mut self) -> std::io::Result<String> {")
+        self._emit("        let mut reader = BufReader::new(&self.file);")
+        self._emit("        let mut line = String::new();")
+        self._emit("        reader.read_line(&mut line)?;")
+        self._emit("        Ok(line)")
+        self._emit("    }")
+        self._emit("")
+        self._emit("    fn write(&mut self, content: &str) -> std::io::Result<()> {")
+        self._emit("        self.file.write_all(content.as_bytes())")
+        self._emit("    }")
+        self._emit("")
+        self._emit("    fn close(self) -> std::io::Result<()> {")
+        self._emit("        Ok(())")
+        self._emit("    }")
+        self._emit("")
+        self._emit("    fn tell(&self) -> std::io::Result<u64> {")
+        self._emit("        self.file.stream_position()")
+        self._emit("    }")
+        self._emit("")
+        self._emit("    fn seek(&mut self, pos: u64) -> std::io::Result<u64> {")
+        self._emit("        self.file.seek(SeekFrom::Start(pos))")
+        self._emit("    }")
+        self._emit("}")
+        self._emit("")
+
         for i, func in enumerate(module.functions):
             if i > 0:
                 self._emit_blank()
@@ -226,7 +297,8 @@ class RustCodegen:
         is_main = func.name == "main"
         self._in_main = is_main
         if is_main:
-            self._emit(f"fn {func.name}({params}) {{")
+            ret = _rust_type(func.return_type)
+            self._emit(f"fn {func.name}({params}) -> {ret} {{")
         else:
             ret = _rust_type(func.return_type)
             self._emit(f"fn {func.name}({params}) -> {ret} {{")
@@ -364,9 +436,15 @@ class RustCodegen:
             self._emit("}")
 
         elif isinstance(stmt, IRReturn):
-            if self._in_main:
+            if stmt.value is None:
                 self._emit("return;")
-            elif stmt.value is not None:
+            elif self._in_main:
+                if isinstance(stmt.result_type, IRFloatType):
+                    val = self._strip_parens(self._gen_expr_as_float(stmt.value))
+                else:
+                    val = self._strip_parens(self._gen_expr(stmt.value))
+                self._emit(f"return {val};")
+            else:
                 if isinstance(stmt.result_type, IRFloatType):
                     val = self._strip_parens(self._gen_expr_as_float(stmt.value))
                 else:
@@ -537,6 +615,25 @@ class RustCodegen:
                 return f"{arg}.len() as i32"
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             return f"{expr.name}({args})"
+        elif isinstance(expr, IRFileOpen):
+            path = self._gen_expr(expr.path)
+            mode = self._gen_expr(expr.mode) if expr.mode else '"r"'
+            return f"FileHandle::open({path}, {mode})"
+        elif isinstance(expr, IRFileMethod):
+            file_val = self._gen_expr(expr.file)
+            args = ", ".join(self._gen_expr(a) for a in expr.args)
+            method = expr.method
+            if method in ("read", "readline", "readlines"):
+                return f"{file_val}.{method}()"
+            if method == "write":
+                return f"{file_val}.write({args})"
+            if method == "close":
+                return f"{file_val}.close()"
+            if method == "tell":
+                return f"{file_val}.tell()"
+            if method == "seek":
+                return f"{file_val}.seek({args})"
+            return f"{file_val}.{method}()"
         return f"/* unknown expr {type(expr).__name__} */"
 
     def _gen_binop(self, expr) -> str:

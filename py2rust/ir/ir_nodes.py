@@ -44,7 +44,15 @@ class IRDictType:
         return f"HashMap<{self.key_type}, {self.value_type}>"
 
 
-IRType = Union[IRIntType, IRFloatType, IRBoolType, IRStrType, IRListType, IRDictType]
+@dataclass(frozen=True)
+class IRFileType:
+    def __str__(self):
+        return "FileHandle"
+
+
+IRType = Union[
+    IRIntType, IRFloatType, IRBoolType, IRStrType, IRListType, IRDictType, IRFileType
+]
 
 
 @dataclass(frozen=True)
@@ -134,6 +142,19 @@ class IRFunctionCall:
     return_type: object
 
 
+@dataclass(frozen=True)
+class IRFileOpen:
+    path: object
+    mode: object
+
+
+@dataclass(frozen=True)
+class IRFileMethod:
+    file: object
+    method: str
+    args: tuple
+
+
 IRExpr = Union[
     IRIntLit,
     IRFloatLit,
@@ -149,6 +170,8 @@ IRExpr = Union[
     IRDictContains,
     IRSubscript,
     IRFunctionCall,
+    IRFileOpen,
+    IRFileMethod,
 ]
 
 

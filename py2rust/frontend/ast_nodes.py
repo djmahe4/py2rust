@@ -44,7 +44,13 @@ class DictType:
         return f"dict[{self.key_type}, {self.value_type}]"
 
 
-AnyType = Union[IntType, FloatType, BoolType, StrType, ListType, DictType]
+@dataclass(frozen=True)
+class FileType:
+    def __str__(self):
+        return "FileHandle"
+
+
+AnyType = Union[IntType, FloatType, BoolType, StrType, ListType, DictType, FileType]
 
 
 @dataclass(frozen=True)

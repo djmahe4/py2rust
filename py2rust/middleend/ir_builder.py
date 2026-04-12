@@ -6,6 +6,7 @@ from ..frontend.ast_nodes import (
     StrType,
     ListType,
     DictType,
+    FileType,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -17,6 +18,7 @@ from ..ir.ir_nodes import (
     IRStrType,
     IRListType,
     IRDictType,
+    IRFileType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
@@ -32,6 +34,8 @@ from ..ir.ir_nodes import (
     IRSubscript,
     IRSubscriptAssign,
     IRFunctionCall,
+    IRFileOpen,
+    IRFileMethod,
     IRVarDecl,
     IRAssign,
     IRAugAssign,
@@ -66,6 +70,8 @@ def _to_ir_type(t):
             key_type=_to_ir_type(t.key_type),
             value_type=_to_ir_type(t.value_type),
         )
+    if isinstance(t, FileType):
+        return IRFileType()
     raise SemanticError(f"Unknown type: {t}")
 
 
@@ -411,6 +417,11 @@ class IRBuilder:
             if expr.name == "len":
                 arg = self._build_expr(expr.args[0])
                 return IRFunctionCall(name="len", args=(arg,), return_type=IRIntType())
+
+            if expr.name == "open":
+                path = self._build_expr(expr.args[0])
+                mode = self._build_expr(expr.args[1]) if len(expr.args) > 1 else None
+                return IRFileOpen(path=path, mode=mode)
 
             sig = self.st.lookup_function(expr.name)
             if sig is None:

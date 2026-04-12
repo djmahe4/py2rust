@@ -175,8 +175,6 @@ class TypeChecker:
         elif isinstance(expr, Comparison):
             self.check_expr(expr.left)
             self.check_expr(expr.right)
-            # Dict membership checks are valid (key in dict, key not in dict)
-            # Type checking happens at runtime
         elif isinstance(expr, BoolOp):
             for val in expr.values:
                 self.check_expr(val)
@@ -201,7 +199,31 @@ class TypeChecker:
                     )
             # For dicts, any key type is allowed (type checking happens at runtime)
         elif isinstance(expr, FunctionCall):
-            if expr.name == "len":
+            if expr.name == "open":
+                if len(expr.args) < 1:
+                    raise self._err(
+                        "open() requires at least 1 argument (path)",
+                        expr.line,
+                        expr.col,
+                    )
+                self.check_expr(expr.args[0])
+                path_type = self.inferencer.infer(expr.args[0])
+                if not isinstance(path_type, StrType):
+                    raise self._err(
+                        f"open() path must be str, got {path_type}",
+                        expr.line,
+                        expr.col,
+                    )
+                if len(expr.args) > 1:
+                    self.check_expr(expr.args[1])
+                    mode_type = self.inferencer.infer(expr.args[1])
+                    if not isinstance(mode_type, StrType):
+                        raise self._err(
+                            f"open() mode must be str, got {mode_type}",
+                            expr.line,
+                            expr.col,
+                        )
+            elif expr.name == "len":
                 if len(expr.args) != 1:
                     raise self._err(
                         f"len() expected 1 argument, got {len(expr.args)}",

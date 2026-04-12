@@ -7,6 +7,7 @@ from ..frontend.ast_nodes import (
     StrType,
     ListType,
     DictType,
+    FileType,
 )
 from .symbol_table import SymbolTable
 
@@ -105,6 +106,8 @@ class TypeInferencer:
             arg_type = self.infer(expr.args[0])
             if isinstance(arg_type, (ListType, StrType, DictType)):
                 return IntType()
+        if expr.name == "open":
+            return FileType()
         sig = self.st.lookup_function(expr.name)
         if sig:
             _, ret = sig
@@ -114,3 +117,17 @@ class TypeInferencer:
     def infer_dict_contains(self, key_expr, dict_expr):
         """Infer type for dict membership check. Returns BoolType."""
         return BoolType()
+
+    def infer_file_method(self, method_name):
+        """Infer return type for file handle methods."""
+        if method_name in ("read", "readline"):
+            return StrType()
+        if method_name in ("tell", "seek"):
+            return IntType()
+        if method_name == "close":
+            return None
+        return None
+
+    def infer_open_call(self, args):
+        """Infer type for open() call. Returns FileType."""
+        return FileType()

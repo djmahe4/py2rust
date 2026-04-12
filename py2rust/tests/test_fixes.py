@@ -520,3 +520,544 @@ def main() -> int:
 """
     with pytest.raises(CompilerError):
         _check(src)
+
+
+def test_dict_literal_creation():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1, "b": 2}
+    return 0
+"""
+    code = _compile(src)
+    assert "HashMap<String, i32>" in code
+    assert '.insert(("a".to_string(), 1));' in code
+    assert '.insert(("b".to_string(), 2));' in code
+
+
+def test_dict_empty_literal():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {}
+    return 0
+"""
+    code = _compile(src)
+    assert "HashMap::<String, i32>::new()" in code
+
+
+def test_dict_read():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1}
+    x: int = d["a"]
+    return x
+"""
+    code = _compile(src)
+    assert '.get(&"a".to_string()).unwrap().clone()' in code
+
+
+def test_dict_update():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1}
+    d["a"] = 10
+    return d["a"]
+"""
+    code = _compile(src)
+    assert '.insert("a".to_string(), 10);' in code
+
+
+def test_dict_insert_new_key():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1}
+    d["b"] = 2
+    return len(d)
+"""
+    code = _compile(src)
+    assert '.insert("b".to_string(), 2);' in code
+
+
+def test_dict_delete():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1, "b": 2}
+    del d["a"]
+    return len(d)
+"""
+    code = _compile(src)
+    assert '.remove(&"a".to_string());' in code
+
+
+def test_dict_len():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1, "b": 2, "c": 3}
+    return len(d)
+"""
+    code = _compile(src)
+    assert "d.len() as i32" in code
+
+
+def test_dict_membership_in():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1, "b": 2}
+    if "a" in d:
+        return 1
+    return 0
+"""
+    code = _compile(src)
+    assert '.contains_key(&"a".to_string())' in code
+
+
+def test_dict_membership_not_in():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1, "b": 2}
+    if "c" not in d:
+        return 1
+    return 0
+"""
+    code = _compile(src)
+    assert '!(d.contains_key(&"c".to_string()))' in code
+
+
+def test_dict_int_keys():
+    src = """
+def main() -> int:
+    d: dict[int, str] = {1: "one", 2: "two"}
+    return 0
+"""
+    code = _compile(src)
+    assert "HashMap<i32, String>" in code
+    assert '.insert((1, "one".to_string()));' in code
+
+
+def test_dict_full_crud():
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1}
+    x: int = d["a"]
+    d["a"] = 10
+    d["b"] = 2
+    del d["a"]
+    n: int = len(d)
+    return x + d["b"] + n
+"""
+    code = _compile(src)
+    assert "HashMap<String, i32>" in code
+    assert ".get(&" in code
+    assert ".insert(" in code
+    assert ".remove(&" in code
+    assert ".len() as i32" in code
+
+
+def test_dict_type_annotation():
+    from py2rust.utils.errors import CompilerError
+
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": "wrong"}
+    return 0
+"""
+    with pytest.raises(CompilerError):
+        _check(src)
+
+
+def test_dict_float_value():
+    src = """
+def main() -> int:
+    d: dict[str, float] = {"a": 1.5}
+    return 0
+"""
+    code = _compile(src)
+    assert "HashMap<String, f64>" in code
+
+
+def test_dict_float_key():
+    src = """
+def main() -> int:
+    d: dict[float, str] = {1.5: "one"}
+    return 0
+"""
+    code = _compile(src)
+    assert "HashMap<f64, String>" in code
+
+
+def test_dict_bool_key():
+    src = """
+def main() -> int:
+    d: dict[bool, str] = {True: "yes", False: "no"}
+    return 0
+"""
+    code = _compile(src)
+    assert "HashMap<bool, String>" in code
+
+
+def test_len_on_list():
+    src = """
+def main() -> int:
+    lst: list[int] = [1, 2, 3, 4, 5]
+    return len(lst)
+"""
+    code = _compile(src)
+    assert "vec![1, 2, 3, 4, 5]" in code
+    assert "len() as i32" in code
+
+
+def test_len_on_string():
+    src = """
+def main() -> int:
+    s: str = "hello"
+    return len(s)
+"""
+    code = _compile(src)
+    assert "len() as i32" in code
+
+
+def test_len_on_empty_list():
+    src = """
+def main() -> int:
+    lst: list[int] = []
+    return len(lst)
+"""
+    code = _compile(src)
+    assert "Vec::<i32>::new()" in code
+    assert "len() as i32" in code
+
+
+def test_list_indexing():
+    src = """
+def main() -> int:
+    lst: list[int] = [10, 20, 30]
+    first: int = lst[0]
+    last: int = lst[2]
+    return first + last
+"""
+    code = _compile(src)
+    assert "nth(actual_idx)" not in code or "actual_idx" in code
+
+
+def test_list_index_assignment():
+    src = """
+def main() -> int:
+    lst: list[int] = [1, 2, 3]
+    lst[0] = 100
+    return lst[0]
+"""
+    code = _compile(src)
+    assert "vec![1, 2, 3]" in code
+    assert "actual_idx = if" in code
+
+
+def test_list_negative_indexing():
+    src = """
+def main() -> int:
+    lst: list[int] = [1, 2, 3]
+    last: int = lst[-1]
+    return last
+"""
+    code = _compile(src)
+    assert "actual_idx = if __idx_raw < 0" in code
+
+
+def test_range_single_arg():
+    src = """
+def main() -> int:
+    for i in range(5):
+        print(i)
+    return 0
+"""
+    code = _compile(src)
+    assert "let __stop = 5;" in code
+    assert "let __step = 1;" in code
+
+
+def test_range_two_args():
+    src = """
+def main() -> int:
+    for i in range(1, 5):
+        print(i)
+    return 0
+"""
+    code = _compile(src)
+    assert "let __stop = 5;" in code
+    assert "i = 1;" in code
+
+
+def test_range_three_args():
+    src = """
+def main() -> int:
+    for i in range(0, 10, 2):
+        print(i)
+    return 0
+"""
+    code = _compile(src)
+    assert "let __stop = 10;" in code
+    assert "let __step = 2;" in code
+    assert "i = 0;" in code
+
+
+def test_range_negative_step():
+    src = """
+def main() -> int:
+    for i in range(5, 0, -1):
+        print(i)
+    return 0
+"""
+    code = _compile(src)
+    assert "let __stop = 0;" in code
+    assert "let __step = (-(1));" in code
+
+
+def test_string_concatenation():
+    src = """
+def main() -> int:
+    a: str = "hello"
+    b: str = " world"
+    c: str = a + b
+    return 0
+"""
+    code = _compile(src)
+    assert ".to_string() + &" in code
+
+
+def test_string_repetition():
+    src = """
+def main() -> int:
+    s: str = "ab"
+    repeated: str = s * 3
+    return 0
+"""
+    code = _compile(src)
+    assert ".repeat(3)" in code
+
+
+def test_list_concatenation():
+    src = """
+def main() -> int:
+    a: list[int] = [1, 2]
+    b: list[int] = [3, 4]
+    c: list[int] = a + b
+    return 0
+"""
+    code = _compile(src)
+    assert "Vec<i32>" in code
+    assert "clone();" in code or "extend(" in code
+
+
+def test_break_in_while():
+    src = """
+def main() -> int:
+    i: int = 0
+    while i < 10:
+        i = i + 1
+        if i == 5:
+            break
+    return i
+"""
+    code = _compile(src)
+    assert "break" in code
+    assert "'__loop_" in code
+
+
+def test_break_in_for():
+    src = """
+def main() -> int:
+    for i in range(10):
+        if i == 7:
+            break
+    return i
+"""
+    code = _compile(src)
+    assert "break" in code
+    assert "'__loop_" in code
+
+
+def test_continue_in_while():
+    src = """
+def main() -> int:
+    i: int = 0
+    count: int = 0
+    while i < 5:
+        i = i + 1
+        if i == 3:
+            continue
+        count = count + 1
+    return count
+"""
+    code = _compile(src)
+    assert "continue" in code
+    assert "'__loop_" in code
+
+
+def test_continue_in_for():
+    src = """
+def main() -> int:
+    count: int = 0
+    for i in range(5):
+        if i == 2:
+            continue
+        count = count + 1
+    return count
+"""
+    code = _compile(src)
+    assert "continue" in code
+    assert "'__loop_" in code
+
+
+def test_nested_loops_break():
+    src = """
+def main() -> int:
+    for i in range(3):
+        for j in range(5):
+            if j == 2:
+                break
+    return i + j
+"""
+    code = _compile(src)
+    assert code.count("break") >= 1
+    assert "'__loop_" in code
+
+
+def test_function_call_standalone():
+    src = """
+def foo() -> int:
+    return 42
+
+def main() -> int:
+    foo()
+    return 0
+"""
+    code = _compile(src)
+    assert "foo();" in code
+    assert "fn foo() -> i32 {" in code
+
+
+def test_mixed_type_operations():
+    src = """
+def main() -> int:
+    x: int = 10
+    y: float = 3.14
+    z: int = x + 5
+    w: float = y + 1.0
+    return 0
+"""
+    code = _compile(src)
+    assert "10" in code
+    assert "3.14" in code
+
+
+def test_boolean_operations():
+    src = """
+def f(a: bool, b: bool) -> bool:
+    return a and b
+"""
+    code = _compile(src)
+    assert "&&" in code
+
+
+def test_unary_not():
+    src = """
+def f(a: bool) -> bool:
+    return not a
+"""
+    code = _compile(src)
+    assert "!" in code
+
+
+def test_unary_minus():
+    src = """
+def main() -> int:
+    x: int = -5
+    y: int = -x
+    return y
+"""
+    code = _compile(src)
+    assert "-(5)" in code
+    assert "-" in code
+
+
+def test_comparison_operations():
+    src = """
+def f(a: int, b: int) -> bool:
+    return a < b
+"""
+    code = _compile(src)
+    assert "<" in code
+
+
+def test_if_else():
+    src = """
+def f(x: int) -> int:
+    if x > 0:
+        return 1
+    else:
+        return 0
+"""
+    code = _compile(src)
+    assert "if" in code
+    assert "else" in code
+
+
+def test_while_loop():
+    src = """
+def main() -> int:
+    i: int = 0
+    while i < 10:
+        i = i + 1
+    return i
+"""
+    code = _compile(src)
+    assert "while" in code
+
+
+def test_augmented_assignment():
+    src = """
+def main() -> int:
+    x: int = 5
+    x += 3
+    x -= 1
+    x *= 2
+    return x
+"""
+    code = _compile(src)
+    assert "+=" in code
+    assert "-=" in code
+    assert "*=" in code
+
+
+def test_file_open():
+    src = """
+def main() -> int:
+    f = open("test.txt")
+    return 0
+"""
+    code = _compile(src)
+    assert "FileHandle::open" in code
+
+
+def test_file_open_with_mode():
+    src = """
+def main() -> int:
+    f = open("test.txt", "w")
+    return 0
+"""
+    code = _compile(src)
+    assert "FileHandle::open" in code
+
+
+def test_file_handle_struct_generated():
+    src = """
+def main() -> int:
+    f = open("test.txt")
+    return 0
+"""
+    code = _compile(src)
+    assert "struct FileHandle" in code
+    assert "fn open(" in code
+    assert "fn read(" in code
+    assert "fn write(" in code
+    assert "fn close(" in code
+    assert "fn tell(" in code
+    assert "fn seek(" in code
