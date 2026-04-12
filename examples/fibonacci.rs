@@ -2,9 +2,9 @@ fn fib(n: i32) -> i32 {
     if n <= 1 {
         return n;
     }
-    let a: i32 = 0;
-    let b: i32 = 1;
-    let i: i32 = 2;
+    let mut a: i32 = 0;
+    let mut b: i32 = 1;
+    let mut i: i32 = 2;
     while i <= n {
         let temp: i32 = a + b;
         a = b;
@@ -14,8 +14,8 @@ fn fib(n: i32) -> i32 {
     return b;
 }
 
-fn main() -> i32 {
+fn main() {
     let result: i32 = fib(10);
     println!("{}", result);
-    return 0;
+    return;
 }

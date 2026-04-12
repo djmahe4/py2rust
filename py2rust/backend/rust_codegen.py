@@ -17,10 +17,34 @@ def _rust_type(t) -> str:
     return "i32"
 
 
+def _collect_mutated_vars(stmts) -> set:
+    """Recursively collect all variable names that are reassigned (not just declared)."""
+    mutated: set = set()
+    for stmt in stmts:
+        sname = type(stmt).__name__
+        if sname == 'IRAssign':
+            mutated.add(stmt.target)
+        elif sname == 'IRAugAssign':
+            mutated.add(stmt.target)
+        elif sname == 'IRIf':
+            mutated |= _collect_mutated_vars(stmt.then_body)
+            for _, elif_body in stmt.elif_clauses:
+                mutated |= _collect_mutated_vars(elif_body)
+            if stmt.else_body:
+                mutated |= _collect_mutated_vars(stmt.else_body)
+        elif sname == 'IRWhile':
+            mutated |= _collect_mutated_vars(stmt.body)
+        elif sname == 'IRForRange':
+            mutated |= _collect_mutated_vars(stmt.body)
+    return mutated
+
+
 class RustCodegen:
     def __init__(self):
         self._indent = 0
         self._lines: list = []
+        self._mutated_vars: set = set()
+        self._in_main: bool = False
 
     def _emit(self, line: str) -> None:
         self._lines.append("    " * self._indent + line)
@@ -36,9 +60,20 @@ class RustCodegen:
         return "\n".join(self._lines) + "\n"
 
     def _gen_function(self, func: IRFunction) -> None:
+        # Collect all variables that are reassigned in this function body
+        self._mutated_vars = _collect_mutated_vars(func.body)
+        # Also collect for-loop variables that need mut if reassigned inside the loop body
         params = ", ".join(f"{p.name}: {_rust_type(p.type_)}" for p in func.params)
-        ret = _rust_type(func.return_type)
-        self._emit(f"fn {func.name}({params}) -> {ret} {{")
+
+        # Special-case: Rust's `main` must return () or implement Termination.
+        # If user wrote `def main() -> int`, emit `fn main()` with no return type.
+        is_main = func.name == "main"
+        self._in_main = is_main
+        if is_main:
+            self._emit(f"fn {func.name}({params}) {{")
+        else:
+            ret = _rust_type(func.return_type)
+            self._emit(f"fn {func.name}({params}) -> {ret} {{")
         self._indent += 1
         for stmt in func.body:
             self._gen_stmt(stmt)
@@ -50,7 +85,8 @@ class RustCodegen:
 
         if name == 'IRVarDecl':
             val = self._gen_expr(stmt.value, stmt.type_)
-            self._emit(f"let {stmt.name}: {_rust_type(stmt.type_)} = {val};")
+            mut = "mut " if stmt.name in self._mutated_vars else ""
+            self._emit(f"let {mut}{stmt.name}: {_rust_type(stmt.type_)} = {val};")
 
         elif name == 'IRAssign':
             val = self._gen_expr(stmt.value)
@@ -106,7 +142,10 @@ class RustCodegen:
             self._emit("}")
 
         elif name == 'IRReturn':
-            if stmt.value is not None:
+            if self._in_main:
+                # Rust's main() returns (), so drop the return value
+                self._emit("return;")
+            elif stmt.value is not None:
                 val = self._gen_expr(stmt.value)
                 self._emit(f"return {val};")
             else:

@@ -30,10 +30,13 @@ def main() -> int:
 """
     code = _compile(src)
     assert "fn add(x: i32, y: i32) -> i32 {" in code
-    assert "fn main() -> i32 {" in code
+    # Rust's main() must return () - no return type annotation
+    assert "fn main() {" in code
+    assert "fn main() -> i32 {" not in code
     assert "let result: i32 = add(3, 4);" in code
     assert 'println!("{}", result);' in code
-    assert "return 0;" in code
+    # return 0 is dropped (main returns () in Rust)
+    assert "return;" in code
 
 
 def test_codegen_float_division():
