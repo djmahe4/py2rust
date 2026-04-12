@@ -1,7 +1,11 @@
 from __future__ import annotations
 from typing import Optional
 from ..frontend.ast_nodes import (
-    IntType, FloatType, BoolType, StrType, ListType,
+    IntType,
+    FloatType,
+    BoolType,
+    StrType,
+    ListType,
 )
 from .symbol_table import SymbolTable
 
@@ -10,10 +14,10 @@ class TypeInferencer:
     def __init__(self, symbol_table: SymbolTable):
         self.st = symbol_table
         self._literal_map = {
-            'IntLiteral': IntType,
-            'FloatLiteral': FloatType,
-            'BoolLiteral': BoolType,
-            'StrLiteral': StrType,
+            "IntLiteral": IntType,
+            "FloatLiteral": FloatType,
+            "BoolLiteral": BoolType,
+            "StrLiteral": StrType,
         }
 
     def infer(self, expr):
@@ -21,14 +25,22 @@ class TypeInferencer:
         if node_name in self._literal_map:
             return self._literal_map[node_name]()
         match node_name:
-            case 'Name': return self.st.lookup(expr.name)
-            case 'BinOp': return self._infer_binop(expr)
-            case 'UnaryOp': return self._infer_unaryop(expr)
-            case 'Comparison': return BoolType()
-            case 'BoolOp': return BoolType()
-            case 'ListLiteral': return self._infer_list(expr)
-            case 'Subscript': return self._infer_subscript(expr)
-            case 'FunctionCall': return self._infer_call(expr)
+            case "Name":
+                return self.st.lookup(expr.name)
+            case "BinOp":
+                return self._infer_binop(expr)
+            case "UnaryOp":
+                return self._infer_unaryop(expr)
+            case "Comparison":
+                return BoolType()
+            case "BoolOp":
+                return BoolType()
+            case "ListLiteral":
+                return self._infer_list(expr)
+            case "Subscript":
+                return self._infer_subscript(expr)
+            case "FunctionCall":
+                return self._infer_call(expr)
         return None
 
     def _infer_binop(self, expr):
@@ -36,14 +48,16 @@ class TypeInferencer:
         rt = self.infer(expr.right)
         if lt is None or rt is None:
             return None
-        if expr.op == '/':
+        if expr.op == "/":
             return FloatType()
         if isinstance(lt, FloatType) or isinstance(rt, FloatType):
             return FloatType()
+        if isinstance(lt, StrType) and isinstance(rt, StrType) and expr.op == "+":
+            return StrType()
         return IntType()
 
     def _infer_unaryop(self, expr):
-        if expr.op == 'not':
+        if expr.op == "not":
             return BoolType()
         return self.infer(expr.operand)
 

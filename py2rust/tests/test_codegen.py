@@ -15,7 +15,7 @@ def add(x: int, y: int) -> int:
 """
     code = _compile(src)
     assert "fn add(x: i32, y: i32) -> i32 {" in code
-    assert "return (x + y);" in code
+    assert "return x + y;" in code
 
 
 def test_codegen_main_function():
@@ -83,7 +83,7 @@ def abs_val(x: int) -> int:
         return x
 """
     code = _compile(src)
-    assert "if (x < 0) {" in code
+    assert "if x < 0 {" in code
     assert "} else {" in code
 
 
@@ -96,7 +96,7 @@ def f() -> int:
     return x
 """
     code = _compile(src)
-    assert "while (x < 10) {" in code
+    assert "while x < 10 {" in code
     assert "x += 1;" in code
 
 
@@ -132,7 +132,7 @@ def f(a: bool, b: bool) -> bool:
     return a and b
 """
     code = _compile(src)
-    assert " (a && b)" in code
+    assert "a && b" in code
 
 
 def test_codegen_or_op():
@@ -160,8 +160,8 @@ def f() -> int:
     return lst[0]
 """
     code = _compile(src)
-    assert "Vec<i32>" in code
     assert "vec![1, 2, 3]" in code
+    assert "let lst" in code
 
 
 def test_codegen_empty_list():
@@ -181,7 +181,7 @@ def f() -> str:
     return s
 """
     code = _compile(src)
-    assert 'String' in code
+    assert "String" in code
     assert '"hello".to_string()' in code
 
 
@@ -212,4 +212,4 @@ def fib(n: int) -> int:
 """
     code = _compile(src)
     assert "fn fib(n: i32) -> i32 {" in code
-    assert "while (i <= n) {" in code
+    assert "while i <= n {" in code

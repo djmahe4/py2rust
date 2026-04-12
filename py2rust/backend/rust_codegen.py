@@ -1,30 +1,94 @@
 from __future__ import annotations
 from ..ir.ir_nodes import (
-    IRModule, IRFunction, IRParam,
-    IRIntType, IRFloatType, IRBoolType, IRStrType, IRListType,
-    IRIntLit, IRFloatLit, IRBoolLit, IRStrLit, IRName, IRBinOp, IRUnaryOpExpr,
-    IRCompare, IRBoolOp, IRListLit, IRSubscript, IRFunctionCall,
-    IRVarDecl, IRAssign, IRAugAssign, IRIf, IRWhile, IRForRange, IRReturn, IRPrint,
+    IRModule,
+    IRFunction,
+    IRParam,
+    IRIntType,
+    IRFloatType,
+    IRBoolType,
+    IRStrType,
+    IRListType,
+    IRIntLit,
+    IRFloatLit,
+    IRBoolLit,
+    IRStrLit,
+    IRName,
+    IRBinOp,
+    IRUnaryOpExpr,
+    IRCompare,
+    IRBoolOp,
+    IRListLit,
+    IRSubscript,
+    IRFunctionCall,
+    IRVarDecl,
+    IRAssign,
+    IRAugAssign,
+    IRIf,
+    IRWhile,
+    IRForRange,
+    IRReturn,
+    IRPrint,
 )
 
 
 def _rust_type(t) -> str:
-    if isinstance(t, IRIntType): return "i32"
-    if isinstance(t, IRFloatType): return "f64"
-    if isinstance(t, IRBoolType): return "bool"
-    if isinstance(t, IRStrType): return "String"
-    if isinstance(t, IRListType): return f"Vec<{_rust_type(t.element_type)}>"
+    if isinstance(t, IRIntType):
+        return "i32"
+    if isinstance(t, IRFloatType):
+        return "f64"
+    if isinstance(t, IRBoolType):
+        return "bool"
+    if isinstance(t, IRStrType):
+        return "String"
+    if isinstance(t, IRListType):
+        return f"Vec<{_rust_type(t.element_type)}>"
     raise ValueError(f"Unknown type {type(t).__name__}")
 
 
 # Rust reserved keywords that must be escaped if used as variable names
-_RUST_KEYWORDS = frozenset({
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn",
-    "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
-    "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
-    "self", "Self", "static", "struct", "super", "trait", "true", "type",
-    "union", "unsafe", "use", "where", "while",
-})
+_RUST_KEYWORDS = frozenset(
+    {
+        "as",
+        "async",
+        "await",
+        "break",
+        "const",
+        "continue",
+        "crate",
+        "dyn",
+        "else",
+        "enum",
+        "extern",
+        "false",
+        "fn",
+        "for",
+        "if",
+        "impl",
+        "in",
+        "let",
+        "loop",
+        "match",
+        "mod",
+        "move",
+        "mut",
+        "pub",
+        "ref",
+        "return",
+        "self",
+        "Self",
+        "static",
+        "struct",
+        "super",
+        "trait",
+        "true",
+        "type",
+        "union",
+        "unsafe",
+        "use",
+        "where",
+        "while",
+    }
+)
 
 
 def _mangle(name: str) -> str:
@@ -33,7 +97,7 @@ def _mangle(name: str) -> str:
 
 
 def _collect_mutated_vars(stmts) -> set:
-    """Recursively collect all variable names that are reassigned (not just declared)."""
+    """Recursively collect all variable names that are reassigned anywhere in the function."""
     mutated: set = set()
     for stmt in stmts:
         if isinstance(stmt, IRAssign):
@@ -49,13 +113,13 @@ def _collect_mutated_vars(stmts) -> set:
         elif isinstance(stmt, IRWhile):
             mutated |= _collect_mutated_vars(stmt.body)
         elif isinstance(stmt, IRForRange):
-            mutated.add(stmt.target) # Loops always assign
+            mutated.add(stmt.target)  # Loops always assign
             mutated |= _collect_mutated_vars(stmt.body)
     return mutated
 
 
 def _collect_decls(stmts) -> dict[str, object]:
-    """Collect all variables that are declared in the function body."""
+    """Collect variable declarations that need function-level pre-declaration."""
     decls: dict[str, object] = {}
     for stmt in stmts:
         if isinstance(stmt, IRVarDecl):
@@ -70,8 +134,30 @@ def _collect_decls(stmts) -> dict[str, object]:
             decls.update(_collect_decls(stmt.body))
         elif isinstance(stmt, IRForRange):
             decls[stmt.target] = IRIntType()
-            decls.update(_collect_decls(stmt.body))
     return decls
+
+
+def _vars_declared_in_loop(stmts) -> set:
+    """Collect variable names that are declared inside while loops (not for loops).
+
+    For loop targets need to be accessible after the loop (Python semantics),
+    so they're handled separately in _collect_decls.
+    """
+    loop_vars: set = set()
+    for stmt in stmts:
+        if isinstance(stmt, IRVarDecl):
+            loop_vars.add(stmt.name)
+        elif isinstance(stmt, IRForRange):
+            loop_vars |= _vars_declared_in_loop(stmt.body)
+        elif isinstance(stmt, IRWhile):
+            loop_vars |= _vars_declared_in_loop(stmt.body)
+        elif isinstance(stmt, IRIf):
+            loop_vars |= _vars_declared_in_loop(stmt.then_body)
+            for _, elif_body in stmt.elif_clauses:
+                loop_vars |= _vars_declared_in_loop(elif_body)
+            if stmt.else_body:
+                loop_vars |= _vars_declared_in_loop(stmt.else_body)
+    return loop_vars
 
 
 class RustCodegen:
@@ -80,12 +166,29 @@ class RustCodegen:
         self._lines: list = []
         self._mutated_vars: set = set()
         self._in_main: bool = False
+        self._at_top_level: bool = True
+        self._loop_vars: set = set()
 
     def _emit(self, line: str) -> None:
         self._lines.append("    " * self._indent + line)
 
     def _emit_blank(self) -> None:
         self._lines.append("")
+
+    def _strip_parens(self, s: str) -> str:
+        """Strip outer parentheses from an expression string."""
+        s = s.strip()
+        if s.startswith("(") and s.endswith(")"):
+            count = 1
+            for i in range(1, len(s) - 1):
+                if s[i] == "(":
+                    count += 1
+                elif s[i] == ")":
+                    count -= 1
+                    if count == 0:
+                        return s
+            return s[1:-1]
+        return s
 
     def generate(self, module: IRModule) -> str:
         for i, func in enumerate(module.functions):
@@ -95,12 +198,9 @@ class RustCodegen:
         return "\n".join(self._lines) + "\n"
 
     def _gen_function(self, func: IRFunction) -> None:
-        # Collect all variables that are reassigned or used as loop targets
         self._mutated_vars = _collect_mutated_vars(func.body)
-        
-        # Emulate Python function scoping by pre-declaring all variables at the top
         decls = _collect_decls(func.body)
-        
+
         params = ", ".join(f"{p.name}: {_rust_type(p.type_)}" for p in func.params)
 
         is_main = func.name == "main"
@@ -110,73 +210,104 @@ class RustCodegen:
         else:
             ret = _rust_type(func.return_type)
             self._emit(f"fn {func.name}({params}) -> {ret} {{")
-        
+
         self._indent += 1
-        
-        # Emit pre-declarations — also track types for casting in assignment
-        self._decl_types = dict(decls)   # name -> IR type
+
+        self._decl_types = dict(decls)
+        self._loop_vars = _vars_declared_in_loop(func.body)
+
         for name, type_ in decls.items():
             if name == "_":
                 continue
+            if name in self._loop_vars:
+                continue
             mut = "mut " if name in self._mutated_vars else ""
-            self._emit(f"let {mut}{_mangle(name)}: {_rust_type(type_)};")
-        
-        if decls:
+            default = self._default_value(type_)
+            self._emit(f"let {mut}{_mangle(name)}: {_rust_type(type_)} = {default};")
+
+        if any(name not in self._loop_vars for name in decls):
             self._emit_blank()
 
+        self._at_top_level = True
         for stmt in func.body:
             self._gen_stmt(stmt)
-            
+
         self._indent -= 1
         self._emit("}")
 
+    def _default_value(self, ir_type) -> str:
+        if isinstance(ir_type, IRIntType):
+            return "0"
+        if isinstance(ir_type, IRFloatType):
+            return "0.0"
+        if isinstance(ir_type, IRBoolType):
+            return "false"
+        if isinstance(ir_type, IRStrType):
+            return "String::new()"
+        if isinstance(ir_type, IRListType):
+            return f"Vec::<{_rust_type(ir_type.element_type)}>::new()"
+        return "0"
+
     def _gen_stmt(self, stmt) -> None:
         if isinstance(stmt, IRVarDecl):
-            val = self._gen_expr(stmt.value, stmt.type_)
-            # Already declared at top, so just assign
-            self._emit(f"{_mangle(stmt.name)} = {val};")
+            val = self._strip_parens(self._gen_expr(stmt.value, stmt.type_))
+            if stmt.name in self._decl_types and stmt.name not in self._loop_vars:
+                self._emit(f"{_mangle(stmt.name)} = {val};")
+            elif stmt.name in self._mutated_vars:
+                self._emit(f"let mut {_mangle(stmt.name)} = {val};")
+            else:
+                self._emit(f"let {_mangle(stmt.name)} = {val};")
 
         elif isinstance(stmt, IRAssign):
-            # Look up target's type via the declaration tracker for int→float casting
             target_type = self._decl_types.get(stmt.target)
             if isinstance(target_type, IRFloatType):
-                val = self._gen_expr_as_float(stmt.value)
+                val = self._strip_parens(self._gen_expr_as_float(stmt.value))
             else:
-                val = self._gen_expr(stmt.value)
+                val = self._strip_parens(self._gen_expr(stmt.value))
             self._emit(f"{_mangle(stmt.target)} = {val};")
 
         elif isinstance(stmt, IRAugAssign):
-            val = self._gen_expr(stmt.value)
+            val = self._strip_parens(self._gen_expr(stmt.value))
             self._emit(f"{_mangle(stmt.target)} {stmt.op} {val};")
 
         elif isinstance(stmt, IRIf):
-            cond = self._gen_expr(stmt.condition)
+            cond = self._strip_parens(self._gen_expr(stmt.condition))
             self._emit(f"if {cond} {{")
             self._indent += 1
+            old_top_level = self._at_top_level
+            self._at_top_level = False
             for s in stmt.then_body:
                 self._gen_stmt(s)
+            self._at_top_level = old_top_level
             self._indent -= 1
-            for (elif_cond, elif_body) in stmt.elif_clauses:
-                ec = self._gen_expr(elif_cond)
+            for elif_cond, elif_body in stmt.elif_clauses:
+                ec = self._strip_parens(self._gen_expr(elif_cond))
                 self._emit(f"}} else if {ec} {{")
                 self._indent += 1
+                self._at_top_level = False
                 for s in elif_body:
                     self._gen_stmt(s)
+                self._at_top_level = old_top_level
                 self._indent -= 1
             if stmt.else_body is not None:
                 self._emit("} else {")
                 self._indent += 1
+                self._at_top_level = False
                 for s in stmt.else_body:
                     self._gen_stmt(s)
+                self._at_top_level = old_top_level
                 self._indent -= 1
             self._emit("}")
 
         elif isinstance(stmt, IRWhile):
-            cond = self._gen_expr(stmt.condition)
+            cond = self._strip_parens(self._gen_expr(stmt.condition))
             self._emit(f"while {cond} {{")
             self._indent += 1
+            old_top_level = self._at_top_level
+            self._at_top_level = False
             for s in stmt.body:
                 self._gen_stmt(s)
+            self._at_top_level = old_top_level
             self._indent -= 1
             self._emit("}")
 
@@ -184,24 +315,27 @@ class RustCodegen:
             start = self._gen_expr(stmt.start)
             stop = self._gen_expr(stmt.stop)
             step = self._gen_expr(stmt.step) if stmt.step is not None else "1"
-            
-            # Use a block to properly scope loop-control temporaries and prevent shadowing
+
             self._emit("{")
             self._indent += 1
-            
-            # Evaluate bounds exactly once to match Python range() semantics
+
             self._emit(f"let __stop = {stop};")
             self._emit(f"let __step = {step};")
             self._emit(f"{stmt.target} = {start};")
-            
-            self._emit(f"while if (__step) > 0 {{ {stmt.target} < (__stop) }} else {{ {stmt.target} > (__stop) }} {{")
+
+            self._emit(
+                f"while if (__step) > 0 {{ {stmt.target} < (__stop) }} else {{ {stmt.target} > (__stop) }} {{"
+            )
             self._indent += 1
+            old_top_level = self._at_top_level
+            self._at_top_level = False
             for s in stmt.body:
                 self._gen_stmt(s)
+            self._at_top_level = old_top_level
             self._emit(f"{stmt.target} += __step;")
             self._indent -= 1
             self._emit("}")
-            
+
             self._indent -= 1
             self._emit("}")
 
@@ -209,7 +343,10 @@ class RustCodegen:
             if self._in_main:
                 self._emit("return;")
             elif stmt.value is not None:
-                val = self._gen_expr(stmt.value)
+                if isinstance(stmt.result_type, IRFloatType):
+                    val = self._strip_parens(self._gen_expr_as_float(stmt.value))
+                else:
+                    val = self._strip_parens(self._gen_expr(stmt.value))
                 self._emit(f"return {val};")
             else:
                 self._emit("return;")
@@ -228,13 +365,17 @@ class RustCodegen:
         elif isinstance(expr, IRFloatLit):
             v = expr.value
             s = repr(v)
-            if '.' not in s and 'e' not in s.lower():
+            if "." not in s and "e" not in s.lower():
                 s += ".0"
             return s
         elif isinstance(expr, IRBoolLit):
             return "true" if expr.value else "false"
         elif isinstance(expr, IRStrLit):
-            escaped = expr.value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+            escaped = (
+                expr.value.replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("\n", "\\n")
+            )
             return f'"{escaped}".to_string()'
         elif isinstance(expr, IRName):
             return expr.name
@@ -242,9 +383,9 @@ class RustCodegen:
             return f"({self._gen_binop(expr)})"
         elif isinstance(expr, IRUnaryOpExpr):
             operand = self._gen_expr(expr.operand)
-            if expr.op == 'not':
+            if expr.op == "not":
                 return f"(!({operand}))"
-            if expr.op == '-':
+            if expr.op == "-":
                 return f"(-({operand}))"
             return operand
         elif isinstance(expr, IRCompare):
@@ -262,20 +403,22 @@ class RustCodegen:
         elif isinstance(expr, IRSubscript):
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
-            
+
             # Robust Python indexing: bind collection to a temp reference to avoid redundant evaluations
             # and then calculate actual usize index relative to length if negative.
-            
+
             if isinstance(expr.value_type, IRStrType):
                 len_expr = "__coll.chars().count() as i32"
                 inner_expr = f"__coll.chars().nth(actual_idx).unwrap().to_string()"
             else:
                 len_expr = "__coll.len() as i32"
                 inner_expr = f"__coll[actual_idx]"
-            
-            if isinstance(expr.result_type, (IRStrType, IRListType)) and not isinstance(expr.value_type, IRStrType):
+
+            if isinstance(expr.result_type, (IRStrType, IRListType)) and not isinstance(
+                expr.value_type, IRStrType
+            ):
                 inner_expr = f"({inner_expr}).clone()"
-            
+
             # Use an immediately-invoked block to isolate the temporary collection reference
             return (
                 f"({{ let __coll = &({val}); "
@@ -289,23 +432,26 @@ class RustCodegen:
         return f"/* unknown expr {type(expr).__name__} */"
 
     def _gen_binop(self, expr) -> str:
-        if expr.op == '/':
+        if expr.op == "/":
             left = self._gen_expr_as_float(expr.left)
             right = self._gen_expr_as_float(expr.right)
             return f"{left} / {right}"
-        if expr.op == '//':
+        if expr.op == "//":
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
             return f"({left} as f64 / {right} as f64).floor() as i32"
-            
+        if expr.op == "+" and isinstance(expr.result_type, IRStrType):
+            left = self._gen_expr(expr.left)
+            right = self._gen_expr(expr.right)
+            return f"{left}.to_string() + &{right}"
+
         if isinstance(expr.result_type, IRFloatType):
-            # Enforce explicit casting for arithmetic involving mixed types
             left = self._gen_expr_as_float(expr.left)
             right = self._gen_expr_as_float(expr.right)
         else:
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
-            
+
         return f"{left} {expr.op} {right}"
 
     def _gen_expr_as_float(self, expr) -> str:

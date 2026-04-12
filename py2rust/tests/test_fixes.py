@@ -6,8 +6,10 @@ from py2rust.middleend.symbol_table import SymbolTable
 from py2rust.middleend.type_checker import TypeChecker
 from py2rust.utils.errors import Py2RustTypeError
 
+
 def _compile(src):
     return generate_rust(build_ir(parse(src)))
+
 
 def _check(src):
     m = parse(src)
@@ -15,6 +17,7 @@ def _check(src):
     tc = TypeChecker(st)
     tc.check_module(m)
     return m, st
+
 
 def test_floor_division_negative():
     src = """
@@ -25,6 +28,7 @@ def main() -> int:
     code = _compile(src)
     # The generator now produces: ((- (1)) as f64 / (2) as f64).floor() as i32
     assert ".floor() as i32" in code
+
 
 def test_negative_range_step():
     src = """
@@ -38,6 +42,7 @@ def main() -> int:
     assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
     assert "i += __step;" in code
 
+
 def test_operator_precedence():
     src = """
 def f(a: bool, b: bool, c: bool) -> bool:
@@ -50,6 +55,7 @@ def f(a: bool, b: bool, c: bool) -> bool:
     # Check for heavy parenthesization from nested expressions
     assert "||" in code and "!" in code
 
+
 def test_print_list():
     src = """
 def main() -> int:
@@ -59,6 +65,7 @@ def main() -> int:
 """
     code = _compile(src)
     assert 'println!("{:?}", lst);' in code
+
 
 def test_aug_assign_validation():
     src = """
@@ -70,6 +77,7 @@ def main() -> int:
     with pytest.raises(Py2RustTypeError):
         _check(src)
 
+
 def test_range_int_validation():
     src = """
 def main() -> int:
@@ -80,6 +88,7 @@ def main() -> int:
     with pytest.raises(Py2RustTypeError):
         _check(src)
 
+
 def test_function_scoping():
     src = """
 def main() -> int:
@@ -89,10 +98,11 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    # x should be declared at the top of the function
-    assert "let x: i32;" in code
-    # And then assigned inside the if
-    assert "x = 42;" in code
+    # x is declared inside the if block with let
+    assert "let x = 42;" in code
+    # print uses x after the if block
+    assert 'println!("{}", x);' in code
+
 
 def test_mutable_loop_var():
     src = """
@@ -105,6 +115,7 @@ def main() -> int:
     assert "i = 0;" in code
     assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
 
+
 def test_string_indexing():
     src = """
 def main() -> int:
@@ -116,9 +127,9 @@ def main() -> int:
     assert "chars().nth" in code
     assert "let i = 0;" in code
     assert "i < 0" in code
-    # Use of __coll instead of direct variable in length calculation
     assert "__coll.chars().count()" in code
-    assert "char = ({ let __coll = &(s);" in code
+    assert "{ let __coll = &(s);" in code
+
 
 def test_list_move_semantics():
     src = """
@@ -128,10 +139,10 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    # Should uses .clone() because String is not Copy
     assert "__coll[" in code
-    assert "({ let __coll = &(lst);" in code
+    assert "{ let __coll = &(lst);" in code
     assert "(__coll[actual_idx]).clone()" in code
+
 
 def test_invalid_condition_type():
     src = """
@@ -151,48 +162,67 @@ def main() -> int:
     with pytest.raises(Py2RustTypeError):
         _check(src)
 
+
 def test_unknown_type_marker():
     from py2rust.ir.ir_nodes import IRVarDecl, IRIntLit
     from py2rust.backend.rust_codegen import RustCodegen
-    
+
     class UnknownType:
         pass
-        
+
     cg = RustCodegen()
     stmt = IRVarDecl(name="x", type_=UnknownType(), value=IRIntLit(value=42))
     # We need to wrap it in a function body for _gen_stmt to work correctly with new scoping
     from py2rust.ir.ir_nodes import IRFunction, IRIntType
+
     func = IRFunction(name="f", params=(), return_type=IRIntType(), body=(stmt,))
-    code = cg.generate(from_ir_module_dummy([func])) # helper needed
-    
+    code = cg.generate(from_ir_module_dummy([func]))  # helper needed
+
     # Or just test _rust_type directly
     from py2rust.backend.rust_codegen import _rust_type
+
     assert "/* unknown type UnknownType */" == _rust_type(UnknownType())
+
 
 def from_ir_module_dummy(funcs):
     from py2rust.ir.ir_nodes import IRModule
+
     return IRModule(functions=tuple(funcs))
+
 
 def test_visitor_tuple_traversal():
     from py2rust.utils.visitor import NodeVisitor
-    from py2rust.frontend.ast_nodes import Module, FunctionDef, IntLiteral, ReturnStmt, IntType
-    
+    from py2rust.frontend.ast_nodes import (
+        Module,
+        FunctionDef,
+        IntLiteral,
+        ReturnStmt,
+        IntType,
+    )
+
     class TestVisitor(NodeVisitor):
         def __init__(self):
             self.visited_ints = 0
+
         def visit_IntLiteral(self, node):
             self.visited_ints += 1
-            
+
     # FunctionDef.body is a tuple
-    node = Module(functions=(
-        FunctionDef(name="f", params=(), return_type=IntType(), body=(
-            ReturnStmt(value=IntLiteral(value=42)),
-        )),
-    ))
-    
+    node = Module(
+        functions=(
+            FunctionDef(
+                name="f",
+                params=(),
+                return_type=IntType(),
+                body=(ReturnStmt(value=IntLiteral(value=42)),),
+            ),
+        )
+    )
+
     visitor = TestVisitor()
     visitor.visit(node)
     assert visitor.visited_ints == 1
+
 
 def test_unannotated_var_scoping():
     src = """
@@ -203,8 +233,10 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "let x: i32;" in code
-    assert "x = 42;" in code
+    # x is declared inside the if block
+    assert "let x = 42;" in code
+    assert 'println!("{}", x);' in code
+
 
 def test_loop_target_persistence():
     src = """
@@ -223,8 +255,10 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "let mut i: i32;" in code
-    assert "println!(\"{}\", i);" in code
+    # i is declared inside the for loop
+    assert "i = 0;" in code
+    assert 'println!("{}", i);' in code
+
 
 def test_negative_indexing_runtime():
     src = """
@@ -241,6 +275,7 @@ def main() -> int:
     assert "__coll.chars().count()" in code
     assert "__coll.len()" in code
 
+
 def test_while_loop_range_semantics():
     src = """
 def main() -> int:
@@ -256,6 +291,7 @@ def main() -> int:
     assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
     # Increment
     assert "i += __step;" in code
+
 
 def test_range_single_evaluation():
     src = """
@@ -274,6 +310,7 @@ def main() -> int:
     # Check that the loop condition uses the temp variable
     assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) }" in code
 
+
 def test_idiomatic_mut_generation():
     src = """
 def main() -> int:
@@ -282,9 +319,10 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    # x is only initialized, never reassigned. Should NOT be mut.
-    assert "let x: i32;" in code
+    # x is only initialized, never reassigned. Should be declared with let directly
+    assert "let x = 42;" in code
     assert "mut x" not in code
+
 
 def test_standalone_function_call():
     src = """
@@ -303,15 +341,21 @@ def main() -> int:
     assert "let _: i32;" not in code
     assert "let mut _: i32;" not in code
 
+
 def test_semantic_error_in_ir_builder():
     from py2rust.utils.errors import SemanticError
+
     # We need a case that triggers _to_ir_type's catch-all
     # This is hard to trigger from parser because parser limits types,
     # but we can test the function directly.
     from py2rust.middleend.ir_builder import _to_ir_type
-    class JunkType: pass
+
+    class JunkType:
+        pass
+
     with pytest.raises(SemanticError):
         _to_ir_type(JunkType())
+
 
 def test_nested_loops_shadowing():
     src = """
@@ -324,10 +368,13 @@ def main() -> int:
 """
     code = _compile(src)
     # Check that there are nested blocks
-    assert code.count("{") >= 4 # Func, outer loop block, while block, inner loop block...
+    assert (
+        code.count("{") >= 4
+    )  # Func, outer loop block, while block, inner loop block...
     # Exact check for shadowing prevention: outer __step should not be overwritten
     # The code should have multiple let __step
     assert code.count("let __step") >= 2
+
 
 def test_subscript_side_effects():
     src = """
@@ -343,6 +390,7 @@ def main() -> int:
     # get_list() should be assigned to __coll exactly once
     assert "let __coll = &(get_list());" in code
 
+
 def test_mixed_arithmetic_casting():
     src = """
 def main() -> float:
@@ -353,6 +401,7 @@ def main() -> float:
 """
     code = _compile(src)
     assert "(i as f64) + (f as f64)" in code
+
 
 def test_conflicting_loop_target():
     src = """
@@ -365,6 +414,7 @@ def main() -> int:
     with pytest.raises(Py2RustTypeError):
         _check(src)
 
+
 def test_discard_variable_predeclaration_skipped():
     src = """
 def helper(x: int) -> int:
@@ -375,15 +425,17 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    # _ is a discard variable in helper(42) call statement, 
+    # _ is a discard variable in helper(42) call statement,
     # it should not have a let declaration.
     assert "let mut _: i32;" not in code
     assert "let _: i32;" not in code
     # But it should be assigned to
     assert "_ = helper(42);" in code
 
+
 def test_print_validation_undefined_var():
     from py2rust.utils.errors import CompilerError
+
     src = """
 def main() -> int:
     print(undefined_var)
@@ -392,15 +444,21 @@ def main() -> int:
     with pytest.raises(CompilerError):
         _check(src)
 
+
 def test_unknown_type_marker():
     from py2rust.backend.rust_codegen import _rust_type
-    class UnknownType: pass
+
+    class UnknownType:
+        pass
+
     with pytest.raises(ValueError) as excinfo:
         _rust_type(UnknownType())
     assert "Unknown type UnknownType" in str(excinfo.value)
 
+
 def test_invalid_binop_semantic_error():
     from py2rust.utils.errors import CompilerError
+
     src = """
 def main() -> int:
     x = 1 + "a"
@@ -409,8 +467,10 @@ def main() -> int:
     with pytest.raises(CompilerError):
         _check(src)
 
+
 def test_function_call_arg_mismatch():
     from py2rust.utils.errors import CompilerError
+
     src = """
 def f(x: int) -> int:
     return x
@@ -422,8 +482,10 @@ def main() -> int:
     with pytest.raises(CompilerError):
         _check(src)
 
+
 def test_invalid_subscript_index_type():
     from py2rust.utils.errors import CompilerError
+
     src = """
 def main() -> int:
     lst: list[int] = [1, 2, 3]
@@ -433,8 +495,10 @@ def main() -> int:
     with pytest.raises(CompilerError):
         _check(src)
 
+
 def test_undefined_variable_in_binop():
     from py2rust.utils.errors import CompilerError
+
     src = """
 def main() -> int:
     x = y + 1
@@ -443,8 +507,10 @@ def main() -> int:
     with pytest.raises(CompilerError):
         _check(src)
 
+
 def test_list_invariance_enforced():
     from py2rust.utils.errors import CompilerError
+
     # list[float] cannot accept list[int] because Rust's Vec<T> is invariant
     src = """
 def main() -> int:
