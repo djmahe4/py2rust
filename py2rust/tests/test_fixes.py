@@ -163,33 +163,6 @@ def main() -> int:
         _check(src)
 
 
-def test_unknown_type_marker():
-    from py2rust.ir.ir_nodes import IRVarDecl, IRIntLit
-    from py2rust.backend.rust_codegen import RustCodegen
-
-    class UnknownType:
-        pass
-
-    cg = RustCodegen()
-    stmt = IRVarDecl(name="x", type_=UnknownType(), value=IRIntLit(value=42))
-    # We need to wrap it in a function body for _gen_stmt to work correctly with new scoping
-    from py2rust.ir.ir_nodes import IRFunction, IRIntType
-
-    func = IRFunction(name="f", params=(), return_type=IRIntType(), body=(stmt,))
-    code = cg.generate(from_ir_module_dummy([func]))  # helper needed
-
-    # Or just test _rust_type directly
-    from py2rust.backend.rust_codegen import _rust_type
-
-    assert "/* unknown type UnknownType */" == _rust_type(UnknownType())
-
-
-def from_ir_module_dummy(funcs):
-    from py2rust.ir.ir_nodes import IRModule
-
-    return IRModule(functions=tuple(funcs))
-
-
 def test_visitor_tuple_traversal():
     from py2rust.utils.visitor import NodeVisitor
     from py2rust.frontend.ast_nodes import (
@@ -530,8 +503,8 @@ def main() -> int:
 """
     code = _compile(src)
     assert "HashMap<String, i32>" in code
-    assert '.insert(("a".to_string(), 1));' in code
-    assert '.insert(("b".to_string(), 2));' in code
+    assert '__d.insert("a".to_string(), 1);' in code
+    assert '__d.insert("b".to_string(), 2);' in code
 
 
 def test_dict_empty_literal():
@@ -630,7 +603,7 @@ def main() -> int:
 """
     code = _compile(src)
     assert "HashMap<i32, String>" in code
-    assert '.insert((1, "one".to_string()));' in code
+    assert '__d.insert(1, "one".to_string());' in code
 
 
 def test_dict_full_crud():

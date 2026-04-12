@@ -568,12 +568,12 @@ class RustCodegen:
             val_t = _rust_type(expr.value_type)
             if not expr.pairs:
                 return f"HashMap::<{key_t}, {val_t}>::new()"
-            pairs = []
+            inserts = []
             for k, v in expr.pairs:
                 key_str = self._gen_expr(k)
                 val_str = self._gen_expr(v)
-                pairs.append(f"({key_str}, {val_str})")
-            return f"({{ let mut __d: HashMap<{key_t}, {val_t}> = HashMap::new(); {''.join(f'__d.insert({p}); ' for p in pairs)} __d }})"
+                inserts.append(f"__d.insert({key_str}, {val_str});")
+            return f"({{ let mut __d: HashMap<{key_t}, {val_t}> = HashMap::new(); {' '.join(inserts)} __d }})"
         elif isinstance(expr, IRDictContains):
             key = self._gen_expr(expr.key)
             dict_val = self._gen_expr(expr.dict)
