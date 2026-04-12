@@ -398,3 +398,59 @@ def test_unknown_type_marker():
     with pytest.raises(ValueError) as excinfo:
         _rust_type(UnknownType())
     assert "Unknown type UnknownType" in str(excinfo.value)
+
+def test_invalid_binop_semantic_error():
+    from py2rust.utils.errors import CompilerError
+    src = """
+def main() -> int:
+    x = 1 + "a"
+    return 0
+"""
+    with pytest.raises(CompilerError):
+        _check(src)
+
+def test_function_call_arg_mismatch():
+    from py2rust.utils.errors import CompilerError
+    src = """
+def f(x: int) -> int:
+    return x
+
+def main() -> int:
+    f("a")
+    return 0
+"""
+    with pytest.raises(CompilerError):
+        _check(src)
+
+def test_invalid_subscript_index_type():
+    from py2rust.utils.errors import CompilerError
+    src = """
+def main() -> int:
+    lst: list[int] = [1, 2, 3]
+    print(lst["0"])
+    return 0
+"""
+    with pytest.raises(CompilerError):
+        _check(src)
+
+def test_undefined_variable_in_binop():
+    from py2rust.utils.errors import CompilerError
+    src = """
+def main() -> int:
+    x = y + 1
+    return 0
+"""
+    with pytest.raises(CompilerError):
+        _check(src)
+
+def test_list_invariance_enforced():
+    from py2rust.utils.errors import CompilerError
+    # list[float] cannot accept list[int] because Rust's Vec<T> is invariant
+    src = """
+def main() -> int:
+    li: list[int] = [1, 2]
+    lf: list[float] = li
+    return 0
+"""
+    with pytest.raises(CompilerError):
+        _check(src)

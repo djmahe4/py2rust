@@ -27,8 +27,8 @@ class TypeChecker:
         self.source_lines = source_lines or []
         self._current_return_type = None
 
-    def _err(self, msg: str, line: int = 0, col: int = 0, suggestion: str = None) -> Py2RustTypeError:
-        return Py2RustTypeError(
+    def _err(self, msg: str, line: int = 0, col: int = 0, suggestion: str = None, cls=Py2RustTypeError) -> Py2RustTypeError:
+        return cls(
             message=msg,
             filename=self.filename,
             line=line,
@@ -67,12 +67,77 @@ class TypeChecker:
         self.st.exit_scope()
         self._current_return_type = None
 
+
+    def check_expr(self, expr) -> None:
+        from ..frontend.ast_nodes import (
+            IntLiteral, FloatLiteral, BoolLiteral, StrLiteral,
+            Name, BinOp, UnaryOp, Comparison, BoolOp, ListLiteral, Subscript, FunctionCall
+        )
+        if isinstance(expr, Name):
+            if self.st.lookup(expr.name) is None:
+                raise self._err(f"Undefined variable: '{expr.name}'", expr.line, expr.col, cls=SemanticError)
+        elif isinstance(expr, BinOp):
+            self.check_expr(expr.left)
+            self.check_expr(expr.right)
+            lt = self.inferencer.infer(expr.left)
+            rt = self.inferencer.infer(expr.right)
+            if lt is None or rt is None:
+                raise self._err("Cannot infer operand types for binary operation", expr.line, expr.col)
+            # Standard numeric check
+            if not (isinstance(lt, (IntType, FloatType)) and isinstance(rt, (IntType, FloatType))):
+                raise self._err(f"Invalid operand types for '{expr.op}': {lt} and {rt}", expr.line, expr.col)
+        elif isinstance(expr, UnaryOp):
+            self.check_expr(expr.operand)
+            t = self.inferencer.infer(expr.operand)
+            if expr.op == 'not':
+                # Optional: could enforce bool, but Python is loose. 
+                # Let's just ensure it's inferrable.
+                if t is None:
+                    raise self._err("Cannot infer operand type for 'not'", expr.line, expr.col)
+            else: # +, -
+                if not isinstance(t, (IntType, FloatType)):
+                    raise self._err(f"Invalid operand type for '{expr.op}': {t}", expr.line, expr.col)
+        elif isinstance(expr, Comparison):
+            self.check_expr(expr.left)
+            self.check_expr(expr.right)
+        elif isinstance(expr, BoolOp):
+            for val in expr.values:
+                self.check_expr(val)
+        elif isinstance(expr, ListLiteral):
+            for elem in expr.elements:
+                self.check_expr(elem)
+        elif isinstance(expr, Subscript):
+            self.check_expr(expr.value)
+            self.check_expr(expr.index)
+            it = self.inferencer.infer(expr.index)
+            if not isinstance(it, IntType):
+                raise self._err(f"Subscript index must be int, got {it}", expr.line, expr.col)
+        elif isinstance(expr, FunctionCall):
+            sig = self.st.lookup_function(expr.name)
+            if sig is None:
+                raise self._err(f"Undefined function: '{expr.name}'", expr.line, expr.col, cls=SemanticError)
+            params, _ = sig
+            if len(expr.args) != len(params):
+                raise self._err(
+                    f"Function '{expr.name}' expected {len(params)} arguments, got {len(expr.args)}",
+                    expr.line, expr.col
+                )
+            for i, arg in enumerate(expr.args):
+                self.check_expr(arg)
+                arg_t = self.inferencer.infer(arg)
+                if not _types_compatible(params[i], arg_t):
+                    raise self._err(
+                        f"Argument type mismatch for '{expr.name}': expected {params[i]}, got {arg_t}",
+                        arg.line, arg.col
+                    )
+
     def check_stmt(self, stmt) -> None:
         from ..frontend.ast_nodes import (
             VarDecl, Assign, AugAssign, IfStmt, WhileStmt, ForRangeStmt, ReturnStmt, PrintStmt,
             FunctionCall, Name
         )
         if isinstance(stmt, VarDecl):
+            self.check_expr(stmt.value)
             inferred = self.inferencer.infer(stmt.value)
             ann = stmt.type_annotation
             if ann is not None and inferred is not None:
@@ -87,6 +152,7 @@ class TypeChecker:
             self.st.define(stmt.name, actual_type)
 
         elif isinstance(stmt, Assign):
+            self.check_expr(stmt.value)
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
             if existing is None:
@@ -101,9 +167,10 @@ class TypeChecker:
                     )
 
         elif isinstance(stmt, AugAssign):
+            self.check_expr(stmt.value)
             existing = self.st.lookup(stmt.target)
             if existing is None:
-                raise self._sem_err(f"Undefined variable '{stmt.target}'", stmt.line, stmt.col)
+                raise self._err(f"Undefined variable '{stmt.target}'", stmt.line, stmt.col)
             inferred = self.inferencer.infer(stmt.value)
             if inferred is not None and not _types_compatible(existing, inferred):
                 raise self._err(
@@ -112,6 +179,7 @@ class TypeChecker:
                 )
 
         elif isinstance(stmt, IfStmt):
+            self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
             if cond_type is None:
                 raise self._err("Cannot infer type for 'if' condition", stmt.line, stmt.col)
@@ -121,6 +189,7 @@ class TypeChecker:
             for s in stmt.then_body:
                 self.check_stmt(s)
             for (cond, body) in stmt.elif_clauses:
+                self.check_expr(cond)
                 elif_cond_type = self.inferencer.infer(cond)
                 if not isinstance(elif_cond_type, BoolType):
                     raise self._err(f"'elif' condition must be bool, got {elif_cond_type}", stmt.line, stmt.col)
@@ -131,6 +200,7 @@ class TypeChecker:
                     self.check_stmt(s)
 
         elif isinstance(stmt, WhileStmt):
+            self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
             if cond_type is None:
                 raise self._err("Cannot infer type for 'while' condition", stmt.line, stmt.col)
@@ -142,15 +212,18 @@ class TypeChecker:
 
         elif isinstance(stmt, ForRangeStmt):
             # Check that start, stop, and step are integers
+            self.check_expr(stmt.start)
             start_type = self.inferencer.infer(stmt.start)
             if start_type is not None and not isinstance(start_type, IntType):
                 raise self._err(f"range() start must be int, got {start_type}", stmt.line, stmt.col)
             
+            self.check_expr(stmt.stop)
             stop_type = self.inferencer.infer(stmt.stop)
             if stop_type is not None and not isinstance(stop_type, IntType):
                 raise self._err(f"range() stop must be int, got {stop_type}", stmt.line, stmt.col)
             
             if stmt.step is not None:
+                self.check_expr(stmt.step)
                 step_type = self.inferencer.infer(stmt.step)
                 if step_type is not None and not isinstance(step_type, IntType):
                     raise self._err(f"range() step must be int, got {step_type}", stmt.line, stmt.col)
@@ -166,6 +239,7 @@ class TypeChecker:
 
         elif isinstance(stmt, ReturnStmt):
             if stmt.value is not None:
+                self.check_expr(stmt.value)
                 ret_type = self.inferencer.infer(stmt.value)
                 if ret_type is not None and self._current_return_type is not None:
                     if not _types_compatible(self._current_return_type, ret_type):
@@ -175,6 +249,7 @@ class TypeChecker:
                         )
 
         elif isinstance(stmt, PrintStmt):
+            self.check_expr(stmt.value)
             inferred = self.inferencer.infer(stmt.value)
             if inferred is None:
                 raise self._err("Cannot infer type for expression in print()", stmt.line, stmt.col)
