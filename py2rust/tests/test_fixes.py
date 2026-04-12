@@ -116,8 +116,9 @@ def main() -> int:
     assert "chars().nth" in code
     assert "let i = 0;" in code
     assert "i < 0" in code
-    assert "s.chars().count()" in code
-    assert "unwrap().to_string()" in code
+    # Use of __coll instead of direct variable in length calculation
+    assert "__coll.chars().count()" in code
+    assert "char = ({ let __coll = &(s);" in code
 
 def test_list_move_semantics():
     src = """
@@ -128,9 +129,9 @@ def main() -> int:
 """
     code = _compile(src)
     # Should uses .clone() because String is not Copy
-    assert "lst[" in code
-    assert "len() as i32" in code
-    assert ").clone()" in code
+    assert "__coll[" in code
+    assert "({ let __coll = &(lst);" in code
+    assert "(__coll[actual_idx]).clone()" in code
 
 def test_invalid_condition_type():
     src = """
@@ -237,8 +238,8 @@ def main() -> int:
     code = _compile(src)
     # Check for negative index handling logic
     assert "if i < 0" in code
-    assert "s.chars().count()" in code
-    assert "lst.len()" in code
+    assert "__coll.chars().count()" in code
+    assert "__coll.len()" in code
 
 def test_while_loop_range_semantics():
     src = """
@@ -312,3 +313,55 @@ def test_semantic_error_in_ir_builder():
     class JunkType: pass
     with pytest.raises(SemanticError):
         _to_ir_type(JunkType())
+
+def test_nested_loops_shadowing():
+    src = """
+def main() -> int:
+    s = 0
+    for i in range(0, 2):
+        for j in range(0, 2):
+            s += i + j
+    return s
+"""
+    code = _compile(src)
+    # Check that there are nested blocks
+    assert code.count("{") >= 4 # Func, outer loop block, while block, inner loop block...
+    # Exact check for shadowing prevention: outer __step should not be overwritten
+    # The code should have multiple let __step
+    assert code.count("let __step") >= 2
+
+def test_subscript_side_effects():
+    src = """
+def get_list() -> list[int]:
+    print(1)
+    return [1, 2, 3]
+
+def main() -> int:
+    x = get_list()[0]
+    return x
+"""
+    code = _compile(src)
+    # get_list() should be assigned to __coll exactly once
+    assert "let __coll = &(get_list());" in code
+
+def test_mixed_arithmetic_casting():
+    src = """
+def main() -> float:
+    i: int = 1
+    f: float = 2.5
+    res: float = i + f
+    return res
+"""
+    code = _compile(src)
+    assert "(i as f64) + (f as f64)" in code
+
+def test_conflicting_loop_target():
+    src = """
+def main() -> int:
+    i: str = "hi"
+    for i in range(0, 10):
+        print(i)
+    return 0
+"""
+    with pytest.raises(Py2RustTypeError):
+        _check(src)

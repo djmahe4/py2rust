@@ -154,6 +154,11 @@ class TypeChecker:
                 if step_type is not None and not isinstance(step_type, IntType):
                     raise self._err(f"range() step must be int, got {step_type}", stmt.line, stmt.col)
 
+            # Ensure loop target is consistent with IntType
+            existing = self.st.lookup(stmt.target)
+            if existing is not None and not isinstance(existing, IntType):
+                raise self._err(f"Cannot use '{stmt.target}' as loop target: already defined as {existing}", stmt.line, stmt.col)
+
             self.st.define(stmt.target, IntType())
             for s in stmt.body:
                 self.check_stmt(s)

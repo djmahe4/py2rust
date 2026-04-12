@@ -173,6 +173,10 @@ class RustCodegen:
             stop = self._gen_expr(stmt.stop)
             step = self._gen_expr(stmt.step) if stmt.step is not None else "1"
             
+            # Use a block to properly scope loop-control temporaries and prevent shadowing
+            self._emit("{")
+            self._indent += 1
+            
             # Evaluate bounds exactly once to match Python range() semantics
             self._emit(f"let __stop = {stop};")
             self._emit(f"let __step = {step};")
@@ -183,6 +187,9 @@ class RustCodegen:
             for s in stmt.body:
                 self._gen_stmt(s)
             self._emit(f"{stmt.target} += __step;")
+            self._indent -= 1
+            self._emit("}")
+            
             self._indent -= 1
             self._emit("}")
 
@@ -244,22 +251,26 @@ class RustCodegen:
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
             
-            # Determine length expression
+            # Robust Python indexing: bind collection to a temp reference to avoid redundant evaluations
+            # and then calculate actual usize index relative to length if negative.
+            
             if isinstance(expr.value_type, IRStrType):
-                len_expr = f"{val}.chars().count() as i32"
+                len_expr = "__coll.chars().count() as i32"
+                inner_expr = f"__coll.chars().nth(actual_idx).unwrap().to_string()"
             else:
-                len_expr = f"{val}.len() as i32"
+                len_expr = "__coll.len() as i32"
+                inner_expr = f"__coll[actual_idx]"
             
-            # Robust Python indexing: calculate actual usize index
-            actual_idx = f"({{ let i = {idx}; if i < 0 {{ (i + ({len_expr})) as usize }} else {{ i as usize }} }})"
+            if isinstance(expr.result_type, (IRStrType, IRListType)) and not isinstance(expr.value_type, IRStrType):
+                inner_expr = f"({inner_expr}).clone()"
             
-            if isinstance(expr.value_type, IRStrType):
-                return f"({val}.chars().nth({actual_idx}).unwrap().to_string())"
-            
-            res = f"{val}[{actual_idx}]"
-            if isinstance(expr.result_type, (IRStrType, IRListType)):
-                return f"({res}).clone()"
-            return res
+            # Use an immediately-invoked block to isolate the temporary collection reference
+            return (
+                f"({{ let __coll = &({val}); "
+                f"let actual_idx = ({{ let i = {idx}; if i < 0 {{ (i + ({len_expr})) as usize }} else {{ i as usize }} }}); "
+                f"{inner_expr} }})"
+            )
+
         elif isinstance(expr, IRFunctionCall):
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             return f"{expr.name}({args})"
@@ -274,8 +285,15 @@ class RustCodegen:
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
             return f"({left} as f64 / {right} as f64).floor() as i32"
-        left = self._gen_expr(expr.left)
-        right = self._gen_expr(expr.right)
+            
+        if isinstance(expr.result_type, IRFloatType):
+            # Enforce explicit casting for arithmetic involving mixed types
+            left = self._gen_expr_as_float(expr.left)
+            right = self._gen_expr_as_float(expr.right)
+        else:
+            left = self._gen_expr(expr.left)
+            right = self._gen_expr(expr.right)
+            
         return f"{left} {expr.op} {right}"
 
     def _gen_expr_as_float(self, expr) -> str:
