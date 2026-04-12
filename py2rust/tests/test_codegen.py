@@ -30,12 +30,12 @@ def main() -> int:
 """
     code = _compile(src)
     assert "fn add(x: i32, y: i32) -> i32 {" in code
-    # Rust's main() can return i32 for exit code
-    assert "fn main() -> i32 {" in code
+    # Rust's main() returns () and uses return; for early exit
+    assert "fn main() -> () {" in code
     assert "result = add(3, 4);" in code
     assert 'println!("{}", result);' in code
-    # return value is preserved
-    assert "return 0;" in code
+    # return value is discarded; main exits with ()
+    assert "return;" in code
 
 
 def test_codegen_float_division():

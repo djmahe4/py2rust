@@ -50,7 +50,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn tell(&self) -> std::io::Result<u64> {
+    fn tell(&mut self) -> std::io::Result<u64> {
         self.file.stream_position()
     }
 
@@ -59,10 +59,10 @@ impl FileHandle {
     }
 }
 
-fn main() -> i32 {
+fn main() -> () {
     let mut scores = { let mut __d: HashMap<String, i32> = HashMap::new(); __d.insert("alice".to_string(), 90); __d.insert("bob".to_string(), 85); __d };
     scores.insert("charlie".to_string(), 95);
     let alice_score = scores.get(&"alice".to_string()).unwrap().clone();
     println!("{}", alice_score);
-    return 0;
+    return;
 }

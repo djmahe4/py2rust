@@ -41,6 +41,7 @@ from .ast_nodes import (
     FloatType,
     BoolType,
     StrType,
+    UnitType,
     ListType,
     DictType,
     ClassType,
@@ -91,6 +92,16 @@ class Parser:
             suggestion=suggestion,
             source_lines=self.source_lines,
         )
+
+    def _get_attr_parts(self, attr_node):
+        """Recursively extract attribute chain from AST."""
+        if isinstance(attr_node, ast.Name):
+            return [attr_node.id]
+        elif isinstance(attr_node, ast.Attribute):
+            parts = self._get_attr_parts(attr_node.value)
+            if parts:
+                return parts + [attr_node.attr]
+        return None
 
     def parse(self) -> Module:
         try:
@@ -299,7 +310,7 @@ class Parser:
                 )
             raise self._err("Unsupported generic type", node, UnsupportedFeatureError)
         elif isinstance(node, ast.Constant) and node.value is None:
-            return IntType()  # Use int as placeholder for None in method return types
+            return UnitType()  # Use unit type for None return types
         raise self._err(
             f"Unsupported type annotation: {ast.dump(node)}",
             node,
@@ -365,13 +376,19 @@ class Parser:
                     col=node.col_offset + 1,
                 )
             elif isinstance(target, ast.Attribute):
-                target_expr = self._parse_expr(target.value)
-                val = self._parse_expr(node.value)
-                return Assign(
-                    target=("attr", target.value.id, target.attr),
-                    value=val,
-                    line=node.lineno,
-                    col=node.col_offset + 1,
+                parts = self._get_attr_parts(target)
+                if parts and len(parts) == 2:
+                    val = self._parse_expr(node.value)
+                    return Assign(
+                        target=("attr", parts[0], parts[1]),
+                        value=val,
+                        line=node.lineno,
+                        col=node.col_offset + 1,
+                    )
+                raise self._err(
+                    "Nested attribute assignment not supported",
+                    target,
+                    UnsupportedFeatureError,
                 )
             else:
                 raise self._err(

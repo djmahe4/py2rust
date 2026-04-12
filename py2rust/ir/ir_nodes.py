@@ -28,6 +28,12 @@ class IRStrType:
 
 
 @dataclass(frozen=True)
+class IRUnitType:
+    def __str__(self):
+        return "()"
+
+
+@dataclass(frozen=True)
 class IRListType:
     element_type: object
 

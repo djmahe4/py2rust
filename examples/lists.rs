@@ -69,9 +69,9 @@ fn sum_list(nums: Vec<i32>) -> i32 {
     return total;
 }
 
-fn main() -> i32 {
+fn main() -> () {
     let numbers = vec![1, 2, 3, 4, 5];
     let result = sum_list(numbers);
     println!("{}", result);
-    return 0;
+    return;
 }

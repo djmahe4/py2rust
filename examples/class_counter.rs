@@ -7,13 +7,13 @@ struct Counter {
 }
 
 impl Counter {
-    fn increment(&self) -> i32 {
-        self_.count = self.count + 1;
+    fn increment(&self) -> () {
+        self.count = self.count + 1;
     }
     fn get_count(&self) -> i32 {
         return self.count;
     }
-    fn new(&self) -> Self {
+    fn new() -> Self {
         return Self { count: 0 };
     }
 }
@@ -75,12 +75,12 @@ impl FileHandle {
     }
 }
 
-fn main() -> i32 {
+fn main() -> () {
     let c = Counter::new();
-    let _ = c.increment();
-    let _ = c.increment();
-    let _ = c.increment();
+    c.increment();
+    c.increment();
+    c.increment();
     let result = c.get_count();
     println!("{}", result);
-    return 0;
+    return;
 }

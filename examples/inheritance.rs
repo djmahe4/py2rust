@@ -10,7 +10,7 @@ impl Animal {
     fn speak(&self) -> i32 {
         return 0;
     }
-    fn new(&self, name: String) -> Self {
+    fn new(name: String) -> Self {
         return Self { name: name };
     }
 }
@@ -22,7 +22,7 @@ impl Dog {
     fn speak(&self) -> i32 {
         return 42;
     }
-    fn new(&self, name: String) -> Self {
+    fn new(name: String) -> Self {
         return Self { name: name };
     }
 }
@@ -84,9 +84,9 @@ impl FileHandle {
     }
 }
 
-fn main() -> i32 {
+fn main() -> () {
     let d = Dog::new("Buddy".to_string());
     let result = d.speak();
     println!("{}", result);
-    return 0;
+    return;
 }

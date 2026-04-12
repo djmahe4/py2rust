@@ -28,6 +28,12 @@ class StrType:
 
 
 @dataclass(frozen=True)
+class UnitType:
+    def __str__(self):
+        return "None"
+
+
+@dataclass(frozen=True)
 class ListType:
     element_type: object
 

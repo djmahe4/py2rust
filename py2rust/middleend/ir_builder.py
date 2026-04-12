@@ -4,6 +4,7 @@ from ..frontend.ast_nodes import (
     FloatType,
     BoolType,
     StrType,
+    UnitType,
     ListType,
     DictType,
     FileType,
@@ -22,6 +23,7 @@ from ..ir.ir_nodes import (
     IRFloatType,
     IRBoolType,
     IRStrType,
+    IRUnitType,
     IRListType,
     IRDictType,
     IRFileType,
@@ -77,6 +79,8 @@ def _to_ir_type(t):
         return IRBoolType()
     if isinstance(t, StrType):
         return IRStrType()
+    if isinstance(t, UnitType):
+        return IRUnitType()
     if isinstance(t, ListType):
         return IRListType(element_type=_to_ir_type(t.element_type))
     if isinstance(t, DictType):

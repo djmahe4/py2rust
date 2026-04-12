@@ -7,6 +7,7 @@ from ..ir.ir_nodes import (
     IRFloatType,
     IRBoolType,
     IRStrType,
+    IRUnitType,
     IRListType,
     IRDictType,
     IRFileType,
@@ -58,6 +59,8 @@ def _rust_type(t) -> str:
         return "bool"
     if isinstance(t, IRStrType):
         return "String"
+    if isinstance(t, IRUnitType):
+        return "()"
     if isinstance(t, IRListType):
         return f"Vec<{_rust_type(t.element_type)}>"
     if isinstance(t, IRDictType):
@@ -283,7 +286,7 @@ class RustCodegen:
         self._emit("        Ok(())")
         self._emit("    }")
         self._emit("")
-        self._emit("    fn tell(&self) -> std::io::Result<u64> {")
+        self._emit("    fn tell(&mut self) -> std::io::Result<u64> {")
         self._emit("        self.file.stream_position()")
         self._emit("    }")
         self._emit("")
@@ -320,7 +323,7 @@ class RustCodegen:
         self._mutated_vars = _collect_mutated_vars(func.body)
         decls = _collect_decls(func.body)
 
-        param_strs = ["&self"]
+        param_strs = [] if is_init else ["&self"]
         for p in func.params:
             mut = "mut " if p.name in func.mutated_params else ""
             param_strs.append(f"{mut}{_mangle(p.name)}: {_rust_type(p.type_)}")
@@ -387,7 +390,7 @@ class RustCodegen:
 
         is_main = func.name == "main"
         self._in_main = is_main
-        ret = _rust_type(func.return_type)
+        ret = "()" if is_main else _rust_type(func.return_type)
         self._emit(f"fn {func.name}({params}) -> {ret} {{")
 
         self._indent += 1
@@ -432,7 +435,9 @@ class RustCodegen:
     def _gen_stmt(self, stmt) -> None:
         if isinstance(stmt, IRVarDecl):
             val = self._strip_parens(self._gen_expr(stmt.value, stmt.type_))
-            if stmt.name in self._decl_types and stmt.name not in self._loop_vars:
+            if stmt.name == "_":
+                self._emit(f"{val};")
+            elif stmt.name in self._decl_types and stmt.name not in self._loop_vars:
                 self._emit(f"{_mangle(stmt.name)} = {val};")
             elif stmt.name in self._mutated_vars:
                 self._emit(f"let mut {_mangle(stmt.name)} = {val};")
@@ -449,7 +454,8 @@ class RustCodegen:
 
         elif isinstance(stmt, IRFieldAssign):
             val = self._strip_parens(self._gen_expr(stmt.value))
-            self._emit(f"{_mangle(stmt.obj)}.{_mangle(stmt.field)} = {val};")
+            obj_name = "self" if stmt.obj == "self" else _mangle(stmt.obj)
+            self._emit(f"{obj_name}.{_mangle(stmt.field)} = {val};")
 
         elif isinstance(stmt, IRAugAssign):
             val = self._strip_parens(self._gen_expr(stmt.value))
@@ -538,14 +544,8 @@ class RustCodegen:
             self._emit("}")
 
         elif isinstance(stmt, IRReturn):
-            if stmt.value is None:
+            if stmt.value is None or self._in_main:
                 self._emit("return;")
-            elif self._in_main:
-                if isinstance(stmt.result_type, IRFloatType):
-                    val = self._strip_parens(self._gen_expr_as_float(stmt.value))
-                else:
-                    val = self._strip_parens(self._gen_expr(stmt.value))
-                self._emit(f"return {val};")
             else:
                 if isinstance(stmt.result_type, IRFloatType):
                     val = self._strip_parens(self._gen_expr_as_float(stmt.value))
@@ -555,7 +555,11 @@ class RustCodegen:
 
         elif isinstance(stmt, IRPrint):
             val = self._gen_expr(stmt.value)
-            fmt = "{:?}" if isinstance(stmt.value_type, IRListType) else "{}"
+            fmt = (
+                "{:?}"
+                if isinstance(stmt.value_type, (IRListType, IRDictType))
+                else "{}"
+            )
             self._emit(f'println!("{fmt}", {val});')
 
         elif isinstance(stmt, IRBreak):
@@ -739,6 +743,8 @@ class RustCodegen:
         elif isinstance(expr, IRSelf):
             return "self"
         elif isinstance(expr, IRStructAccess):
+            if isinstance(expr.value, IRSelf):
+                return f"self.{_mangle(expr.field)}"
             val = self._gen_expr(expr.value)
             return f"{val}.{_mangle(expr.field)}"
         elif isinstance(expr, IRMethodCall):
@@ -767,7 +773,7 @@ class RustCodegen:
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
             elem_type = _rust_type(expr.result_type.element_type)
-            return f"({{ let mut __v: Vec<{elem_type}> = {left}.clone(); __v.extend({right}); __v }})"
+            return f"({{ let mut __v: Vec<{elem_type}> = {left}.clone(); __v.extend({right}.clone()); __v }})"
         if expr.op == "*" and isinstance(expr.result_type, IRStrType):
             if isinstance(expr.left, IRStrLit):
                 left_str = self._gen_expr(expr.left)

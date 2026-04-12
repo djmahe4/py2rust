@@ -18,7 +18,7 @@ impl Point {
         let dx = self.x - other_x;
         return dx;
     }
-    fn new(&self, x: i32, y: i32) -> Self {
+    fn new(x: i32, y: i32) -> Self {
         return Self { x: x, y: y };
     }
 }
@@ -80,10 +80,10 @@ impl FileHandle {
     }
 }
 
-fn main() -> i32 {
+fn main() -> () {
     let p = Point::new(3, 4);
     let x = p.get_x();
     let y = p.get_y();
     let d = p.distance_to(0);
-    return (x + y) + d;
+    return;
 }

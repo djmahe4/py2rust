@@ -59,9 +59,9 @@ impl FileHandle {
     }
 }
 
-fn main() -> i32 {
+fn main() -> () {
     let f = FileHandle::open("test.txt".to_string(), "w".to_string());
-    let _ = f.write("Hello".to_string());
-    let _ = f.close();
-    return 0;
+    f.write("Hello".to_string());
+    f.close();
+    return;
 }

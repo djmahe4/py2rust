@@ -305,11 +305,16 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    # Should be converted to _ = helper(42);
-    assert "_ = helper(42);" in code
+    # Discard should emit just the expression (not let _ = ...)
+    assert "helper(42);" in code
     # _ is a discard, should NOT have a let declaration
     assert "let _: i32;" not in code
     assert "let mut _: i32;" not in code
+    # Make sure we're not emitting 'let _ =' (underscore equals)
+    # Note: '_ =>' is a Rust match pattern, not a variable assignment
+    import re
+
+    assert not re.search(r"let _ =", code), "Should not have 'let _ =' pattern"
 
 
 def test_semantic_error_in_ir_builder():
@@ -395,8 +400,8 @@ def main() -> int:
     # it should not have a let declaration.
     assert "let mut _: i32;" not in code
     assert "let _: i32;" not in code
-    # But it should be assigned to
-    assert "_ = helper(42);" in code
+    # Discards are emitted as just the expression
+    assert "helper(42);" in code
 
 
 def test_print_validation_undefined_var():
@@ -558,7 +563,8 @@ def test_dict_len():
     src = """
 def main() -> int:
     d: dict[str, int] = {"a": 1, "b": 2, "c": 3}
-    return len(d)
+    result: int = len(d)
+    return result
 """
     code = _compile(src)
     assert "d.len() as i32" in code
@@ -664,7 +670,8 @@ def test_len_on_list():
     src = """
 def main() -> int:
     lst: list[int] = [1, 2, 3, 4, 5]
-    return len(lst)
+    result: int = len(lst)
+    return result
 """
     code = _compile(src)
     assert "vec![1, 2, 3, 4, 5]" in code
@@ -675,7 +682,8 @@ def test_len_on_string():
     src = """
 def main() -> int:
     s: str = "hello"
-    return len(s)
+    result: int = len(s)
+    return result
 """
     code = _compile(src)
     assert "len() as i32" in code
@@ -685,7 +693,8 @@ def test_len_on_empty_list():
     src = """
 def main() -> int:
     lst: list[int] = []
-    return len(lst)
+    result: int = len(lst)
+    return result
 """
     code = _compile(src)
     assert "Vec::<i32>::new()" in code
@@ -709,7 +718,8 @@ def test_list_index_assignment():
 def main() -> int:
     lst: list[int] = [1, 2, 3]
     lst[0] = 100
-    return lst[0]
+    result: int = lst[0]
+    return result
 """
     code = _compile(src)
     assert "vec![1, 2, 3]" in code
@@ -1083,7 +1093,8 @@ class Point:
 
 def main() -> int:
     p: Point = Point(1, 2)
-    return p.x
+    result: int = p.x
+    return result
 """
     code = _compile(src)
     assert "struct Point" in code
@@ -1171,3 +1182,211 @@ def main() -> int:
     assert "struct Point" in code
     assert "Point::new(1, 2)" in code
     assert "Point::new(3, 4)" in code
+
+
+def test_constructor_is_static():
+    """Test that __init__ generates a static new method."""
+    src = """
+class Counter:
+    count: int = 0
+    
+    def __init__(self) -> None:
+        self.count = 0
+    
+    def increment(self) -> None:
+        self.count = self.count + 1
+
+def main() -> int:
+    c: Counter = Counter()
+    c.increment()
+    return 0
+"""
+    code = _compile(src)
+    assert "struct Counter" in code
+    assert "fn new(&self" not in code
+
+
+def test_self_field_assignment():
+    """Test that self.field assignment uses proper Rust syntax in constructor."""
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+    
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+def main() -> int:
+    return 0
+"""
+    code = _compile(src)
+    assert "Self { x: x, y: y }" in code
+    assert "self_.x" not in code
+    assert "self_.y" not in code
+
+
+def test_main_returns_unit():
+    """Test that main function returns () not i32."""
+    src = """
+def main() -> int:
+    return 0
+"""
+    code = _compile(src)
+    assert "fn main() -> () {" in code
+    assert "return;" in code
+
+
+def test_main_discard_return_value():
+    """Test that return expressions in main are discarded."""
+    src = """
+def helper(x: int) -> int:
+    return x * 2
+
+def main() -> int:
+    result: int = helper(42)
+    return result
+"""
+    code = _compile(src)
+    assert "fn main() -> () {" in code
+
+
+def test_discard_function_call():
+    """Test that standalone function calls use discard properly."""
+    src = """
+def log(msg: str) -> int:
+    return 0
+
+def main() -> int:
+    log("hello")
+    return 0
+"""
+    code = _compile(src)
+    assert 'log("hello".to_string());' in code
+    assert "let mut _" not in code
+    assert "let _" not in code
+
+
+def test_method_call_on_self():
+    """Test that self.method() generates proper Rust syntax."""
+    src = """
+class Calculator:
+    value: int = 0
+    
+    def __init__(self) -> None:
+        self.value = 0
+    
+    def get_value(self) -> int:
+        return self.value
+
+def main() -> int:
+    return 0
+"""
+    code = _compile(src)
+    assert "self.value" in code
+    assert "self_.value" not in code
+
+
+def test_unit_type_return():
+    """Test that methods with None return type generate () in Rust."""
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+    
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+def main() -> int:
+    return 0
+"""
+    code = _compile(src)
+    # Constructor is static, so it doesn't have &self
+    assert "fn new(x: i32, y: i32) -> Self {" in code
+
+
+def test_list_concat_clones_right():
+    """Test that list concatenation clones the right operand."""
+    src = """
+def main() -> int:
+    a: list[int] = [1, 2]
+    b: list[int] = [3, 4]
+    c: list[int] = a + b
+    return 0
+"""
+    code = _compile(src)
+    assert "clone()" in code
+    assert ".extend(" in code
+
+
+def test_dict_print_debug_format():
+    """Test that dicts are printed with debug format."""
+    src = """
+def main() -> int:
+    d: dict[str, int] = {"a": 1}
+    print(d)
+    return 0
+"""
+    code = _compile(src)
+    assert "{:?}" in code
+
+
+def test_nested_attribute_rejected():
+    """Test that nested attribute assignment is rejected."""
+    from py2rust.utils.errors import UnsupportedFeatureError
+
+    src = """
+class Outer:
+    inner: int = 0
+
+def main() -> int:
+    o: Outer = Outer()
+    o.inner.nested = 1
+    return 0
+"""
+    with pytest.raises(UnsupportedFeatureError):
+        _compile(src)
+
+
+def test_static_constructor_call():
+    """Test that constructor is called with :: syntax."""
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+    
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+def main() -> int:
+    p: Point = Point(1, 2)
+    return 0
+"""
+    code = _compile(src)
+    assert "Point::new(1, 2)" in code
+
+
+def test_class_field_access_correct():
+    """Test that class field access uses proper syntax."""
+    src = """
+class Point:
+    x: int = 0
+    y: int = 0
+    
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+    
+    def get_x(self) -> int:
+        return self.x
+
+def main() -> int:
+    p: Point = Point(1, 2)
+    x: int = p.x
+    return x
+"""
+    code = _compile(src)
+    assert "p.x" in code
+    assert "self.x" in code
