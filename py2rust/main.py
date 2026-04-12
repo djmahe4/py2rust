@@ -66,15 +66,15 @@ def compile_file(config: CompilerConfig) -> bool:
         import os
         logger.debug("Verifying with rustc")
         with tempfile.NamedTemporaryFile(suffix="", delete=False) as tmp:
-            tmp_bin = tmp.name
+            temp_binary_path = tmp.name
         try:
             result = subprocess.run(
-                ['rustc', config.output_file, '--edition', '2021', '--crate-type', 'bin', '-o', tmp_bin],
+                ['rustc', config.output_file, '--edition', '2021', '--crate-type', 'bin', '-o', temp_binary_path],
                 capture_output=True, text=True
             )
         finally:
-            if os.path.exists(tmp_bin):
-                os.unlink(tmp_bin)
+            if os.path.exists(temp_binary_path):
+                os.unlink(temp_binary_path)
         if result.returncode != 0:
             print(f"rustc verification failed:\n{result.stderr}", file=sys.stderr)
             return False
