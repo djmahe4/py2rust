@@ -125,8 +125,8 @@ def main() -> int:
 """
     code = _compile(src)
     assert "chars().nth" in code
-    assert "let i = 0;" in code
-    assert "i < 0" in code
+    assert "let __idx_raw = 0;" in code
+    assert "__idx_raw < 0" in code
     assert "__coll.chars().count()" in code
     assert "{ let __coll = &(s);" in code
 
@@ -271,7 +271,7 @@ def main() -> int:
 """
     code = _compile(src)
     # Check for negative index handling logic
-    assert "if i < 0" in code
+    assert "if __idx_raw < 0" in code
     assert "__coll.chars().count()" in code
     assert "__coll.len()" in code
 

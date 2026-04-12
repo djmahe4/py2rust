@@ -19,6 +19,7 @@ from ..ir.ir_nodes import (
     IRBoolOp,
     IRListLit,
     IRSubscript,
+    IRSubscriptAssign,
     IRFunctionCall,
     IRVarDecl,
     IRAssign,
@@ -104,6 +105,13 @@ def _collect_mutated_vars(stmts) -> set:
             mutated.add(stmt.target)
         elif isinstance(stmt, IRAugAssign):
             mutated.add(stmt.target)
+        elif isinstance(stmt, IRSubscriptAssign):
+            if isinstance(stmt.target, IRSubscript) and isinstance(
+                stmt.target.value, IRName
+            ):
+                mutated.add(stmt.target.value.name)
+            elif isinstance(stmt.target, IRName):
+                mutated.add(stmt.target.name)
         elif isinstance(stmt, IRIf):
             mutated |= _collect_mutated_vars(stmt.then_body)
             for _, elif_body in stmt.elif_clauses:
@@ -201,7 +209,11 @@ class RustCodegen:
         self._mutated_vars = _collect_mutated_vars(func.body)
         decls = _collect_decls(func.body)
 
-        params = ", ".join(f"{p.name}: {_rust_type(p.type_)}" for p in func.params)
+        param_strs = []
+        for p in func.params:
+            mut = "mut " if p.name in func.mutated_params else ""
+            param_strs.append(f"{mut}{p.name}: {_rust_type(p.type_)}")
+        params = ", ".join(param_strs)
 
         is_main = func.name == "main"
         self._in_main = is_main
@@ -348,13 +360,39 @@ class RustCodegen:
                 else:
                     val = self._strip_parens(self._gen_expr(stmt.value))
                 self._emit(f"return {val};")
-            else:
-                self._emit("return;")
 
         elif isinstance(stmt, IRPrint):
             val = self._gen_expr(stmt.value)
             fmt = "{:?}" if isinstance(stmt.value_type, IRListType) else "{}"
             self._emit(f'println!("{fmt}", {val});')
+
+        elif isinstance(stmt, IRSubscriptAssign):
+            if isinstance(stmt.target, IRSubscript):
+                target_val = self._gen_expr(stmt.target.value)
+                idx_raw = self._gen_expr(stmt.index)
+                value_val = self._gen_expr(stmt.value)
+
+                if isinstance(stmt.target.value_type, IRStrType):
+                    len_expr = f"{target_val}.chars().count() as i32"
+                else:
+                    len_expr = f"{target_val}.len() as i32"
+                index_expr = f"(if {idx_raw} < 0 {{ {idx_raw} + {len_expr} }} else {{ {idx_raw} }}) as usize"
+
+                if isinstance(stmt.value_type, IRStrType):
+                    self._emit(
+                        f"{target_val}.replace_range({index_expr}..={index_expr}, &{value_val});"
+                    )
+                else:
+                    self._emit(f"{target_val}[{index_expr}] = {value_val};")
+                if isinstance(stmt.target.value, IRName):
+                    self._mutated_vars.add(stmt.target.value.name)
+            else:
+                target = self._gen_expr(stmt.target)
+                index = self._gen_expr(stmt.index)
+                value = self._gen_expr(stmt.value)
+                self._emit(f"{target}[{index}] = {value};")
+                if isinstance(stmt.target, IRName):
+                    self._mutated_vars.add(stmt.target.name)
 
         else:
             raise ValueError(f"Unsupported IR statement: {type(stmt).__name__}")
@@ -422,11 +460,14 @@ class RustCodegen:
             # Use an immediately-invoked block to isolate the temporary collection reference
             return (
                 f"({{ let __coll = &({val}); "
-                f"let actual_idx = ({{ let i = {idx}; if i < 0 {{ (i + ({len_expr})) as usize }} else {{ i as usize }} }}); "
+                f"let __idx_raw = {idx}; let actual_idx = if __idx_raw < 0 {{ (__idx_raw + ({len_expr}) as i32) as usize }} else {{ __idx_raw as usize }}; "
                 f"{inner_expr} }})"
             )
 
         elif isinstance(expr, IRFunctionCall):
+            if expr.name == "len":
+                arg = self._gen_expr(expr.args[0])
+                return f"{arg}.len() as i32"
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             return f"{expr.name}({args})"
         return f"/* unknown expr {type(expr).__name__} */"
@@ -444,6 +485,24 @@ class RustCodegen:
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
             return f"{left}.to_string() + &{right}"
+        if expr.op == "+" and isinstance(expr.result_type, IRListType):
+            left = self._gen_expr(expr.left)
+            right = self._gen_expr(expr.right)
+            elem_type = _rust_type(expr.result_type.element_type)
+            return f"({{ let mut __v: Vec<{elem_type}> = {left}.clone(); __v.extend({right}); __v }})"
+        if expr.op == "*" and isinstance(expr.result_type, IRStrType):
+            if isinstance(expr.left, IRStrLit):
+                left_str = self._gen_expr(expr.left)
+                right_n = self._gen_expr(expr.right)
+                return f"{left_str}.to_string().repeat({right_n})"
+            elif isinstance(expr.right, IRStrLit):
+                left_n = self._gen_expr(expr.left)
+                right_str = self._gen_expr(expr.right)
+                return f"{right_str}.to_string().repeat({left_n})"
+            else:
+                left = self._gen_expr(expr.left)
+                right = self._gen_expr(expr.right)
+                return f"{left}.repeat({right})"
 
         if isinstance(expr.result_type, IRFloatType):
             left = self._gen_expr_as_float(expr.left)

@@ -54,6 +54,15 @@ class TypeInferencer:
             return FloatType()
         if isinstance(lt, StrType) and isinstance(rt, StrType) and expr.op == "+":
             return StrType()
+        if expr.op == "*":
+            if isinstance(lt, StrType) and isinstance(rt, IntType):
+                return StrType()
+            if isinstance(lt, IntType) and isinstance(rt, StrType):
+                return StrType()
+        if expr.op == "+":
+            if isinstance(lt, ListType) and isinstance(rt, ListType):
+                if type(lt.element_type) is type(rt.element_type):
+                    return ListType(element_type=lt.element_type)
         return IntType()
 
     def _infer_unaryop(self, expr):
@@ -78,6 +87,10 @@ class TypeInferencer:
         return None
 
     def _infer_call(self, expr):
+        if expr.name == "len" and len(expr.args) == 1:
+            arg_type = self.infer(expr.args[0])
+            if isinstance(arg_type, (ListType, StrType)):
+                return IntType()
         sig = self.st.lookup_function(expr.name)
         if sig:
             _, ret = sig

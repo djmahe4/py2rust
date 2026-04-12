@@ -195,11 +195,20 @@ class IRParam:
 
 
 @dataclass(frozen=True)
+class IRSubscriptAssign:
+    target: object
+    index: object
+    value: object
+    value_type: object
+
+
+@dataclass(frozen=True)
 class IRFunction:
     name: str
     params: tuple
     return_type: object
     body: tuple
+    mutated_params: tuple = ()
 
 
 @dataclass(frozen=True)

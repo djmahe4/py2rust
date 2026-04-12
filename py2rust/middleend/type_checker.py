@@ -121,6 +121,24 @@ class TypeChecker:
             # Check for string concatenation
             if isinstance(lt, StrType) and isinstance(rt, StrType) and expr.op == "+":
                 pass  # Valid string concatenation
+            # Check for string repetition (str * int or int * str)
+            elif expr.op == "*" and (
+                (isinstance(lt, StrType) and isinstance(rt, IntType))
+                or (isinstance(lt, IntType) and isinstance(rt, StrType))
+            ):
+                pass  # Valid string repetition
+            # Check for list concatenation
+            elif (
+                expr.op == "+" and isinstance(lt, ListType) and isinstance(rt, ListType)
+            ):
+                if type(lt.element_type) is type(rt.element_type):
+                    pass  # Valid list concatenation
+                else:
+                    raise self._err(
+                        f"Invalid operand types for '{expr.op}': list[{lt.element_type}] and list[{rt.element_type}]",
+                        expr.line,
+                        expr.col,
+                    )
             elif not (
                 isinstance(lt, (IntType, FloatType))
                 and isinstance(rt, (IntType, FloatType))
@@ -165,30 +183,46 @@ class TypeChecker:
                     f"Subscript index must be int, got {it}", expr.line, expr.col
                 )
         elif isinstance(expr, FunctionCall):
-            sig = self.st.lookup_function(expr.name)
-            if sig is None:
-                raise self._err(
-                    f"Undefined function: '{expr.name}'",
-                    expr.line,
-                    expr.col,
-                    cls=SemanticError,
-                )
-            params, _ = sig
-            if len(expr.args) != len(params):
-                raise self._err(
-                    f"Function '{expr.name}' expected {len(params)} arguments, got {len(expr.args)}",
-                    expr.line,
-                    expr.col,
-                )
-            for i, arg in enumerate(expr.args):
-                self.check_expr(arg)
-                arg_t = self.inferencer.infer(arg)
-                if not _types_compatible(params[i], arg_t):
+            if expr.name == "len":
+                if len(expr.args) != 1:
                     raise self._err(
-                        f"Argument type mismatch for '{expr.name}': expected {params[i]}, got {arg_t}",
-                        arg.line,
-                        arg.col,
+                        f"len() expected 1 argument, got {len(expr.args)}",
+                        expr.line,
+                        expr.col,
                     )
+                self.check_expr(expr.args[0])
+                arg_t = self.inferencer.infer(expr.args[0])
+                if not isinstance(arg_t, (ListType, StrType)):
+                    raise self._err(
+                        f"len() argument must be list or str, got {arg_t}",
+                        expr.line,
+                        expr.col,
+                    )
+            else:
+                sig = self.st.lookup_function(expr.name)
+                if sig is None:
+                    raise self._err(
+                        f"Undefined function: '{expr.name}'",
+                        expr.line,
+                        expr.col,
+                        cls=SemanticError,
+                    )
+                params, _ = sig
+                if len(expr.args) != len(params):
+                    raise self._err(
+                        f"Function '{expr.name}' expected {len(params)} arguments, got {len(expr.args)}",
+                        expr.line,
+                        expr.col,
+                    )
+                for i, arg in enumerate(expr.args):
+                    self.check_expr(arg)
+                    arg_t = self.inferencer.infer(arg)
+                    if not _types_compatible(params[i], arg_t):
+                        raise self._err(
+                            f"Argument type mismatch for '{expr.name}': expected {params[i]}, got {arg_t}",
+                            arg.line,
+                            arg.col,
+                        )
 
     def check_stmt(self, stmt) -> None:
         from ..frontend.ast_nodes import (

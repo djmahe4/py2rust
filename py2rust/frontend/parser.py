@@ -10,6 +10,7 @@ from .ast_nodes import (
     VarDecl,
     Assign,
     AugAssign,
+    SubscriptAssign,
     IfStmt,
     WhileStmt,
     ForRangeStmt,
@@ -224,17 +225,36 @@ class Parser:
             )
 
         if isinstance(node, ast.Assign):
-            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            if len(node.targets) != 1:
+                raise self._err(
+                    "Only single-target assignments supported",
+                    node,
+                    UnsupportedFeatureError,
+                )
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                val = self._parse_expr(node.value)
+                return Assign(
+                    target=target.id,
+                    value=val,
+                    line=node.lineno,
+                    col=node.col_offset + 1,
+                )
+            elif isinstance(target, ast.Subscript):
+                target_expr = self._parse_expr(target.value)
+                index_expr = self._parse_expr(target.slice)
+                val = self._parse_expr(node.value)
+                return SubscriptAssign(
+                    target=target_expr,
+                    index=index_expr,
+                    value=val,
+                    line=node.lineno,
+                    col=node.col_offset + 1,
+                )
+            else:
                 raise self._err(
                     "Only simple assignments supported", node, UnsupportedFeatureError
                 )
-            val = self._parse_expr(node.value)
-            return Assign(
-                target=node.targets[0].id,
-                value=val,
-                line=node.lineno,
-                col=node.col_offset + 1,
-            )
 
         if isinstance(node, ast.AugAssign):
             if not isinstance(node.target, ast.Name):

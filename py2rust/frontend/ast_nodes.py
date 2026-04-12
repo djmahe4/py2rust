@@ -5,24 +5,35 @@ from typing import Optional, Union
 
 @dataclass(frozen=True)
 class IntType:
-    def __str__(self): return "int"
+    def __str__(self):
+        return "int"
+
 
 @dataclass(frozen=True)
 class FloatType:
-    def __str__(self): return "float"
+    def __str__(self):
+        return "float"
+
 
 @dataclass(frozen=True)
 class BoolType:
-    def __str__(self): return "bool"
+    def __str__(self):
+        return "bool"
+
 
 @dataclass(frozen=True)
 class StrType:
-    def __str__(self): return "str"
+    def __str__(self):
+        return "str"
+
 
 @dataclass(frozen=True)
 class ListType:
     element_type: object
-    def __str__(self): return f"list[{self.element_type}]"
+
+    def __str__(self):
+        return f"list[{self.element_type}]"
+
 
 AnyType = Union[IntType, FloatType, BoolType, StrType, ListType]
 
@@ -33,11 +44,13 @@ class IntLiteral:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class FloatLiteral:
     value: float
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class BoolLiteral:
@@ -45,17 +58,20 @@ class BoolLiteral:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class StrLiteral:
     value: str
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class Name:
     name: str
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class BinOp:
@@ -65,12 +81,14 @@ class BinOp:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class UnaryOp:
     op: str
     operand: object
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class Comparison:
@@ -80,6 +98,7 @@ class Comparison:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class BoolOp:
     op: str
@@ -87,11 +106,13 @@ class BoolOp:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class ListLiteral:
     elements: tuple
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class Subscript:
@@ -100,6 +121,7 @@ class Subscript:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class FunctionCall:
     name: str
@@ -107,10 +129,20 @@ class FunctionCall:
     line: int = 0
     col: int = 0
 
+
 Expr = Union[
-    IntLiteral, FloatLiteral, BoolLiteral, StrLiteral,
-    Name, BinOp, UnaryOp, Comparison, BoolOp,
-    ListLiteral, Subscript, FunctionCall,
+    IntLiteral,
+    FloatLiteral,
+    BoolLiteral,
+    StrLiteral,
+    Name,
+    BinOp,
+    UnaryOp,
+    Comparison,
+    BoolOp,
+    ListLiteral,
+    Subscript,
+    FunctionCall,
 ]
 
 
@@ -122,12 +154,14 @@ class VarDecl:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class Assign:
     target: str
     value: object
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class AugAssign:
@@ -136,6 +170,7 @@ class AugAssign:
     value: object
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class IfStmt:
@@ -146,12 +181,14 @@ class IfStmt:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class WhileStmt:
     condition: object
     body: tuple
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class ForRangeStmt:
@@ -163,11 +200,13 @@ class ForRangeStmt:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class ReturnStmt:
     value: object
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class PrintStmt:
@@ -175,7 +214,27 @@ class PrintStmt:
     line: int = 0
     col: int = 0
 
-Stmt = Union[VarDecl, Assign, AugAssign, IfStmt, WhileStmt, ForRangeStmt, ReturnStmt, PrintStmt]
+
+@dataclass(frozen=True)
+class SubscriptAssign:
+    target: object
+    index: object
+    value: object
+    line: int = 0
+    col: int = 0
+
+
+Stmt = Union[
+    VarDecl,
+    Assign,
+    AugAssign,
+    IfStmt,
+    WhileStmt,
+    ForRangeStmt,
+    ReturnStmt,
+    PrintStmt,
+    SubscriptAssign,
+]
 
 
 @dataclass(frozen=True)
@@ -185,6 +244,7 @@ class Param:
     line: int = 0
     col: int = 0
 
+
 @dataclass(frozen=True)
 class FunctionDef:
     name: str
@@ -193,6 +253,7 @@ class FunctionDef:
     body: tuple
     line: int = 0
     col: int = 0
+
 
 @dataclass(frozen=True)
 class Module:

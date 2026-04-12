@@ -26,6 +26,7 @@ from ..ir.ir_nodes import (
     IRBoolOp,
     IRListLit,
     IRSubscript,
+    IRSubscriptAssign,
     IRFunctionCall,
     IRVarDecl,
     IRAssign,
@@ -85,13 +86,19 @@ class IRBuilder:
         self.st.enter_scope(func.name)
 
         params = []
+        param_names = []
         for p in func.params:
             ir_t = _to_ir_type(p.type_annotation)
             self.st.define(p.name, p.type_annotation)
             params.append(IRParam(name=p.name, type_=ir_t))
+            param_names.append(p.name)
 
         ret_type = _to_ir_type(func.return_type)
         body = self._build_stmts(func.body, ret_type)
+
+        mutated_params = tuple(
+            n for n in param_names if self._is_param_mutated(body, n)
+        )
 
         self.st.exit_scope()
         return IRFunction(
@@ -99,7 +106,39 @@ class IRBuilder:
             params=tuple(params),
             return_type=ret_type,
             body=tuple(body),
+            mutated_params=mutated_params,
         )
+
+    def _is_param_mutated(self, stmts, param_name) -> bool:
+        """Check if a parameter is mutated anywhere in the function body."""
+        for stmt in stmts:
+            if self._stmt_mutates(stmt, param_name):
+                return True
+        return False
+
+    def _stmt_mutates(self, stmt, name) -> bool:
+        """Check if a statement mutates a variable."""
+        if isinstance(stmt, IRAssign) and stmt.target == name:
+            return True
+        if isinstance(stmt, IRAugAssign) and stmt.target == name:
+            return True
+        if isinstance(stmt, IRIf):
+            return (
+                self._any_stmt_mutates(stmt.then_body, name)
+                or any(self._any_stmt_mutates(b, name) for _, b in stmt.elif_clauses)
+                or (stmt.else_body and self._any_stmt_mutates(stmt.else_body, name))
+            )
+        if isinstance(stmt, IRWhile):
+            return self._any_stmt_mutates(stmt.body, name)
+        if isinstance(stmt, IRForRange):
+            return self._any_stmt_mutates(stmt.body, name)
+        if isinstance(stmt, IRReturn):
+            return False
+        return False
+
+    def _any_stmt_mutates(self, stmts, name) -> bool:
+        """Check if any statement in a list mutates a variable."""
+        return any(self._stmt_mutates(s, name) for s in stmts)
 
     def _build_stmts(self, stmts, return_type=None) -> list:
         return [self._build_stmt(s, return_type) for s in stmts]
@@ -195,6 +234,21 @@ class IRBuilder:
                 val_type = IntType()
             return IRPrint(value=val, value_type=_to_ir_type(val_type))
 
+        elif name == "SubscriptAssign":
+            target_val = self._build_expr(stmt.target)
+            index_val = self._build_expr(stmt.index)
+            value = self._build_expr(stmt.value)
+            target_type = self.inferencer.infer(stmt.target)
+            if isinstance(target_type, ListType):
+                value_type = _to_ir_type(target_type.element_type)
+            elif isinstance(target_type, StrType):
+                value_type = IRStrType()
+            else:
+                value_type = IRIntType()
+            return IRSubscriptAssign(
+                target=target_val, index=index_val, value=value, value_type=value_type
+            )
+
         else:
             raise self._err(f"Unknown statement type: {name}")
 
@@ -275,6 +329,10 @@ class IRBuilder:
             )
 
         elif name == "FunctionCall":
+            if expr.name == "len":
+                arg = self._build_expr(expr.args[0])
+                return IRFunctionCall(name="len", args=(arg,), return_type=IRIntType())
+
             sig = self.st.lookup_function(expr.name)
             if sig is None:
                 raise self._err(
