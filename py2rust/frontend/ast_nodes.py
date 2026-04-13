@@ -226,6 +226,13 @@ class SelfExpr:
     col: int = 0
 
 
+@dataclass(frozen=True)
+class AwaitExpr:
+    value: object
+    line: int = 0
+    col: int = 0
+
+
 Expr = Union[
     IntLiteral,
     FloatLiteral,
@@ -245,6 +252,7 @@ Expr = Union[
     NewExpr,
     SelfExpr,
     TupleLiteral,
+    AwaitExpr,
 ]
 
 
@@ -403,6 +411,7 @@ class FunctionDef:
     params: tuple
     return_type: object
     body: tuple
+    is_async: bool = False
     line: int = 0
     col: int = 0
 

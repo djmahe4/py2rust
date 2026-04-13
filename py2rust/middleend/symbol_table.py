@@ -68,8 +68,8 @@ class SymbolTable:
     def define(self, name: str, type_) -> None:
         self._current.define(name, type_)
 
-    def define_function(self, name: str, param_types: list, return_type) -> None:
-        self._functions[name] = (param_types, return_type)
+    def define_function(self, name: str, param_types: list, return_type, is_async: bool = False) -> None:
+        self._functions[name] = (param_types, return_type, is_async)
 
     def lookup(self, name: str):
         return self._current.lookup(name)

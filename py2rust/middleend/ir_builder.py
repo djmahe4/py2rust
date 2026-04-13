@@ -18,6 +18,7 @@ from ..frontend.ast_nodes import (
     MethodCall,
     SelfExpr,
     NewExpr,
+    AwaitExpr,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -75,6 +76,7 @@ from ..ir.ir_nodes import (
     IRTryExcept,
     IRRaise,
     IRClassDefinition,
+    IRAwait,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -163,7 +165,7 @@ class IRBuilder:
         )
 
     def _build_all_classes(self, items, prefix="") -> None:
-        from ..frontend.ast_nodes import ClassDef, FunctionDef
+        #from ..frontend.ast_nodes import ClassDef, FunctionDef
         for item in items:
             if isinstance(item, ClassDef):
                 full_name = f"{prefix}{item.name}"
@@ -288,6 +290,7 @@ class IRBuilder:
             name=func.name,
             params=tuple(params),
             return_type=_to_ir_type(func.return_type),
+            is_async=func.is_async,
             mutates_self=mutates
         )
 
@@ -349,6 +352,7 @@ class IRBuilder:
             return_type=ret_type,
             body=tuple(body),
             mutated_params=mutated_params,
+            is_async=func.is_async,
             is_method=True,
             defining_class=defining_class or class_name
         )
@@ -384,6 +388,7 @@ class IRBuilder:
             return_type=ret_type,
             body=tuple(body),
             mutated_params=mutated_params,
+            is_async=func.is_async,
         )
 
     def _is_param_mutated(self, stmts, param_name) -> bool:
@@ -802,7 +807,7 @@ class IRBuilder:
                 raise self._err(
                     f"Undefined function '{expr.name}'", expr.line, expr.col
                 )
-            param_types, ret_type = sig
+            param_types, ret_type, _is_async = sig
             ir_ret = _to_ir_type(ret_type)
             args = []
             for i, a in enumerate(expr.args):
@@ -877,6 +882,12 @@ class IRBuilder:
             for a in expr.args:
                 args.append(self._build_expr(a))
             return IRNew(class_name=expr.class_name, args=tuple(args))
+
+        elif name == "AwaitExpr":
+            res_type = self.inferencer.infer(expr)
+            ir_res_t = _to_ir_type(res_type) if res_type else IRIntType()
+            val = self._build_expr(expr.value)
+            return IRAwait(value=val, result_type=ir_res_t)
 
         else:
             raise self._err(f"Unknown expression type: {name}")

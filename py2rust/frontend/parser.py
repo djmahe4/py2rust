@@ -41,6 +41,7 @@ from .ast_nodes import (
     ForIter,
     TryStmt,
     RaiseStmt,
+    AwaitExpr,
     IntType,
     FloatType,
     BoolType,
@@ -123,12 +124,8 @@ class Parser:
         functions = []
         classes = []
         for node in tree.body:
-            if isinstance(node, ast.FunctionDef):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.append(self._parse_funcdef(node))
-            elif isinstance(node, ast.AsyncFunctionDef):
-                raise self._err(
-                    "Async functions are not supported", node, UnsupportedFeatureError
-                )
             elif isinstance(node, ast.ClassDef):
                 classes.append(self._parse_classdef(node))
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -147,8 +144,9 @@ class Parser:
         )
 
     def _parse_funcdef(
-        self, node: ast.FunctionDef, is_method: bool = False
+        self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef], is_method: bool = False
     ) -> FunctionDef:
+        is_async = isinstance(node, ast.AsyncFunctionDef)
         if node.decorator_list:
             raise self._err(
                 "Decorators are not supported", node, UnsupportedFeatureError
@@ -194,6 +192,7 @@ class Parser:
             params=tuple(params),
             return_type=return_type,
             body=tuple(body),
+            is_async=is_async,
             line=node.lineno,
             col=node.col_offset + 1,
         )
@@ -241,7 +240,7 @@ class Parser:
                         col=s.col_offset + 1,
                     )
                 )
-            elif isinstance(s, ast.FunctionDef):
+            elif isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 result.append(self._parse_funcdef(s, is_method=True))
             elif isinstance(s, ast.ClassDef):
                 result.append(self._parse_classdef(s))
@@ -549,7 +548,7 @@ class Parser:
                 "Unsupported expression statement", node, UnsupportedFeatureError
             )
 
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             raise self._err(
                 "Nested function definitions are not supported",
                 node,
@@ -849,6 +848,10 @@ class Parser:
             raise self._err(
                 "Ternary expressions are not supported", node, UnsupportedFeatureError
             )
+
+        if isinstance(node, ast.Await):
+            val = self._parse_expr(node.value)
+            return AwaitExpr(value=val, line=node.lineno, col=node.col_offset + 1)
 
         raise self._err(
             f"Unsupported expression: {type(node).__name__}",

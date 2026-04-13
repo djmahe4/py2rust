@@ -229,6 +229,12 @@ class IRSelf:
     pass
 
 
+@dataclass(frozen=True)
+class IRAwait:
+    value: object
+    result_type: object
+
+
 IRExpr = Union[
     IRIntLit,
     IRFloatLit,
@@ -251,6 +257,7 @@ IRExpr = Union[
     IRMethodCall,
     IRNew,
     IRSelf,
+    IRAwait,
 ]
 
 
@@ -396,6 +403,7 @@ class IRFunction:
     return_type: object
     body: tuple
     mutated_params: tuple = ()
+    is_async: bool = False
     is_method: bool = False
     defining_class: Optional[str] = None
 
@@ -405,6 +413,7 @@ class IRTraitMethod:
     name: str
     params: tuple
     return_type: object
+    is_async: bool = False
     mutates_self: bool = False
 
 

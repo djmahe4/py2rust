@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Union
 from ..frontend.ast_nodes import (
     IntType,
     FloatType,
@@ -10,6 +10,7 @@ from ..frontend.ast_nodes import (
     ClassType,
     TupleType,
     ClassDef,
+    FunctionDef,
     Name,
     BinOp,
     UnaryOp,
@@ -24,6 +25,8 @@ from ..frontend.ast_nodes import (
     MethodCall,
     SelfExpr,
     NewExpr,
+    AwaitExpr,
+    Module,
 )
 from ..utils.errors import Py2RustTypeError, SemanticError
 from .symbol_table import SymbolTable
@@ -58,6 +61,7 @@ class TypeChecker:
         self.filename = filename
         self.source_lines = source_lines or []
         self._current_return_type = None
+        self._within_async = False
 
     def _err(
         self,
@@ -91,7 +95,6 @@ class TypeChecker:
         self._collect_all_classes(module.functions)
         
         # Register top-level classes in global scope
-        from ..frontend.ast_nodes import ClassType
         for cls in module.classes:
             self.st.define(cls.name, ClassType(name=cls.name))
 
@@ -100,13 +103,12 @@ class TypeChecker:
 
         for func in module.functions:
             param_types = [p.type_annotation for p in func.params]
-            self.st.define_function(func.name, param_types, func.return_type)
+            self.st.define_function(func.name, param_types, func.return_type, func.is_async)
 
         for func in module.functions:
             self.check_function(func)
 
     def _collect_all_classes(self, items, prefix="") -> None:
-        from ..frontend.ast_nodes import ClassDef, FunctionDef
         for item in items:
             if isinstance(item, ClassDef):
                 full_name = f"{prefix}{item.name}"
@@ -137,7 +139,6 @@ class TypeChecker:
             
             elif isinstance(item, FunctionDef):
                 # Recurse into function body for nested classes
-                # Note: Functional nesting prefix could be more complex, but let's use '_' for simplicity
                 self._collect_all_classes(item.body, prefix=f"{prefix}{item.name}_")
 
     def check_class(self, cls: ClassDef, prefix="") -> None:
@@ -146,27 +147,23 @@ class TypeChecker:
         self.st.set_current_class(full_name)
         
         # Define nested items in this class scope
-        from ..frontend.ast_nodes import ClassType
         for item in cls.body:
-            if hasattr(item, "__class__"):
-                item_name = type(item).__name__
-                if item_name == "ClassDef":
-                    # Register nested class in THIS scope
-                    self.st.define(item.name, ClassType(name=f"{full_name}_{item.name}"))
+            if isinstance(item, ClassDef):
+                self.st.define(item.name, ClassType(name=f"{full_name}_{item.name}"))
         
         for item in cls.body:
-            if hasattr(item, "__class__"):
-                item_name = type(item).__name__
-                if item_name == "FunctionDef":
-                    self.check_method(full_name, item)
-                elif item_name == "ClassDef":
-                    self.check_class(item, prefix=f"{full_name}_")
+            if isinstance(item, FunctionDef):
+                self.check_method(full_name, item)
+            elif isinstance(item, ClassDef):
+                self.check_class(item, prefix=f"{full_name}_")
         self.st.set_current_class(prev_class)
 
-    def check_method(self, class_name: str, func) -> None:
+    def check_method(self, class_name: str, func: FunctionDef) -> None:
         self.st.enter_scope(f"{class_name}.{func.name}")
         old_ret = self._current_return_type
         self._current_return_type = func.return_type
+        old_async = self._within_async
+        self._within_async = func.is_async
         self.st.define("self", ClassType(name=class_name))
 
         for param in func.params:
@@ -177,14 +174,16 @@ class TypeChecker:
 
         self.st.exit_scope()
         self._current_return_type = old_ret
+        self._within_async = old_async
 
-    def check_function(self, func) -> None:
+    def check_function(self, func: FunctionDef) -> None:
         self.st.enter_scope(func.name)
         old_ret = self._current_return_type
         self._current_return_type = func.return_type
+        old_async = self._within_async
+        self._within_async = func.is_async
 
         # Define local classes in this function scope
-        from ..frontend.ast_nodes import ClassType, ClassDef
         for item in func.body:
             if isinstance(item, ClassDef):
                 self.st.define(item.name, ClassType(name=f"{self.st.current_scope.name}_{item.name}"))
@@ -197,6 +196,7 @@ class TypeChecker:
 
         self.st.exit_scope()
         self._current_return_type = old_ret
+        self._within_async = old_async
 
     def check_expr(self, expr) -> None:
         from ..frontend.ast_nodes import (
@@ -211,12 +211,14 @@ class TypeChecker:
             BoolOp,
             ListLiteral,
             DictLiteral,
+            TupleLiteral,
             Subscript,
             FunctionCall,
             AttributeExpr,
             MethodCall,
             SelfExpr,
             NewExpr,
+            AwaitExpr,
         )
 
         if isinstance(expr, Name):
@@ -227,6 +229,14 @@ class TypeChecker:
                     expr.col,
                     cls=SemanticError,
                 )
+        elif isinstance(expr, AwaitExpr):
+            if not self._within_async:
+                raise self._err(
+                    "'await' used outside async function",
+                    expr.line,
+                    expr.col,
+                )
+            self.check_expr(expr.value)
         elif isinstance(expr, AttributeExpr):
             self.check_expr(expr.value)
         elif isinstance(expr, MethodCall):
@@ -313,8 +323,6 @@ class TypeChecker:
             self.check_expr(expr.operand)
             t = self.inferencer.infer(expr.operand)
             if expr.op == "not":
-                # Optional: could enforce bool, but Python is loose.
-                # Let's just ensure it's inferrable.
                 if t is None:
                     raise self._err(
                         "Cannot infer operand type for 'not'", expr.line, expr.col
@@ -346,15 +354,12 @@ class TypeChecker:
             self.check_expr(expr.value)
             self.check_expr(expr.index)
             vt = self.inferencer.infer(expr.value)
-            # For dicts, index can be any hashable type (int, str, float, bool)
-            # For lists/strings, index must be int
             if isinstance(vt, ListType) or isinstance(vt, StrType):
                 it = self.inferencer.infer(expr.index)
                 if not isinstance(it, IntType):
                     raise self._err(
                         f"Subscript index must be int, got {it}", expr.line, expr.col
                     )
-            # For dicts, any key type is allowed (type checking happens at runtime)
         elif isinstance(expr, FunctionCall):
             if expr.name == "open":
                 if len(expr.args) < 1:
@@ -398,17 +403,15 @@ class TypeChecker:
             else:
                 sig = self.st.lookup_function(expr.name)
                 if sig is None:
-                    # Check if it's a class (could be mangled or local)
                     curr_type = self.st.lookup(expr.name)
                     if isinstance(curr_type, ClassType):
                         cls_info = self.st.lookup_class(curr_type.name)
                         if cls_info:
-                            # It's a constructor call
                             pass
                         else:
                             raise self._err(f"Unknown class: '{curr_type.name}'", expr.line, expr.col)
                     elif self.st.lookup_class(expr.name):
-                        pass  # It's a top-level or absolute class name
+                        pass
                     else:
                         raise self._err(
                             f"Undefined function: '{expr.name}'",
@@ -417,7 +420,7 @@ class TypeChecker:
                             cls=SemanticError,
                         )
                 else:
-                    params, _ = sig
+                    params, _, _ = sig
                     if len(expr.args) != len(params):
                         raise self._err(
                             f"Function '{expr.name}' expected {len(params)} arguments, got {len(expr.args)}",
@@ -466,8 +469,6 @@ class TypeChecker:
                         stmt.col,
                     )
         elif node_name == "ClassDef":
-            # Nested class in function/loop
-            # Prefix with current scope name to avoid collisions
             prefix = f"{self.st.current_scope.name}_"
             self.check_class(stmt, prefix=prefix)
 
@@ -493,13 +494,9 @@ class TypeChecker:
             self.check_expr(stmt.value)
             if stmt.target == "_":
                 return
-            
             if isinstance(stmt.target, tuple) and len(stmt.target) > 0 and stmt.target[0] == "attr":
-                 # Attribute assignment
                  return
-
             if isinstance(stmt.target, tuple):
-                # Tuple unpacking
                 val_t = self.inferencer.infer(stmt.value)
                 if isinstance(val_t, TupleType):
                     for i, t_name in enumerate(stmt.target):
@@ -508,7 +505,6 @@ class TypeChecker:
                     for t_name in stmt.target:
                         self.st.define(t_name, IntType())
                 return
-
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
             if existing is None:
@@ -524,7 +520,6 @@ class TypeChecker:
                         stmt.line,
                         stmt.col,
                     )
-
         elif isinstance(stmt, AugAssign):
             self.check_expr(stmt.value)
             existing = self.st.lookup(stmt.target)
@@ -539,7 +534,6 @@ class TypeChecker:
                     stmt.line,
                     stmt.col,
                 )
-
         elif isinstance(stmt, IfStmt):
             self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
@@ -563,7 +557,6 @@ class TypeChecker:
             if stmt.else_body:
                 for s in stmt.else_body:
                     self.check_stmt(s)
-
         elif isinstance(stmt, ForIter):
             self.check_expr(stmt.iterable)
             it_t = self.inferencer.infer(stmt.iterable)
@@ -572,11 +565,9 @@ class TypeChecker:
                 elem_t = it_t.element_type
             elif isinstance(it_t, StrType):
                 elem_t = StrType()
-            
             self.st.define(stmt.target, elem_t)
             for s in stmt.body:
                 self.check_stmt(s)
-
         elif isinstance(stmt, TryStmt):
             for s in stmt.body:
                 self.check_stmt(s)
@@ -585,11 +576,9 @@ class TypeChecker:
                     self.st.define(h_name, StrType())
                 for s in h_body:
                     self.check_stmt(s)
-
         elif isinstance(stmt, RaiseStmt):
             if stmt.value:
                 self.check_expr(stmt.value)
-
         elif isinstance(stmt, WhileStmt):
             self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
@@ -599,28 +588,22 @@ class TypeChecker:
                 )
             for s in stmt.body:
                 self.check_stmt(s)
-
         elif isinstance(stmt, ForRange):
             self.check_expr(stmt.start)
             self.check_expr(stmt.stop)
             if stmt.step:
                 self.check_expr(stmt.step)
-            
-            # Validation
             for arg_name, arg in [("start", stmt.start), ("stop", stmt.stop), ("step", stmt.step)]:
                 if arg is not None:
                     arg_t = self.inferencer.infer(arg)
                     if arg_t is not None and not isinstance(arg_t, IntType):
                         raise self._err(f"range() {arg_name} must be int, got {arg_t}", stmt.line, stmt.col)
-
             existing = self.st.lookup(stmt.target)
             if existing is not None and not isinstance(existing, IntType):
                  raise self._err(f"Cannot use '{stmt.target}' as loop target: already defined as {existing}", stmt.line, stmt.col)
-
             self.st.define(stmt.target, IntType())
             for s in stmt.body:
                 self.check_stmt(s)
-
         elif isinstance(stmt, ReturnStmt):
             if stmt.value is not None:
                 self.check_expr(stmt.value)
@@ -632,7 +615,6 @@ class TypeChecker:
                             stmt.line,
                             stmt.col,
                         )
-
         elif isinstance(stmt, PrintStmt):
             self.check_expr(stmt.value)
             inferred = self.inferencer.infer(stmt.value)

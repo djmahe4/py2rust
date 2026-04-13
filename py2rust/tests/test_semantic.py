@@ -75,7 +75,7 @@ def test_symbol_table_function():
     st.define_function("add", [IntType(), IntType()], IntType())
     sig = st.lookup_function("add")
     assert sig is not None
-    param_types, ret = sig
+    param_types, ret, is_async = sig
     assert len(param_types) == 2
     assert isinstance(ret, IntType)
 

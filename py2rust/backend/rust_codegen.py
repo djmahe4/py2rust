@@ -56,6 +56,7 @@ from ..ir.ir_nodes import (
     IRClassDefinition,
     IRTraitDefinition,
     IRTraitMethod,
+    IRAwait,
 )
 
 
@@ -295,8 +296,11 @@ class RustCodegen:
         self._uses_hashmap = False
         self._uses_file_handle = False
         self._uses_py_error = False
+        self._uses_async = False
 
     def _get_rust_type(self, t) -> str:
+        if t is None:
+            return "()"
         if isinstance(t, IRIntType):
             return "i32"
         if isinstance(t, IRFloatType):
@@ -350,6 +354,7 @@ class RustCodegen:
         self._uses_hashmap = False
         self._uses_file_handle = False
         self._uses_py_error = False
+        self._uses_async = False
 
         # Pre-pass: Generate Traits
         trait_lines = []
@@ -428,6 +433,12 @@ class RustCodegen:
             final_lines.append("")
 
         # Traits
+        if self._uses_async:
+            self._emit_async_runtime()
+            final_lines.extend(self._lines)
+            self._lines = []
+            final_lines.append("")
+
         final_lines.extend(trait_lines)
 
         if self._uses_file_handle:
@@ -493,7 +504,10 @@ class RustCodegen:
                 f"{p.name}: {self._get_rust_type(p.type_)}" for p in method.params
             )
             self_ref = "&mut self" if method.mutates_self else "&self"
-            sig = f"    fn {method.name}({self_ref}"
+            if method.is_async:
+                self._uses_async = True
+            async_kw = "async " if method.is_async else ""
+            sig = f"    {async_kw}fn {method.name}({self_ref}"
             if params_str:
                 sig += f", {params_str}"
             # Traits always return Result<T, PyError> for Python-to-Rust mapping
@@ -573,7 +587,10 @@ class RustCodegen:
             self._emit(f"fn new({params}) -> Result<Self, PyError> {{")
         else:
             ret = self._get_rust_type(func.return_type)
-            self._emit(f"fn {_mangle(func.name)}({params}) -> Result<{ret}, PyError> {{")
+            if func.is_async:
+                self._uses_async = True
+            async_kw = "async " if func.is_async else ""
+            self._emit(f"{async_kw}fn {_mangle(func.name)}({params}) -> Result<{ret}, PyError> {{")
 
         self._indent += 1
 
@@ -642,9 +659,19 @@ class RustCodegen:
         self._in_main = is_main
         if is_main:
             ret_type_str = "()"
+            if func.is_async:
+                self._uses_async = True
+                self._emit(f"fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
+                self._indent += 1
+                self._emit("py_async::block_on(async {")
+            else:
+                self._emit(f"fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
         else:
             ret_type_str = self._get_rust_type(func.return_type)
-        self._emit(f"fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
+            if func.is_async:
+                self._uses_async = True
+            async_kw = "async " if func.is_async else ""
+            self._emit(f"{async_kw}fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
 
         self._indent += 1
 
@@ -678,6 +705,10 @@ class RustCodegen:
             else:
                 dv = self._default_value(func.return_type)
                 self._emit(f"Ok({dv})")
+
+        if is_main and func.is_async:
+            self._indent -= 1
+            self._emit("})")
 
         self._indent -= 1
         self._emit("}")
@@ -1063,7 +1094,7 @@ class RustCodegen:
         elif isinstance(expr, IRCompare):
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
-            return f"({left} {expr.op} {right})"
+            return f"{left} {expr.op} {right}"
         elif isinstance(expr, IRBoolOp):
             parts = [self._gen_expr(v) for v in expr.values]
             return f"({(f' {expr.op} ').join(parts)})"
@@ -1169,7 +1200,53 @@ class RustCodegen:
         elif isinstance(expr, IRNew):
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             return f"{expr.class_name}::new({args})?"
+        elif isinstance(expr, IRAwait):
+            self._uses_async = True
+            val = self._gen_expr(expr.value)
+            # If the inner expression was fallible (had a '?'), we need to await then '?' 
+            # e.g. func().await?
+            if val.endswith("?"):
+                return f"{val[:-1]}.await?"
+            return f"{val}.await"
         return f"/* unknown expr {type(expr).__name__} */"
+
+    def _emit_async_runtime(self) -> None:
+        self._emit("mod py_async {")
+        self._indent += 1
+        self._emit("use std::future::Future;")
+        self._emit("use std::pin::Pin;")
+        self._emit("use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};")
+        self._emit("")
+        self._emit("pub fn block_on<F: Future>(mut future: F) -> F::Output {")
+        self._indent += 1
+        self._emit("let mut future = unsafe { Pin::new_unchecked(&mut future) };")
+        self._emit("let waker = unsafe { Waker::from_raw(null_waker()) };")
+        self._emit("let mut cx = Context::from_waker(&waker);")
+        self._emit("loop {")
+        self._indent += 1
+        self._emit("match future.as_mut().poll(&mut cx) {")
+        self._indent += 1
+        self._emit("Poll::Ready(val) => return val,")
+        self._emit("Poll::Pending => {}")
+        self._indent -= 1
+        self._emit("}")
+        self._indent -= 1
+        self._emit("}")
+        self._indent -= 1
+        self._emit("}")
+        self._emit("")
+        self._emit("fn null_waker() -> RawWaker {")
+        self._indent += 1
+        self._emit("fn clone(_: *const ()) -> RawWaker { null_waker() }")
+        self._emit("fn wake(_: *const ()) {}")
+        self._emit("fn wake_by_ref(_: *const ()) {}")
+        self._emit("fn drop(_: *const ()) {}")
+        self._emit("static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);")
+        self._emit("RawWaker::new(std::ptr::null(), &VTABLE)")
+        self._indent -= 1
+        self._emit("}")
+        self._indent -= 1
+        self._emit("}")
 
     def _gen_binop(self, expr) -> str:
         if expr.op == "/":

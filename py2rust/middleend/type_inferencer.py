@@ -57,6 +57,8 @@ class TypeInferencer:
                 return self._infer_method_call(expr)
             case "SelfExpr":
                 return self._infer_self(expr)
+            case "AwaitExpr":
+                return self.infer(expr.value)
         return None
 
     def _infer_binop(self, expr):
@@ -127,8 +129,8 @@ class TypeInferencer:
 
         sig = self.st.lookup_function(expr.name)
         if sig:
-            _, ret = sig
-            return ret
+            # sig: (params, return_type, is_async)
+            return sig[1]
 
         cls = self.st.lookup_class(expr.name)
         if cls:
