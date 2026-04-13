@@ -9,6 +9,17 @@ from ..frontend.ast_nodes import (
     DictType,
     ClassType,
     TupleType,
+    EnumType,
+    EnumDef,
+    MatchStmt,
+    MatchCase,
+    MatchPattern,
+    ValuePattern,
+    NamePattern,
+    ClassPattern,
+    WildcardPattern,
+    OrPattern,
+    AsPattern,
     ClassDef,
     FunctionDef,
     Name,
@@ -46,6 +57,8 @@ def _types_compatible(a, b) -> bool:
         return True
     if isinstance(a, FloatType) and isinstance(b, IntType):
         return True
+    if isinstance(a, (EnumType, ClassType)) and isinstance(b, (EnumType, ClassType)):
+        return getattr(a, "name", None) == getattr(b, "name", None)
     return False
 
 
@@ -101,6 +114,9 @@ class TypeChecker:
         for cls in module.classes:
             self.check_class(cls)
 
+        for enum_def in module.enums:
+            self.check_enum(enum_def)
+
         for func in module.functions:
             param_types = [p.type_annotation for p in func.params]
             self.st.define_function(func.name, param_types, func.return_type, func.is_async)
@@ -136,6 +152,11 @@ class TypeChecker:
                 
                 # Recurse into class body for nested classes
                 self._collect_all_classes(item.body, prefix=f"{full_name}_")
+            elif isinstance(item, EnumDef):
+                full_name = f"{prefix}{item.name}"
+                variants = {v[0]: v[1] for v in item.variants}
+                self.st.define_enum(full_name, variants)
+                self.st.define(full_name, EnumType(name=full_name))
             
             elif isinstance(item, FunctionDef):
                 # Recurse into function body for nested classes
@@ -455,6 +476,7 @@ class TypeChecker:
             TryStmt,
             RaiseStmt,
             ClassDef,
+            FunctionDef,
         )
 
         node_name = type(stmt).__name__
@@ -618,7 +640,84 @@ class TypeChecker:
         elif isinstance(stmt, PrintStmt):
             self.check_expr(stmt.value)
             inferred = self.inferencer.infer(stmt.value)
-            if inferred is None:
-                raise self._err(
-                    "Cannot infer type for expression in print()", stmt.line, stmt.col
-                )
+        elif isinstance(stmt, MatchStmt):
+            self._check_match(stmt)
+        elif isinstance(stmt, EnumDef):
+            self.check_enum(stmt)
+        elif isinstance(stmt, SubscriptAssign):
+            self.check_expr(stmt.target)
+            self.check_expr(stmt.index)
+            self.check_expr(stmt.value)
+        elif isinstance(stmt, DelStmt):
+            self.check_expr(stmt.target)
+            self.check_expr(stmt.key)
+        elif isinstance(stmt, (BreakStmt, ContinueStmt)):
+            pass
+        elif isinstance(stmt, (ClassDef, FunctionDef, ReturnStmt)):
+            pass
+        else:
+            raise self._err(
+                f"Unsupported statement type: {type(stmt).__name__}",
+                stmt.line,
+                stmt.col,
+                cls=SemanticError,
+            )
+
+    def check_enum(self, node: EnumDef) -> None:
+        variants = {}
+        for name, _ in node.variants:
+            if name in variants:
+                raise self._err(f"Duplicate enum variant: {name}", node.line, node.col, SemanticError)
+            variants[name] = None
+        self.st.define_enum(node.name, variants)
+        self.st.define(node.name, EnumType(name=node.name))
+
+    def _check_match(self, node: MatchStmt) -> None:
+        subject_type = self.inferencer.infer(node.subject)
+        if subject_type is None:
+            raise self._err("Cannot infer subject type of match statement", node.line, node.col, Py2RustTypeError)
+
+        for case in node.cases:
+            # Each case should establish its own scope if it has bindings
+            # But for simplicity we'll let patterns define in current scope for now
+            # as Python pattern matching bindings persist after match block
+            self._check_pattern(case.pattern, subject_type)
+            if case.guard:
+                guard_type = self.inferencer.infer(case.guard)
+                if not isinstance(guard_type, BoolType):
+                    raise self._err("Match guard must be a boolean expression", case.guard.line, case.guard.col, Py2RustTypeError)
+            for stmt in case.body:
+                self.check_stmt(stmt)
+
+    def _check_pattern(self, pattern: MatchPattern, subject_type: AnyType) -> None:
+        if isinstance(pattern, ValuePattern):
+            val_type = self.inferencer.infer(pattern.value)
+            if val_type and not _types_compatible(subject_type, val_type):
+                raise self._err(f"Pattern type {val_type} incompatible with subject type {subject_type}", pattern.line, pattern.col, Py2RustTypeError)
+        elif isinstance(pattern, NamePattern):
+            self.st.define(pattern.name, subject_type)
+        elif isinstance(pattern, WildcardPattern):
+            pass
+        elif isinstance(pattern, OrPattern):
+            for p in pattern.patterns:
+                self._check_pattern(p, subject_type)
+        elif isinstance(pattern, AsPattern):
+            self._check_pattern(pattern.pattern, subject_type)
+            self.st.define(pattern.name, subject_type)
+        elif isinstance(pattern, ClassPattern):
+            # Handle both class matching and enum variant matching
+            if isinstance(subject_type, EnumType):
+                enum_info = self.st.lookup_enum(subject_type.name)
+                if enum_info and pattern.class_name not in enum_info.variants:
+                     raise self._err(f"Unknown variant {pattern.class_name} for enum {subject_type.name}", pattern.line, pattern.col, SemanticError)
+            elif isinstance(subject_type, ClassType):
+                if pattern.class_name != subject_type.name:
+                     # For now, require exact class match
+                     raise self._err(f"Class pattern {pattern.class_name} does not match subject type {subject_type.name}", pattern.line, pattern.col, Py2RustTypeError)
+            else:
+                raise self._err(f"Class pattern applied to non-ADT subject type {subject_type}", pattern.line, pattern.col, Py2RustTypeError)
+            
+            for p in pattern.patterns:
+                 self._check_pattern(p, subject_type) # Recursive check for positional args?
+        else:
+            raise self._err(f"Unsupported pattern type: {type(pattern).__name__}", 0, 0, SemanticError)

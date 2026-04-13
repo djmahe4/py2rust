@@ -76,6 +76,14 @@ class ClassType:
         return self.name
 
 
+@dataclass(frozen=True)
+class EnumType:
+    name: str
+
+    def __str__(self):
+        return f"Enum({self.name})"
+
+
 AnyType = Union[
     IntType,
     FloatType,
@@ -86,6 +94,7 @@ AnyType = Union[
     TupleType,
     FileType,
     ClassType,
+    EnumType,
 ]
 
 
@@ -257,6 +266,54 @@ Expr = Union[
 
 
 @dataclass(frozen=True)
+class MatchPattern:
+    pass
+
+
+@dataclass(frozen=True)
+class ValuePattern(MatchPattern):
+    value: Expr
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class NamePattern(MatchPattern):
+    name: str
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class ClassPattern(MatchPattern):
+    class_name: str
+    patterns: tuple  # tuple of MatchPattern
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class WildcardPattern(MatchPattern):
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class OrPattern(MatchPattern):
+    patterns: tuple
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class AsPattern(MatchPattern):
+    pattern: MatchPattern
+    name: str
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
 class VarDecl:
     name: str
     type_annotation: object
@@ -377,6 +434,30 @@ class RaiseStmt:
     line: int = 0
     col: int = 0
 
+@dataclass(frozen=True)
+class MatchStmt:
+    subject: Expr
+    cases: tuple  # tuple of MatchCase
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class MatchCase:
+    pattern: MatchPattern
+    guard: Optional[Expr]
+    body: tuple
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class EnumDef:
+    name: str
+    variants: tuple  # tuple of (name, value)
+    line: int = 0
+    col: int = 0
+
 
 Stmt = Union[
     VarDecl,
@@ -394,6 +475,8 @@ Stmt = Union[
     ForIter,
     TryStmt,
     RaiseStmt,
+    MatchStmt,
+    EnumDef,
 ]
 
 
@@ -429,4 +512,5 @@ class ClassDef:
 class Module:
     functions: tuple
     classes: tuple = ()
+    enums: tuple = ()
     filename: str = "<unknown>"

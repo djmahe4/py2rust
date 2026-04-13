@@ -57,6 +57,14 @@ class IRTupleType:
 
 
 @dataclass(frozen=True)
+class IREnumType:
+    name: str
+
+    def __str__(self):
+        return self.name
+
+
+@dataclass(frozen=True)
 class IRFileType:
     def __str__(self):
         return "FileHandle"
@@ -83,6 +91,7 @@ IRType = Union[
     IRTupleType,
     IRFileType,
     IRClassType,
+    IREnumType,
 ]
 
 
@@ -235,30 +244,41 @@ class IRAwait:
     result_type: object
 
 
-IRExpr = Union[
-    IRIntLit,
-    IRFloatLit,
-    IRBoolLit,
-    IRStrLit,
-    IRName,
-    IRBinOp,
-    IRUnaryOpExpr,
-    IRCompare,
-    IRBoolOp,
-    IRListLit,
-    IRDictLit,
-    IRContains,
-    IRSubscript,
-    IRFunctionCall,
-    IRFileOpen,
-    IRFileMethod,
-    IRStructLit,
-    IRStructAccess,
-    IRMethodCall,
-    IRNew,
-    IRSelf,
-    IRAwait,
-]
+@dataclass(frozen=True)
+class IRMatchPattern:
+    pass
+
+
+@dataclass(frozen=True)
+class IRValuePattern(IRMatchPattern):
+    value: IRExpr
+
+
+@dataclass(frozen=True)
+class IRNamePattern(IRMatchPattern):
+    name: str
+
+
+@dataclass(frozen=True)
+class IRClassPattern(IRMatchPattern):
+    class_name: str
+    patterns: tuple
+
+
+@dataclass(frozen=True)
+class IRWildcardPattern(IRMatchPattern):
+    pass
+
+
+@dataclass(frozen=True)
+class IROrPattern(IRMatchPattern):
+    patterns: tuple
+
+
+@dataclass(frozen=True)
+class IRAsPattern(IRMatchPattern):
+    pattern: IRMatchPattern
+    name: str
 
 
 @dataclass(frozen=True)
@@ -367,19 +387,23 @@ class IRDictDelete:
     key: object
 
 
-IRStmt = Union[
-    IRVarDecl,
-    IRAssign,
-    IRAugAssign,
-    IRIf,
-    IRWhile,
-    IRForRange,
-    IRReturn,
-    IRPrint,
-    IRBreak,
-    IRContinue,
-    IRDictDelete,
-]
+@dataclass(frozen=True)
+class IRMatchStmt:
+    subject: IRExpr
+    cases: tuple
+
+
+@dataclass(frozen=True)
+class IRMatchCase:
+    pattern: IRMatchPattern
+    guard: Optional[IRExpr]
+    body: tuple
+
+
+@dataclass(frozen=True)
+class IREnumDef:
+    name: str
+    variants: tuple
 
 
 @dataclass(frozen=True)
@@ -437,5 +461,51 @@ class IRClassDefinition:
 class IRModule:
     functions: tuple
     classes: tuple = ()
+    enums: tuple = ()
     traits: tuple = ()
     filename: str = "<unknown>"
+
+
+IRExpr = Union[
+    IRIntLit,
+    IRFloatLit,
+    IRBoolLit,
+    IRStrLit,
+    IRName,
+    IRBinOp,
+    IRUnaryOpExpr,
+    IRCompare,
+    IRBoolOp,
+    IRListLit,
+    IRDictLit,
+    IRTupleLit,
+    IRContains,
+    IRSubscript,
+    IRFunctionCall,
+    IRFileOpen,
+    IRFileMethod,
+    IRStructLit,
+    IRStructAccess,
+    IRMethodCall,
+    IRNew,
+    IRSelf,
+    IRAwait,
+]
+
+IRStmt = Union[
+    IRVarDecl,
+    IRAssign,
+    IRAugAssign,
+    IRIf,
+    IRWhile,
+    IRForRange,
+    IRReturn,
+    IRPrint,
+    IRBreak,
+    IRContinue,
+    IRDictDelete,
+    IRMatchStmt,
+    IREnumDef,
+    IRTryExcept,
+    IRRaise,
+]

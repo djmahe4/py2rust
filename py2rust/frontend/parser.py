@@ -51,6 +51,16 @@ from .ast_nodes import (
     DictType,
     TupleType,
     ClassType,
+    EnumType,
+    MatchStmt,
+    MatchCase,
+    ValuePattern,
+    NamePattern,
+    ClassPattern,
+    WildcardPattern,
+    OrPattern,
+    AsPattern,
+    EnumDef,
 )
 
 _BINOP_MAP = {
@@ -123,11 +133,16 @@ class Parser:
 
         functions = []
         classes = []
+        enums = []
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.append(self._parse_funcdef(node))
             elif isinstance(node, ast.ClassDef):
-                classes.append(self._parse_classdef(node))
+                res = self._parse_classdef(node)
+                if isinstance(res, ClassDef):
+                    classes.append(res)
+                else:
+                    enums.append(res)
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 raise self._err(
                     "Import statements are not supported", node, UnsupportedFeatureError
@@ -140,7 +155,10 @@ class Parser:
                 )
 
         return Module(
-            functions=tuple(functions), classes=tuple(classes), filename=self.filename
+            functions=tuple(functions),
+            classes=tuple(classes),
+            enums=tuple(enums),
+            filename=self.filename,
         )
 
     def _parse_funcdef(
@@ -197,11 +215,29 @@ class Parser:
             col=node.col_offset + 1,
         )
 
-    def _parse_classdef(self, node: ast.ClassDef) -> ClassDef:
+    def _parse_classdef(self, node: ast.ClassDef) -> Union[ClassDef, EnumDef]:
         bases = []
+        is_enum = False
         for base_node in node.bases:
             if isinstance(base_node, ast.Name):
                 bases.append(base_node.id)
+                if base_node.id == "Enum":
+                    is_enum = True
+
+        if is_enum:
+            variants = []
+            for s in node.body:
+                if isinstance(s, ast.Assign) and len(s.targets) == 1:
+                    target = s.targets[0]
+                    if isinstance(target, ast.Name):
+                        val = self._parse_expr(s.value)
+                        variants.append((target.id, val))
+            return EnumDef(
+                name=node.name,
+                variants=tuple(variants),
+                line=node.lineno,
+                col=node.col_offset + 1,
+            )
 
         body = self._parse_class_body(node.body)
 
@@ -337,6 +373,9 @@ class Parser:
         if isinstance(node, ast.Return):
             val = self._parse_expr(node.value) if node.value else None
             return ReturnStmt(value=val, line=node.lineno, col=node.col_offset + 1)
+
+        if isinstance(node, ast.Match):
+            return self._parse_match(node)
 
         if isinstance(node, ast.AnnAssign):
             if node.value is None:
@@ -858,6 +897,82 @@ class Parser:
             node,
             UnsupportedFeatureError,
         )
+
+    def _parse_match(self, node: ast.Match) -> MatchStmt:
+        subject = self._parse_expr(node.subject)
+        cases = []
+        for c in node.cases:
+            pattern = self._parse_pattern(c.pattern)
+            guard = self._parse_expr(c.guard) if c.guard else None
+            body = self._parse_stmts(c.body)
+            cases.append(
+                MatchCase(
+                    pattern=pattern,
+                    guard=guard,
+                    body=tuple(body),
+                    line=c.pattern.lineno,
+                    col=c.pattern.col_offset + 1,
+                )
+            )
+        return MatchStmt(
+            subject=subject,
+            cases=tuple(cases),
+            line=node.lineno,
+            col=node.col_offset + 1,
+        )
+
+    def _parse_pattern(self, node: ast.pattern) -> MatchPattern:
+        line = getattr(node, "lineno", 0)
+        col = getattr(node, "col_offset", 0) + 1
+
+        if isinstance(node, ast.MatchValue):
+            return ValuePattern(value=self._parse_expr(node.value), line=line, col=col)
+        elif isinstance(node, ast.MatchAs):
+            if node.pattern is None:
+                if node.name is None:
+                    return WildcardPattern(line=line, col=col)
+                return NamePattern(name=node.name, line=line, col=col)
+            return AsPattern(
+                pattern=self._parse_pattern(node.pattern), name=node.name, line=line, col=col
+            )
+        elif isinstance(node, ast.MatchOr):
+            patterns = [self._parse_pattern(p) for p in node.patterns]
+            return OrPattern(patterns=tuple(patterns), line=line, col=col)
+        elif isinstance(node, ast.MatchClass):
+            if node.kwd_attrs:
+                raise self._err(
+                    "Keyword patterns in match not supported", node, UnsupportedFeatureError
+                )
+            patterns = [self._parse_pattern(p) for p in node.patterns]
+            return ClassPattern(
+                class_name=self._get_name(node.cls),
+                patterns=tuple(patterns),
+                line=line,
+                col=col,
+            )
+        elif isinstance(node, ast.MatchSingleton):
+            if node.value is None:
+                return ValuePattern(
+                    value=Name(name="None", line=line, col=col), line=line, col=col
+                )
+            return ValuePattern(
+                value=BoolLiteral(value=node.value, line=line, col=col),
+                line=line,
+                col=col,
+            )
+        else:
+            raise self._err(
+                f"Unsupported match pattern: {type(node).__name__}",
+                node,
+                UnsupportedFeatureError,
+            )
+
+    def _get_name(self, node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        elif isinstance(node, ast.Attribute):
+            return node.attr
+        return "Unknown"
 
 
 def parse(source: str, filename: str = "<unknown>") -> Module:

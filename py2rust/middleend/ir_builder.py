@@ -19,6 +19,17 @@ from ..frontend.ast_nodes import (
     SelfExpr,
     NewExpr,
     AwaitExpr,
+    EnumType,
+    EnumDef,
+    MatchStmt,
+    MatchCase,
+    MatchPattern,
+    ValuePattern,
+    NamePattern,
+    ClassPattern,
+    WildcardPattern,
+    OrPattern,
+    AsPattern,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -77,6 +88,17 @@ from ..ir.ir_nodes import (
     IRRaise,
     IRClassDefinition,
     IRAwait,
+    IREnumType,
+    IREnumDef,
+    IRMatchStmt,
+    IRMatchCase,
+    IRMatchPattern,
+    IRValuePattern,
+    IRNamePattern,
+    IRClassPattern,
+    IRWildcardPattern,
+    IROrPattern,
+    IRAsPattern,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -88,7 +110,7 @@ def _to_ir_type(t):
     if t is None:
         return IRUnitType()
     # If already an IR type, return as is
-    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType)):
+    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType)):
         return t
         
     if isinstance(t, IntType):
@@ -112,6 +134,8 @@ def _to_ir_type(t):
         return IRFileType()
     if isinstance(t, ClassType):
         return IRClassType(name=t.name, base=t.base)
+    if isinstance(t, EnumType):
+        return IREnumType(name=t.name)
     if isinstance(t, TupleType):
         return IRTupleType(element_types=tuple(_to_ir_type(et) for et in t.element_types))
     raise SemanticError(f"Unknown type: {t}")
@@ -134,6 +158,7 @@ class IRBuilder:
         self._mutating_methods: set = set()  # (class_name, method_name, arity)
         self._ir_traits: list = []
         self._ir_classes: list = []
+        self._ir_enums: list = []
 
     def _err(self, msg: str, line: int = 0, col: int = 0) -> SemanticError:
         return SemanticError(
@@ -149,10 +174,12 @@ class IRBuilder:
         checker.check_module(module)
 
         self._ir_classes = []
-        # Discovery all classes (from top-level classes AND top-level functions)
-        self._build_all_classes(module.classes)
+        self._ir_enums = []
+        # Discovery all types
+        self._build_all_types(module.classes)
+        self._build_all_types(module.enums)
         for func in module.functions:
-            self._build_all_classes([c for c in func.body if isinstance(c, ClassDef)], prefix=f"{func.name}_")
+            self._build_all_types(func.body, prefix=f"{func.name}_")
 
         ir_funcs = []
         for func in module.functions:
@@ -160,22 +187,31 @@ class IRBuilder:
         return IRModule(
             functions=tuple(ir_funcs),
             classes=tuple(self._ir_classes),
+            enums=tuple(self._ir_enums),
             traits=tuple(self._ir_traits),
             filename=module.filename,
         )
 
-    def _build_all_classes(self, items, prefix="") -> None:
-        #from ..frontend.ast_nodes import ClassDef, FunctionDef
+    def _build_all_types(self, items, prefix="") -> None:
         for item in items:
             if isinstance(item, ClassDef):
                 full_name = f"{prefix}{item.name}"
                 ir_cls = self._build_class(item, prefix=prefix)
                 self._ir_classes.append(ir_cls)
-                # Recurse into class body
-                self._build_all_classes(item.body, prefix=f"{full_name}_")
+                self._build_all_types(item.body, prefix=f"{full_name}_")
+            elif isinstance(item, EnumDef):
+                ir_enum = self._build_enum(item, prefix=prefix)
+                self._ir_enums.append(ir_enum)
             elif isinstance(item, FunctionDef):
-                # Recurse into function body
-                self._build_all_classes(item.body, prefix=f"{prefix}{item.name}_")
+                self._build_all_types(item.body, prefix=f"{prefix}{item.name}_")
+
+    def _build_enum(self, node: EnumDef, prefix="") -> IREnumDef:
+        full_name = f"{prefix}{node.name}"
+        ir_variants = []
+        for name, val_expr in node.variants:
+            ir_val = self._build_expr(val_expr) if val_expr else None
+            ir_variants.append((name, ir_val))
+        return IREnumDef(name=full_name, variants=tuple(ir_variants))
 
     def _build_class(self, cls: ClassDef, prefix="") -> IRClassDefinition:
         full_name = f"{prefix}{cls.name}"
@@ -642,12 +678,47 @@ class IRBuilder:
                 target=target_val, index=index_val, value=value, value_type=value_type
             )
 
+        elif name == "MatchStmt":
+            return self._build_match(stmt, return_type)
+
+        elif name == "EnumDef":
+            return self._build_enum(stmt)
+
         elif name in ("ClassDef", "FunctionDef"):
             # Already handled in pre-scan or special build pass
             return None
 
         else:
             raise self._err(f"Unknown statement type: {name}")
+
+    def _build_match(self, node: MatchStmt, return_type) -> IRMatchStmt:
+        subject = self._build_expr(node.subject)
+        ir_cases = []
+        for case in node.cases:
+            ir_pattern = self._build_pattern(case.pattern)
+            ir_guard = self._build_expr(case.guard) if case.guard else None
+            ir_body = tuple(self._build_stmts(case.body, return_type))
+            ir_cases.append(IRMatchCase(pattern=ir_pattern, guard=ir_guard, body=ir_body))
+        return IRMatchStmt(subject=subject, cases=tuple(ir_cases))
+
+    def _build_pattern(self, pattern: MatchPattern) -> IRMatchPattern:
+        if isinstance(pattern, ValuePattern):
+            return IRValuePattern(value=self._build_expr(pattern.value))
+        elif isinstance(pattern, NamePattern):
+            return IRNamePattern(name=pattern.name)
+        elif isinstance(pattern, WildcardPattern):
+            return IRWildcardPattern()
+        elif isinstance(pattern, OrPattern):
+            return IROrPattern(patterns=tuple(self._build_pattern(p) for p in pattern.patterns))
+        elif isinstance(pattern, AsPattern):
+            return IRAsPattern(pattern=self._build_pattern(pattern.pattern), name=pattern.name)
+        elif isinstance(pattern, ClassPattern):
+            return IRClassPattern(
+                class_name=pattern.class_name,
+                patterns=tuple(self._build_pattern(p) for p in pattern.patterns)
+            )
+        else:
+            raise self._err(f"Unsupported pattern type: {type(pattern).__name__}")
 
     def _build_expr(self, expr, expected_type=None):
         name = type(expr).__name__

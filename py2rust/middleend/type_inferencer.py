@@ -10,6 +10,8 @@ from ..frontend.ast_nodes import (
     FileType,
     ClassType,
     TupleType,
+    EnumType,
+    Name,
 )
 from .symbol_table import SymbolTable
 
@@ -138,6 +140,12 @@ class TypeInferencer:
         return None
 
     def _infer_attribute(self, expr):
+        # Handle Enum member access (e.g., Color.RED)
+        if isinstance(expr.value, Name):
+            enum_info = self.st.lookup_enum(expr.value.name)
+            if enum_info and expr.attr in enum_info.variants:
+                return EnumType(name=expr.value.name)
+
         val_type = self.infer(expr.value)
         if isinstance(val_type, ClassType):
             field_type = self.st.get_field_type(val_type.name, expr.attr)

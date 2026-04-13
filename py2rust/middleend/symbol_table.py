@@ -41,6 +41,12 @@ class ClassInfo:
         self.constructors = constructors  # {arity -> FunctionDef}
 
 
+class EnumInfo:
+    def __init__(self, name, variants):
+        self.name = name
+        self.variants = variants  # dict: variant_name -> value_expr
+
+
 class SymbolTable:
     def __init__(self):
         self._global = Scope("global")
@@ -48,6 +54,7 @@ class SymbolTable:
         self._stack: list[Scope] = [self._global]
         self._functions: dict = {}
         self._classes: dict = {}  # name -> ClassInfo
+        self._enums: dict = {}  # name -> EnumInfo
         self._current_class: Optional[str] = None
 
     @property
@@ -85,6 +92,12 @@ class SymbolTable:
 
     def lookup_class(self, name: str):
         return self._classes.get(name)
+
+    def define_enum(self, name: str, variants: dict) -> None:
+        self._enums[name] = EnumInfo(name, variants)
+
+    def lookup_enum(self, name: str) -> Optional[EnumInfo]:
+        return self._enums.get(name)
 
     def get_field_type(self, class_name: str, field: str):
         cls = self._classes.get(class_name)
