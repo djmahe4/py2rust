@@ -9,6 +9,7 @@ from ..frontend.ast_nodes import (
     DictType,
     FileType,
     ClassType,
+    TupleType,
 )
 from .symbol_table import SymbolTable
 
@@ -40,6 +41,10 @@ class TypeInferencer:
                 return BoolType()
             case "ListLiteral":
                 return self._infer_list(expr)
+            case "TupleLiteral":
+                return TupleType(
+                    element_types=tuple(self.infer(e) for e in expr.elements)
+                )
             case "DictLiteral":
                 return self._infer_dict(expr)
             case "Subscript":

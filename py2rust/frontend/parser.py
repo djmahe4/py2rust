@@ -17,7 +17,7 @@ from .ast_nodes import (
     DelStmt,
     IfStmt,
     WhileStmt,
-    ForRangeStmt,
+    ForRange,
     ReturnStmt,
     PrintStmt,
     IntLiteral,
@@ -31,12 +31,16 @@ from .ast_nodes import (
     BoolOp,
     ListLiteral,
     DictLiteral,
+    TupleLiteral,
     Subscript,
     FunctionCall,
     AttributeExpr,
     MethodCall,
     NewExpr,
     SelfExpr,
+    ForIter,
+    TryStmt,
+    RaiseStmt,
     IntType,
     FloatType,
     BoolType,
@@ -44,6 +48,7 @@ from .ast_nodes import (
     UnitType,
     ListType,
     DictType,
+    TupleType,
     ClassType,
 )
 
@@ -364,6 +369,19 @@ class Parser:
                     line=node.lineno,
                     col=node.col_offset + 1,
                 )
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                targets = []
+                for elt in target.elts:
+                    if not isinstance(elt, ast.Name):
+                        raise self._err("Only simple names allowed in unpacking", elt, UnsupportedFeatureError)
+                    targets.append(elt.id)
+                val = self._parse_expr(node.value)
+                return Assign(
+                    target=tuple(targets),
+                    value=val,
+                    line=node.lineno,
+                    col=node.col_offset + 1,
+                )
             elif isinstance(target, ast.Subscript):
                 target_expr = self._parse_expr(target.value)
                 index_expr = self._parse_expr(target.slice)
@@ -534,8 +552,26 @@ class Parser:
                 "Import statements are not supported", node, UnsupportedFeatureError
             )
         if isinstance(node, ast.Try):
-            raise self._err(
-                "try/except is not supported", node, UnsupportedFeatureError
+            body = tuple(self._parse_stmts(node.body))
+            handlers = []
+            for h in node.handlers:
+                h_type = self._parse_type(h.type) if h.type else None
+                h_name = h.name if h.name else None
+                h_body = tuple(self._parse_stmts(h.body))
+                handlers.append((h_type, h_name, h_body))
+            return TryStmt(
+                body=body,
+                handlers=tuple(handlers),
+                line=node.lineno,
+                col=node.col_offset + 1,
+            )
+
+        if isinstance(node, ast.Raise):
+            exc = self._parse_expr(node.exc) if node.exc else None
+            return RaiseStmt(
+                value=exc,
+                line=node.lineno,
+                col=node.col_offset + 1,
             )
         if isinstance(node, ast.With):
             raise self._err(
@@ -555,48 +591,48 @@ class Parser:
             )
         target = node.target.id
 
-        if not (
+        if (
             isinstance(node.iter, ast.Call)
             and isinstance(node.iter.func, ast.Name)
             and node.iter.func.id == "range"
         ):
-            raise self._err(
-                "For loop must use range(start, stop) or range(start, stop, step)",
-                node,
-                UnsupportedFeatureError,
-            )
+            args = node.iter.args
+            if len(args) == 1:
+                start = IntLiteral(value=0, line=node.lineno, col=node.col_offset + 1)
+                stop = self._parse_expr(args[0])
+                step = None
+            elif len(args) == 2:
+                start = self._parse_expr(args[0])
+                stop = self._parse_expr(args[1])
+                step = None
+            elif len(args) == 3:
+                start = self._parse_expr(args[0])
+                stop = self._parse_expr(args[1])
+                step = self._parse_expr(args[2])
+            else:
+                raise self._err(
+                    "range() must have 1, 2 or 3 arguments", node, UnsupportedFeatureError
+                )
 
-        args = node.iter.args
-        if len(args) == 1:
-            start = IntLiteral(value=0, line=node.lineno, col=node.col_offset + 1)
-            stop = self._parse_expr(args[0])
-            step = None
-        elif len(args) == 2:
-            start = self._parse_expr(args[0])
-            stop = self._parse_expr(args[1])
-            step = None
-        elif len(args) == 3:
-            start = self._parse_expr(args[0])
-            stop = self._parse_expr(args[1])
-            step = self._parse_expr(args[2])
+            return ForRange(
+                target=target,
+                start=start,
+                stop=stop,
+                step=step,
+                body=[self._parse_stmt(s) for s in node.body],
+                line=node.lineno,
+                col=node.col_offset + 1,
+            )
         else:
-            raise self._err(
-                "range() must have 2 or 3 arguments", node, UnsupportedFeatureError
+            # General iteration (for x in lst, etc.)
+            iterable = self._parse_expr(node.iter)
+            return ForIter(
+                target=target,
+                iterable=iterable,
+                body=[self._parse_stmt(s) for s in node.body],
+                line=node.lineno,
+                col=node.col_offset + 1,
             )
-
-        if node.orelse:
-            raise self._err("for/else is not supported", node, UnsupportedFeatureError)
-
-        body = tuple(self._parse_stmts(node.body))
-        return ForRangeStmt(
-            target=target,
-            start=start,
-            stop=stop,
-            step=step,
-            body=body,
-            line=node.lineno,
-            col=node.col_offset + 1,
-        )
 
     def _parse_expr(self, node):
         if isinstance(node, ast.Constant):
@@ -637,6 +673,14 @@ class Parser:
             right = self._parse_expr(node.right)
             return BinOp(
                 op=op, left=left, right=right, line=node.lineno, col=node.col_offset + 1
+            )
+
+        if isinstance(node, ast.Tuple):
+            elements = [self._parse_expr(e) for e in node.elts]
+            return TupleLiteral(
+                elements=elements,
+                line=node.lineno,
+                col=node.col_offset + 1,
             )
 
         if isinstance(node, ast.UnaryOp):

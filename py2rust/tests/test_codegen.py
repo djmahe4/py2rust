@@ -14,8 +14,8 @@ def add(x: int, y: int) -> int:
     return x + y
 """
     code = _compile(src)
-    assert "fn add(x: i32, y: i32) -> i32 {" in code
-    assert "return x + y;" in code
+    assert "fn add(x: i32, y: i32) -> Result<i32, PyError> {" in code
+    assert "return Ok((x + y));" in code
 
 
 def test_codegen_main_function():
@@ -29,13 +29,13 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "fn add(x: i32, y: i32) -> i32 {" in code
-    # Rust's main() returns () and uses return; for early exit
-    assert "fn main() -> () {" in code
-    assert "let result: i32 = add(3, 4);" in code
+    assert "fn add(x: i32, y: i32) -> Result<i32, PyError> {" in code
+    # Rust's main() returns () and uses return Ok(0); for early exit
+    assert "fn main() -> Result<i32, PyError> {" in code
+    assert "let result: i32 = add(3, 4)?;" in code
     assert 'println!("{}", result);' in code
     # return value is discarded; main exits with ()
-    assert "return;" in code
+    assert "return Ok(0);" in code
 
 
 def test_codegen_float_division():
@@ -213,5 +213,5 @@ def fib(n: int) -> int:
     return b
 """
     code = _compile(src)
-    assert "fn fib(n: i32) -> i32 {" in code
+    assert "fn fib(n: i32) -> Result<i32, PyError> {" in code
     assert "while i <= n {" in code

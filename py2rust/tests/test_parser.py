@@ -20,7 +20,7 @@ from py2rust.frontend.ast_nodes import (
     ListType,
     IfStmt,
     WhileStmt,
-    ForRangeStmt,
+    ForRange,
     PrintStmt,
     AugAssign,
 )
@@ -188,7 +188,7 @@ def f() -> int:
 """
     m = parse(src)
     stmt = m.functions[0].body[1]
-    assert isinstance(stmt, ForRangeStmt)
+    assert isinstance(stmt, ForRange)
     assert stmt.target == "i"
     assert stmt.step is None
 
@@ -203,7 +203,7 @@ def f() -> int:
 """
     m = parse(src)
     stmt = m.functions[0].body[1]
-    assert isinstance(stmt, ForRangeStmt)
+    assert isinstance(stmt, ForRange)
     assert stmt.step is not None
 
 
@@ -285,15 +285,7 @@ def f() -> int:
         parse(src)
 
 
-def test_parse_for_non_range_rejected():
-    src = """
-def f(lst: list[int]) -> int:
-    for x in lst:
-        print(x)
-    return 0
-"""
-    with pytest.raises(UnsupportedFeatureError):
-        parse(src)
+
 
 
 def test_parse_eval_rejected():

@@ -51,6 +51,15 @@ class DictType:
 
 
 @dataclass(frozen=True)
+class TupleType:
+    element_types: tuple
+
+    def __str__(self):
+        types = ", ".join(str(t) for t in self.element_types)
+        return f"tuple[{types}]"
+
+
+@dataclass(frozen=True)
 class FileType:
     def __str__(self):
         return "FileHandle"
@@ -68,7 +77,15 @@ class ClassType:
 
 
 AnyType = Union[
-    IntType, FloatType, BoolType, StrType, ListType, DictType, FileType, ClassType
+    IntType,
+    FloatType,
+    BoolType,
+    StrType,
+    ListType,
+    DictType,
+    TupleType,
+    FileType,
+    ClassType,
 ]
 
 
@@ -149,6 +166,13 @@ class ListLiteral:
 
 
 @dataclass(frozen=True)
+class TupleLiteral:
+    elements: tuple
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
 class DictLiteral:
     pairs: tuple
     line: int = 0
@@ -220,6 +244,7 @@ Expr = Union[
     MethodCall,
     NewExpr,
     SelfExpr,
+    TupleLiteral,
 ]
 
 
@@ -268,11 +293,20 @@ class WhileStmt:
 
 
 @dataclass(frozen=True)
-class ForRangeStmt:
+class ForRange:
     target: str
     start: object
     stop: object
     step: object
+    body: tuple
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class ForIter:
+    target: str
+    iterable: object
     body: tuple
     line: int = 0
     col: int = 0
@@ -321,19 +355,37 @@ class DelStmt:
     col: int = 0
 
 
+@dataclass(frozen=True)
+class TryStmt:
+    body: tuple
+    handlers: tuple  # tuple of (type, name, body)
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class RaiseStmt:
+    value: object
+    line: int = 0
+    col: int = 0
+
+
 Stmt = Union[
     VarDecl,
     Assign,
     AugAssign,
     IfStmt,
     WhileStmt,
-    ForRangeStmt,
+    ForRange,
     ReturnStmt,
     PrintStmt,
     SubscriptAssign,
     BreakStmt,
     ContinueStmt,
     DelStmt,
+    ForIter,
+    TryStmt,
+    RaiseStmt,
 ]
 
 

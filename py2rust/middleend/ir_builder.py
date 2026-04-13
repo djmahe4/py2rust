@@ -9,7 +9,10 @@ from ..frontend.ast_nodes import (
     DictType,
     FileType,
     ClassType,
+    TupleType,
     ClassDef,
+    TryStmt,
+    RaiseStmt,
     AttributeExpr,
     MethodCall,
     SelfExpr,
@@ -39,7 +42,7 @@ from ..ir.ir_nodes import (
     IRBoolOp,
     IRListLit,
     IRDictLit,
-    IRDictContains,
+    IRContains,
     IRSubscript,
     IRSubscriptAssign,
     IRFunctionCall,
@@ -52,6 +55,7 @@ from ..ir.ir_nodes import (
     IRIf,
     IRWhile,
     IRForRange,
+    IRForIter,
     IRReturn,
     IRPrint,
     IRBreak,
@@ -62,6 +66,10 @@ from ..ir.ir_nodes import (
     IRMethodCall,
     IRNew,
     IRSelf,
+    IRTupleLit,
+    IRTupleUnpack,
+    IRTryExcept,
+    IRRaise,
     IRClassDefinition,
 )
 from ..utils.errors import SemanticError
@@ -71,6 +79,12 @@ from .type_checker import TypeChecker
 
 
 def _to_ir_type(t):
+    if t is None:
+        return IRUnitType()
+    # If already an IR type, return as is
+    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRFileType, IRClassType)):
+        return t
+        
     if isinstance(t, IntType):
         return IRIntType()
     if isinstance(t, FloatType):
@@ -92,6 +106,9 @@ def _to_ir_type(t):
         return IRFileType()
     if isinstance(t, ClassType):
         return IRClassType(name=t.name, base=t.base)
+    if isinstance(t, TupleType):
+        from ..ir.ir_nodes import IRTupleType
+        return IRTupleType(element_types=tuple(_to_ir_type(et) for et in t.element_types))
     raise SemanticError(f"Unknown type: {t}")
 
 
@@ -100,6 +117,12 @@ class IRBuilder:
         self.filename = filename
         self.source_lines = source_lines or []
         self.st = SymbolTable()
+        # Add basic exception types
+        for exc in ["Exception", "ValueError", "TypeError", "KeyError", "IndexError"]:
+            self.st.define_class(exc, None, {}, {}, {})
+            # Also define as functions
+            self.st.define_function(exc, [StrType()], ClassType(exc))
+        
         self.inferencer = TypeInferencer(self.st)
         self._loop_stack: list = []
 
@@ -214,37 +237,41 @@ class IRBuilder:
                 return True
         return False
 
-    def _stmt_mutates(self, stmt, name) -> bool:
+    def _stmt_mutates(self, stmt, var_name) -> bool:
         """Check if a statement mutates a variable."""
-        if isinstance(stmt, IRAssign) and stmt.target == name:
+        if isinstance(stmt, IRAssign) and stmt.target == var_name:
             return True
-        if isinstance(stmt, IRAugAssign) and stmt.target == name:
+        if isinstance(stmt, IRAugAssign) and stmt.target == var_name:
             return True
         if isinstance(stmt, IRSubscriptAssign):
-            # If target is indexing 'name', then 'name' is mutated
+            # If target is indexing 'var_name', then 'var_name' is mutated
             if isinstance(stmt.target, IRSubscript) and isinstance(stmt.target.value, IRName):
-                if stmt.target.value.name == name:
+                if stmt.target.value.name == var_name:
                     return True
-            elif isinstance(stmt.target, IRName) and stmt.target.name == name:
+            elif isinstance(stmt.target, IRName) and stmt.target.name == var_name:
                 return True
 
         if isinstance(stmt, IRIf):
             return (
-                self._any_stmt_mutates(stmt.then_body, name)
-                or any(self._any_stmt_mutates(b, name) for _, b in stmt.elif_clauses)
-                or (stmt.else_body and self._any_stmt_mutates(stmt.else_body, name))
+                self._any_stmt_mutates(stmt.then_body, var_name)
+                or any(self._any_stmt_mutates(b, var_name) for _, b in stmt.elif_clauses)
+                or (stmt.else_body and self._any_stmt_mutates(stmt.else_body, var_name))
             )
         if isinstance(stmt, IRWhile):
-            return self._any_stmt_mutates(stmt.body, name)
+            return self._any_stmt_mutates(stmt.body, var_name)
         if isinstance(stmt, IRForRange):
-            if stmt.target == name:
+            if stmt.target == var_name:
                 return True
-            return self._any_stmt_mutates(stmt.body, name)
+            return self._any_stmt_mutates(stmt.body, var_name)
+        if isinstance(stmt, IRForIter):
+            if stmt.target == var_name:
+                return True
+            return self._any_stmt_mutates(stmt.body, var_name)
         return False
 
-    def _any_stmt_mutates(self, stmts, name) -> bool:
+    def _any_stmt_mutates(self, stmts, var_name) -> bool:
         """Check if any statement in a list mutates a variable."""
-        return any(self._stmt_mutates(s, name) for s in stmts)
+        return any(self._stmt_mutates(s, var_name) for s in stmts)
 
     def _build_stmts(self, stmts, return_type=None) -> list:
         return [self._build_stmt(s, return_type) for s in stmts]
@@ -266,10 +293,27 @@ class IRBuilder:
             return IRVarDecl(name=stmt.name, type_=ir_type, value=ir_val)
 
         elif name == "Assign":
-            if isinstance(stmt.target, tuple) and stmt.target[0] == "attr":
+            if isinstance(stmt.target, tuple) and len(stmt.target) > 0 and stmt.target[0] == "attr":
                 _, obj_name, field_name = stmt.target
                 val = self._build_expr(stmt.value)
                 return IRFieldAssign(obj=obj_name, field=field_name, value=val)
+            
+            if isinstance(stmt.target, tuple):
+                # Unpacking assignment
+                val = self._build_expr(stmt.value)
+                val_t = self.inferencer.infer(stmt.value)
+                
+                # Define each target in symbol table
+                if isinstance(val_t, TupleType):
+                    for i, target_name in enumerate(stmt.target):
+                        self.st.define(target_name, val_t.element_types[i])
+                else:
+                    # Best effort if type info is missing
+                    for target_name in stmt.target:
+                        self.st.define(target_name, IntType())
+                
+                return IRTupleUnpack(targets=stmt.target, value=val)
+
             if stmt.target == "_":
                 ir_val = self._build_expr(stmt.value)
                 return IRVarDecl(name="_", type_=IRIntType(), value=ir_val)
@@ -329,7 +373,7 @@ class IRBuilder:
             self._loop_stack.pop()
             return IRWhile(condition=cond, body=body, label=label)
 
-        elif name == "ForRangeStmt":
+        elif name == "ForRange":
             label = f"__loop_{len(self._loop_stack)}"
             self._loop_stack.append(label)
             self.st.define(stmt.target, IntType())
@@ -347,9 +391,39 @@ class IRBuilder:
                 label=label,
             )
 
+        elif name == "ForIter":
+            label = f"__loop_{len(self._loop_stack)}"
+            self._loop_stack.append(label)
+            
+            iterable_type = self.inferencer.infer(stmt.iterable)
+            ir_iter_type = _to_ir_type(iterable_type) if iterable_type else None
+            
+            # Define target in symbol table
+            elem_type = IntType() # Default
+            if isinstance(iterable_type, ListType):
+                elem_type = iterable_type.element_type
+            elif isinstance(iterable_type, DictType):
+                elem_type = iterable_type.key_type
+            elif isinstance(iterable_type, StrType):
+                elem_type = StrType()
+            
+            self.st.define(stmt.target, elem_type)
+            
+            iterable = self._build_expr(stmt.iterable)
+            body = tuple(self._build_stmts(stmt.body, return_type))
+            self._loop_stack.pop()
+            
+            return IRForIter(
+                target=stmt.target,
+                iterable=iterable,
+                iterable_type=ir_iter_type,
+                body=body,
+                label=label,
+            )
+
         elif name == "ReturnStmt":
             val = self._build_expr(stmt.value, return_type) if stmt.value else None
-            return IRReturn(value=val, result_type=return_type)
+            return IRReturn(value=val, result_type=_to_ir_type(return_type))
 
         elif name == "PrintStmt":
             val = self._build_expr(stmt.value)
@@ -357,6 +431,22 @@ class IRBuilder:
             if val_type is None:
                 val_type = IntType()
             return IRPrint(value=val, value_type=_to_ir_type(val_type))
+
+        elif name == "TryStmt":
+            body = tuple(self._build_stmt(s) for s in stmt.body)
+            handlers = []
+            for h_type, h_name, h_body in stmt.handlers:
+                # Define exception variable if present
+                if h_name:
+                    self.st.define(h_name, StrType()) # Simplifying exception objects to string for now
+                
+                ir_h_body = tuple(self._build_stmt(s) for s in h_body)
+                handlers.append((_to_ir_type(h_type) if h_type else None, h_name, ir_h_body))
+            return IRTryExcept(body=body, handlers=tuple(handlers))
+
+        elif name == "RaiseStmt":
+            val = self._build_expr(stmt.value) if stmt.value else None
+            return IRRaise(value=val)
 
         elif name == "BreakStmt":
             if not self._loop_stack:
@@ -435,22 +525,30 @@ class IRBuilder:
             left_type = self.inferencer.infer(expr.left)
             right_type = self.inferencer.infer(expr.right)
 
-            # Handle dict membership: key in dict
-            if expr.op == "in" and isinstance(right_type, DictType):
-                key = self._build_expr(expr.left)
-                dict_val = self._build_expr(expr.right)
-                return IRDictContains(key=key, dict=dict_val)
-
-            # Handle dict non-membership: key not in dict
-            if expr.op == "not_in" and isinstance(right_type, DictType):
-                key = self._build_expr(expr.left)
-                dict_val = self._build_expr(expr.right)
-                return IRUnaryOpExpr(
-                    op="not",
-                    operand=IRDictContains(key=key, dict=dict_val),
-                    result_type=IRBoolType(),
+            # Handle membership (in / not in)
+            if expr.op in ("in", "not_in"):
+                # Always build the expressions
+                left = self._build_expr(expr.left)
+                right = self._build_expr(expr.right)
+                ir_right_type = _to_ir_type(right_type) if right_type else None
+                
+                contains_node = IRContains(
+                    item=left,
+                    container=right,
+                    container_type=ir_right_type,
+                    element_type=_to_ir_type(left_type) if left_type else None
                 )
+                
+                if expr.op == "in":
+                    return contains_node
+                else:
+                    return IRUnaryOpExpr(
+                        op="not",
+                        operand=contains_node,
+                        result_type=IRBoolType()
+                    )
 
+            # Handle standard comparison
             ir_left_t = _to_ir_type(left_type) if left_type else IRIntType()
             left = self._build_expr(expr.left, ir_left_t)
             right = self._build_expr(expr.right, ir_left_t)
@@ -490,6 +588,13 @@ class IRBuilder:
             )
             return IRDictLit(pairs=pairs, key_type=ir_key_t, value_type=ir_val_t)
 
+        elif name == "TupleLiteral":
+            elements = tuple(self._build_expr(e) for e in expr.elements)
+            types = tuple(
+                _to_ir_type(self.inferencer.infer(e)) for e in expr.elements
+            )
+            return IRTupleLit(elements=elements, element_types=types)
+
         elif name == "Subscript":
             val = self._build_expr(expr.value)
             idx = self._build_expr(expr.index)
@@ -510,7 +615,7 @@ class IRBuilder:
         elif name == "FunctionCall":
             if expr.name == "len":
                 arg = self._build_expr(expr.args[0])
-                return IRFunctionCall(name="len", args=(arg,), return_type=IRIntType())
+                return IRFunctionCall(name="len", args=(arg,), return_type=IRIntType(), is_fallible=False)
 
             if expr.name == "open":
                 path = self._build_expr(expr.args[0])
@@ -533,7 +638,7 @@ class IRBuilder:
             for i, a in enumerate(expr.args):
                 pt = _to_ir_type(param_types[i]) if i < len(param_types) else None
                 args.append(self._build_expr(a, pt))
-            return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret)
+            return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret, is_fallible=True)
 
         elif name == "AttributeExpr":
             val = self._build_expr(expr.value)
@@ -566,11 +671,14 @@ class IRBuilder:
                         else:
                             ir_args.append(self._build_expr(arg))
                     ir_ret = _to_ir_type(method.return_type)
+                    non_fallible_methods = {"push", "insert", "remove", "clone", "to_string", "chars", "count", "extend", "append", "get", "next"}
+                    is_fallible = expr.method not in non_fallible_methods
                     return IRMethodCall(
                         value=val,
                         method=expr.method,
                         args=tuple(ir_args),
                         result_type=ir_ret,
+                        is_fallible=is_fallible,
                     )
             if isinstance(val_type, FileType):
                 file_val = self._build_expr(expr.value)

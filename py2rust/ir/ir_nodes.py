@@ -46,8 +46,14 @@ class IRDictType:
     key_type: object
     value_type: object
 
+
+@dataclass(frozen=True)
+class IRTupleType:
+    element_types: tuple
+
     def __str__(self):
-        return f"HashMap<{self.key_type}, {self.value_type}>"
+        types = ", ".join(str(t) for t in self.element_types)
+        return f"({types})"
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,7 @@ IRType = Union[
     IRStrType,
     IRListType,
     IRDictType,
+    IRTupleType,
     IRFileType,
     IRClassType,
 ]
@@ -133,9 +140,11 @@ class IRBoolOp:
 
 
 @dataclass(frozen=True)
-class IRDictContains:
-    key: object
-    dict: object
+class IRContains:
+    item: object
+    container: object
+    container_type: object
+    element_type: object
 
 
 @dataclass(frozen=True)
@@ -152,6 +161,12 @@ class IRDictLit:
 
 
 @dataclass(frozen=True)
+class IRTupleLit:
+    elements: tuple
+    element_types: tuple
+
+
+@dataclass(frozen=True)
 class IRSubscript:
     value: object
     index: object
@@ -164,6 +179,7 @@ class IRFunctionCall:
     name: str
     args: tuple
     return_type: object
+    is_fallible: bool = True
 
 
 @dataclass(frozen=True)
@@ -198,6 +214,7 @@ class IRMethodCall:
     method: str
     args: tuple
     result_type: object
+    is_fallible: bool = True
 
 
 @dataclass(frozen=True)
@@ -223,7 +240,7 @@ IRExpr = Union[
     IRBoolOp,
     IRListLit,
     IRDictLit,
-    IRDictContains,
+    IRContains,
     IRSubscript,
     IRFunctionCall,
     IRFileOpen,
@@ -246,6 +263,12 @@ class IRVarDecl:
 @dataclass(frozen=True)
 class IRAssign:
     target: str
+    value: object
+
+
+@dataclass(frozen=True)
+class IRTupleUnpack:
+    targets: tuple
     value: object
 
 
@@ -286,6 +309,26 @@ class IRForRange:
     step: object
     body: tuple
     label: str = ""
+
+
+@dataclass(frozen=True)
+class IRForIter:
+    target: str
+    iterable: object
+    iterable_type: object
+    body: tuple
+    label: str = ""
+
+
+@dataclass(frozen=True)
+class IRTryExcept:
+    body: tuple
+    handlers: tuple # List of (exc_type, exc_name, body)
+
+
+@dataclass(frozen=True)
+class IRRaise:
+    value: object
 
 
 @dataclass(frozen=True)

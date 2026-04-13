@@ -8,7 +8,22 @@ from ..frontend.ast_nodes import (
     ListType,
     DictType,
     ClassType,
+    TupleType,
     ClassDef,
+    Name,
+    BinOp,
+    UnaryOp,
+    Comparison,
+    BoolOp,
+    ListLiteral,
+    DictLiteral,
+    TupleLiteral,
+    Subscript,
+    FunctionCall,
+    AttributeExpr,
+    MethodCall,
+    SelfExpr,
+    NewExpr,
 )
 from ..utils.errors import Py2RustTypeError, SemanticError
 from .symbol_table import SymbolTable
@@ -274,9 +289,12 @@ class TypeChecker:
             for elem in expr.elements:
                 self.check_expr(elem)
         elif isinstance(expr, DictLiteral):
-            for key, val in expr.pairs:
-                self.check_expr(key)
-                self.check_expr(val)
+            for k, v in expr.pairs:
+                self.check_expr(k)
+                self.check_expr(v)
+        elif isinstance(expr, TupleLiteral):
+            for e in expr.elements:
+                self.check_expr(e)
         elif isinstance(expr, Subscript):
             self.check_expr(expr.value)
             self.check_expr(expr.index)
@@ -367,9 +385,14 @@ class TypeChecker:
             AugAssign,
             IfStmt,
             WhileStmt,
-            ForRangeStmt,
+            ForRange,
             ReturnStmt,
             PrintStmt,
+            BreakStmt,
+            ContinueStmt,
+            ForIter,
+            TryStmt,
+            RaiseStmt,
             FunctionCall,
             Name,
         )
@@ -396,6 +419,22 @@ class TypeChecker:
             self.check_expr(stmt.value)
             if stmt.target == "_":
                 return
+            
+            if isinstance(stmt.target, tuple) and len(stmt.target) > 0 and stmt.target[0] == "attr":
+                 # Attribute assignment
+                 return
+
+            if isinstance(stmt.target, tuple):
+                # Tuple unpacking
+                val_t = self.inferencer.infer(stmt.value)
+                if isinstance(val_t, TupleType):
+                    for i, t_name in enumerate(stmt.target):
+                        self.st.define(t_name, val_t.element_types[i])
+                else:
+                    for t_name in stmt.target:
+                        self.st.define(t_name, IntType())
+                return
+
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
             if existing is None:
@@ -430,21 +469,16 @@ class TypeChecker:
         elif isinstance(stmt, IfStmt):
             self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
-            if cond_type is None:
-                raise self._err(
-                    "Cannot infer type for 'if' condition", stmt.line, stmt.col
-                )
-            if not isinstance(cond_type, BoolType):
+            if cond_type is not None and not isinstance(cond_type, BoolType):
                 raise self._err(
                     f"'if' condition must be bool, got {cond_type}", stmt.line, stmt.col
                 )
-
             for s in stmt.then_body:
                 self.check_stmt(s)
             for cond, body in stmt.elif_clauses:
                 self.check_expr(cond)
                 elif_cond_type = self.inferencer.infer(cond)
-                if not isinstance(elif_cond_type, BoolType):
+                if elif_cond_type is not None and not isinstance(elif_cond_type, BoolType):
                     raise self._err(
                         f"'elif' condition must be bool, got {elif_cond_type}",
                         stmt.line,
@@ -456,6 +490,32 @@ class TypeChecker:
                 for s in stmt.else_body:
                     self.check_stmt(s)
 
+        elif isinstance(stmt, ForIter):
+            self.check_expr(stmt.iterable)
+            it_t = self.inferencer.infer(stmt.iterable)
+            elem_t = IntType()
+            if isinstance(it_t, ListType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, StrType):
+                elem_t = StrType()
+            
+            self.st.define(stmt.target, elem_t)
+            for s in stmt.body:
+                self.check_stmt(s)
+
+        elif isinstance(stmt, TryStmt):
+            for s in stmt.body:
+                self.check_stmt(s)
+            for _, h_name, h_body in stmt.handlers:
+                if h_name:
+                    self.st.define(h_name, StrType())
+                for s in h_body:
+                    self.check_stmt(s)
+
+        elif isinstance(stmt, RaiseStmt):
+            if stmt.value:
+                self.check_expr(stmt.value)
+
         elif isinstance(stmt, WhileStmt):
             self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
@@ -463,50 +523,25 @@ class TypeChecker:
                 raise self._err(
                     "Cannot infer type for 'while' condition", stmt.line, stmt.col
                 )
-            if not isinstance(cond_type, BoolType):
-                raise self._err(
-                    f"'while' condition must be bool, got {cond_type}",
-                    stmt.line,
-                    stmt.col,
-                )
-
             for s in stmt.body:
                 self.check_stmt(s)
 
-        elif isinstance(stmt, ForRangeStmt):
-            # Check that start, stop, and step are integers
+        elif isinstance(stmt, ForRange):
             self.check_expr(stmt.start)
-            start_type = self.inferencer.infer(stmt.start)
-            if start_type is not None and not isinstance(start_type, IntType):
-                raise self._err(
-                    f"range() start must be int, got {start_type}", stmt.line, stmt.col
-                )
-
             self.check_expr(stmt.stop)
-            stop_type = self.inferencer.infer(stmt.stop)
-            if stop_type is not None and not isinstance(stop_type, IntType):
-                raise self._err(
-                    f"range() stop must be int, got {stop_type}", stmt.line, stmt.col
-                )
-
-            if stmt.step is not None:
+            if stmt.step:
                 self.check_expr(stmt.step)
-                step_type = self.inferencer.infer(stmt.step)
-                if step_type is not None and not isinstance(step_type, IntType):
-                    raise self._err(
-                        f"range() step must be int, got {step_type}",
-                        stmt.line,
-                        stmt.col,
-                    )
+            
+            # Validation
+            for arg_name, arg in [("start", stmt.start), ("stop", stmt.stop), ("step", stmt.step)]:
+                if arg is not None:
+                    arg_t = self.inferencer.infer(arg)
+                    if arg_t is not None and not isinstance(arg_t, IntType):
+                        raise self._err(f"range() {arg_name} must be int, got {arg_t}", stmt.line, stmt.col)
 
-            # Ensure loop target is consistent with IntType
             existing = self.st.lookup(stmt.target)
             if existing is not None and not isinstance(existing, IntType):
-                raise self._err(
-                    f"Cannot use '{stmt.target}' as loop target: already defined as {existing}",
-                    stmt.line,
-                    stmt.col,
-                )
+                 raise self._err(f"Cannot use '{stmt.target}' as loop target: already defined as {existing}", stmt.line, stmt.col)
 
             self.st.define(stmt.target, IntType())
             for s in stmt.body:

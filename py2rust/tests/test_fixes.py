@@ -300,7 +300,7 @@ def main() -> int:
 """
     code = _compile(src)
     # Discard should emit just the expression (not let _ = ...)
-    assert "helper(42);" in code
+    assert "helper(42)?;" in code
     # _ is a discard, should NOT have a let declaration
     assert "let _: i32;" not in code
     assert "let mut _: i32;" not in code
@@ -353,7 +353,7 @@ def main() -> int:
 """
     code = _compile(src)
     # get_list() should be assigned to __coll exactly once
-    assert "let __coll = &(get_list());" in code
+    assert "let __coll = &(get_list()?);" in code
 
 
 def test_mixed_arithmetic_casting():
@@ -395,7 +395,7 @@ def main() -> int:
     assert "let mut _: i32;" not in code
     assert "let _: i32;" not in code
     # Discards are emitted as just the expression
-    assert "helper(42);" in code
+    assert "helper(42)?;" in code
 
 
 def test_print_validation_undefined_var():
@@ -488,15 +488,13 @@ def main() -> int:
 
 
 def test_dict_literal_creation():
-    src = """
-def main() -> int:
-    d: dict[str, int] = {"a": 1, "b": 2}
-    return 0
+    src = """def main() -> int:
+        d: dict[str, int] = {"a": 1, "b": 2}
+        return 0
 """
     code = _compile(src)
     assert "HashMap<String, i32>" in code
-    assert '__d.insert("a".to_string(), 1);' in code
-    assert '__d.insert("b".to_string(), 2);' in code
+    assert 'HashMap::from([("a".to_string(), 1), ("b".to_string(), 2)])' in code
 
 
 def test_dict_empty_literal():
@@ -596,7 +594,7 @@ def main() -> int:
 """
     code = _compile(src)
     assert "HashMap<i32, String>" in code
-    assert '__d.insert(1, "one".to_string());' in code
+    assert 'HashMap::from([(1, "one".to_string()), (2, "two".to_string())])' in code
 
 
 def test_dict_full_crud():
@@ -812,7 +810,7 @@ def main() -> int:
 """
     code = _compile(src)
     assert "Vec<i32>" in code
-    assert "clone();" in code or "extend(" in code
+    assert "clone)?;" in code or "extend(" in code
 
 
 def test_break_in_while():
@@ -899,8 +897,8 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "foo();" in code
-    assert "fn foo() -> i32 {" in code
+    assert "foo()?;" in code
+    assert "fn foo() -> Result<i32, PyError> {" in code
 
 
 def test_mixed_type_operations():
@@ -1229,8 +1227,8 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "fn main() -> () {" in code
-    assert "return;" in code
+    assert "fn main() -> Result<i32, PyError> {" in code
+    assert "return Ok(0);" in code
 
 
 def test_main_discard_return_value():
@@ -1244,7 +1242,7 @@ def main() -> int:
     return result
 """
     code = _compile(src)
-    assert "fn main() -> () {" in code
+    assert "fn main() -> Result<i32, PyError> {" in code
 
 
 def test_discard_function_call():
@@ -1258,7 +1256,7 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert 'log("hello".to_string());' in code
+    assert 'log("hello".to_string())?;' in code
     assert "let mut _" not in code
     assert "let _" not in code
 
@@ -1299,7 +1297,7 @@ def main() -> int:
 """
     code = _compile(src)
     # Constructor is static, so it doesn't have &self
-    assert "fn new(x: i32, y: i32) -> Self {" in code
+    assert "fn new(x: i32, y: i32) -> Result<Self, String> {" in code
 
 
 def test_list_concat_clones_right():
