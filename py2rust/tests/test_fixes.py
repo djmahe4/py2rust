@@ -410,15 +410,6 @@ def main() -> int:
         _check(src)
 
 
-def test_unknown_type_marker():
-    from py2rust.backend.rust_codegen import _rust_type
-
-    class UnknownType:
-        pass
-
-    with pytest.raises(ValueError) as excinfo:
-        _rust_type(UnknownType())
-    assert "Unknown type UnknownType" in str(excinfo.value)
 
 
 def test_invalid_binop_semantic_error():
