@@ -28,6 +28,12 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+pub trait PointTrait {
+    fn get_x(&self) -> Result<i32, PyError>;
+    fn get_y(&self) -> Result<i32, PyError>;
+    fn distance_to(&self, other_x: i32) -> Result<i32, PyError>;
+}
+
 #[derive(Clone, Debug)]
 struct Point {
     x: i32,
@@ -35,6 +41,12 @@ struct Point {
 }
 
 impl Point {
+    fn new(x: i32, y: i32) -> Result<Self, PyError> {
+        Ok(Self { x: x, y: y })
+    }
+}
+
+impl PointTrait for Point {
     fn get_x(&self) -> Result<i32, PyError> {
         return Ok(self.x);
     }
@@ -45,10 +57,8 @@ impl Point {
         let dx: i32 = (self.x - other_x);
         return Ok(dx);
     }
-    fn new(x: i32, y: i32) -> Result<Self, PyError> {
-        Ok(Self { x: x, y: y })
-    }
 }
+
 
 fn main() -> Result<(), PyError> {
     let p: Point = Point::new(3, 4)?;

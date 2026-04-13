@@ -28,19 +28,30 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+pub trait AnimalTrait {
+    fn speak(&self) -> Result<i32, PyError>;
+}
+
+pub trait DogTrait: AnimalTrait {
+}
+
 #[derive(Clone, Debug)]
 struct Animal {
     name: String,
 }
 
 impl Animal {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(0);
-    }
     fn new(name: String) -> Result<Self, PyError> {
         Ok(Self { name: name })
     }
 }
+
+impl AnimalTrait for Animal {
+    fn speak(&self) -> Result<i32, PyError> {
+        return Ok(0);
+    }
+}
+
 
 #[derive(Clone, Debug)]
 struct Dog {
@@ -48,13 +59,20 @@ struct Dog {
 }
 
 impl Dog {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(42);
-    }
     fn new(name: String) -> Result<Self, PyError> {
         Ok(Self { name: name })
     }
 }
+
+impl DogTrait for Dog {
+}
+
+impl AnimalTrait for Dog {
+    fn speak(&self) -> Result<i32, PyError> {
+        return Ok(42);
+    }
+}
+
 
 fn main() -> Result<(), PyError> {
     let d: Dog = Dog::new("Buddy".to_string())?;

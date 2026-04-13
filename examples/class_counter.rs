@@ -28,12 +28,23 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+pub trait CounterTrait {
+    fn increment(&mut self) -> Result<(), PyError>;
+    fn get_count(&self) -> Result<i32, PyError>;
+}
+
 #[derive(Clone, Debug)]
 struct Counter {
     count: i32,
 }
 
 impl Counter {
+    fn new() -> Result<Self, PyError> {
+        Ok(Self { count: 0 })
+    }
+}
+
+impl CounterTrait for Counter {
     fn increment(&mut self) -> Result<(), PyError> {
         self.count = self.count + 1;
         Ok(())
@@ -41,10 +52,8 @@ impl Counter {
     fn get_count(&self) -> Result<i32, PyError> {
         return Ok(self.count);
     }
-    fn new() -> Result<Self, PyError> {
-        Ok(Self { count: 0 })
-    }
 }
+
 
 fn main() -> Result<(), PyError> {
     let mut c: Counter = Counter::new()?;

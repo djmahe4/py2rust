@@ -257,6 +257,17 @@ class IRBuilder:
         )
         self._ir_traits.append(trait_def)
 
+        # 4. Ensure at least one constructor exists (default __init__)
+        if not all_constructors:
+            all_constructors[0] = IRFunction(
+                name="__init__",
+                params=(),
+                return_type=IRUnitType(),
+                body=(),
+                is_method=True,
+                defining_class=full_name
+            )
+
         return IRClassDefinition(
             name=full_name,
             bases=cls.bases,
