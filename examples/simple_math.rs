@@ -50,7 +50,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn tell(&self) -> std::io::Result<u64> {
+    fn tell(&mut self) -> std::io::Result<u64> {
         self.file.stream_position()
     }
 
@@ -68,10 +68,15 @@ fn multiply(x: i32, y: i32) -> i32 {
 }
 
 fn main() -> () {
-    let a = 10;
-    let b = 5;
-    let sum_result = add(a, b);
-    let product = multiply(a, b);
+    let mut a: i32 = 0;
+    let mut b: i32 = 0;
+    let sum_result: i32 = 0;
+    let product: i32 = 0;
+
+    a = 10;
+    b = 5;
+    sum_result = add(a, b);
+    product = multiply(a, b);
     println!("{}", sum_result);
     println!("{}", product);
     return;

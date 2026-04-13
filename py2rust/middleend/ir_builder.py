@@ -220,6 +220,14 @@ class IRBuilder:
             return True
         if isinstance(stmt, IRAugAssign) and stmt.target == name:
             return True
+        if isinstance(stmt, IRSubscriptAssign):
+            # If target is indexing 'name', then 'name' is mutated
+            if isinstance(stmt.target, IRSubscript) and isinstance(stmt.target.value, IRName):
+                if stmt.target.value.name == name:
+                    return True
+            elif isinstance(stmt.target, IRName) and stmt.target.name == name:
+                return True
+
         if isinstance(stmt, IRIf):
             return (
                 self._any_stmt_mutates(stmt.then_body, name)
@@ -229,9 +237,9 @@ class IRBuilder:
         if isinstance(stmt, IRWhile):
             return self._any_stmt_mutates(stmt.body, name)
         if isinstance(stmt, IRForRange):
+            if stmt.target == name:
+                return True
             return self._any_stmt_mutates(stmt.body, name)
-        if isinstance(stmt, IRReturn):
-            return False
         return False
 
     def _any_stmt_mutates(self, stmts, name) -> bool:

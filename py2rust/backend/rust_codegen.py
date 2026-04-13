@@ -123,6 +123,53 @@ def _mangle(name: str) -> str:
     return name + "_" if name in _RUST_KEYWORDS else name
 
 
+def _get_var_name(expr) -> str | None:
+    """Extract variable name from an expression."""
+    if isinstance(expr, IRName):
+        return expr.name
+    if isinstance(expr, IRSelf):
+        return "self"
+    return None
+
+
+def _collect_vars_from_expr(expr) -> set:
+    """Collect all variable names used in an expression."""
+    vars: set = set()
+    if isinstance(expr, IRName):
+        vars.add(expr.name)
+    elif isinstance(expr, IRFileMethod):
+        name = _get_var_name(expr.file)
+        if name:
+            vars.add(name)
+    elif isinstance(expr, IRMethodCall):
+        name = _get_var_name(expr.value)
+        if name:
+            vars.add(name)
+    elif isinstance(expr, IRStructAccess):
+        name = _get_var_name(expr.value)
+        if name:
+            vars.add(name)
+    elif isinstance(expr, IRFileOpen):
+        pass  # New variable, handled separately
+    elif isinstance(expr, IRNew):
+        pass  # New variable, handled separately
+    # Recursively check nested expressions
+    for attr in dir(expr):
+        if attr.startswith("_"):
+            continue
+        try:
+            val = getattr(expr, attr)
+            if isinstance(val, (list, tuple)):
+                for item in val:
+                    if hasattr(item, "name") or isinstance(item, IRBinOp):
+                        vars |= _collect_vars_from_expr(item)
+            elif hasattr(val, "name") or isinstance(val, IRBinOp):
+                vars |= _collect_vars_from_expr(val)
+        except:
+            pass
+    return vars
+
+
 def _collect_mutated_vars(stmts) -> set:
     """Recursively collect all variable names that are reassigned anywhere in the function."""
     mutated: set = set()
@@ -138,6 +185,9 @@ def _collect_mutated_vars(stmts) -> set:
                 mutated.add(stmt.target.value.name)
             elif isinstance(stmt.target, IRName):
                 mutated.add(stmt.target.name)
+        elif isinstance(stmt, IRFieldAssign):
+            # If a field is assigned, self needs &mut
+            mutated.add("self")
         elif isinstance(stmt, IRIf):
             mutated |= _collect_mutated_vars(stmt.then_body)
             for _, elif_body in stmt.elif_clauses:
@@ -149,49 +199,50 @@ def _collect_mutated_vars(stmts) -> set:
         elif isinstance(stmt, IRForRange):
             mutated.add(stmt.target)  # Loops always assign
             mutated |= _collect_mutated_vars(stmt.body)
+        elif isinstance(stmt, IRVarDecl):
+            # Check if the value is a method call that mutates self (e.g., file.write())
+            vars_used = _collect_vars_from_expr(stmt.value)
+            # All variables used in method calls need to be mutable
+            mutated |= vars_used
     return mutated
 
 
-def _collect_decls(stmts) -> dict[str, object]:
-    """Collect variable declarations that need function-level pre-declaration."""
+def _collect_decls(stmts) -> tuple[dict[str, object], set[str]]:
+    """Collect variable declarations for type tracking and pre-declaration."""
     decls: dict[str, object] = {}
-    for stmt in stmts:
-        if isinstance(stmt, IRVarDecl):
-            decls[stmt.name] = stmt.type_
-        elif isinstance(stmt, IRIf):
-            decls.update(_collect_decls(stmt.then_body))
-            for _, elif_body in stmt.elif_clauses:
-                decls.update(_collect_decls(elif_body))
-            if stmt.else_body:
-                decls.update(_collect_decls(stmt.else_body))
-        elif isinstance(stmt, IRWhile):
-            decls.update(_collect_decls(stmt.body))
-        elif isinstance(stmt, IRForRange):
-            decls[stmt.target] = IRIntType()
-    return decls
+    pre_declare: set[str] = set()
+
+    def _recurse(body):
+        for stmt in body:
+            if isinstance(stmt, IRVarDecl):
+                decls[stmt.name] = stmt.type_
+            elif isinstance(stmt, IRForRange):
+                decls[stmt.target] = IRIntType()
+                pre_declare.add(stmt.target)
+                _recurse(stmt.body)
+            elif isinstance(stmt, IRWhile):
+                pre_declare.add("__dummy")  # Force pre-declaration block if needed
+                _recurse(stmt.body)
+            elif isinstance(stmt, IRIf):
+                _recurse(stmt.then_body)
+                for _, elif_body in stmt.elif_clauses:
+                    _recurse(elif_body)
+                if stmt.else_body:
+                    _recurse(stmt.else_body)
+
+    _recurse(stmts)
+    return decls, pre_declare
 
 
 def _vars_declared_in_loop(stmts) -> set:
-    """Collect variable names that are declared inside while loops (not for loops).
+    """Collect variable names that are declared inside while loops.
 
-    For loop targets need to be accessible after the loop (Python semantics),
-    so they're handled separately in _collect_decls.
+    Variables declared inside while loops are now pre-declared at function level
+    with default values to match Python semantics where variables have function scope.
+    This function is kept for compatibility but returns an empty set since we no longer
+    exclude any variables from pre-declaration.
     """
-    loop_vars: set = set()
-    for stmt in stmts:
-        if isinstance(stmt, IRVarDecl):
-            loop_vars.add(stmt.name)
-        elif isinstance(stmt, IRForRange):
-            loop_vars |= _vars_declared_in_loop(stmt.body)
-        elif isinstance(stmt, IRWhile):
-            loop_vars |= _vars_declared_in_loop(stmt.body)
-        elif isinstance(stmt, IRIf):
-            loop_vars |= _vars_declared_in_loop(stmt.then_body)
-            for _, elif_body in stmt.elif_clauses:
-                loop_vars |= _vars_declared_in_loop(elif_body)
-            if stmt.else_body:
-                loop_vars |= _vars_declared_in_loop(stmt.else_body)
-    return loop_vars
+    return set()  # All variables are pre-declared at function level now
 
 
 class RustCodegen:
@@ -303,6 +354,7 @@ class RustCodegen:
         return "\n".join(self._lines) + "\n"
 
     def _gen_class(self, cls: IRClassDefinition) -> None:
+        self._emit(f"#[derive(Clone, Debug)]")
         self._emit(f"struct {cls.name} {{")
         self._indent += 1
         for field_name, field_type in cls.fields:
@@ -321,9 +373,14 @@ class RustCodegen:
 
     def _gen_method(self, func: IRFunction, is_init: bool = False) -> None:
         self._mutated_vars = _collect_mutated_vars(func.body)
-        decls = _collect_decls(func.body)
+        decls, pre_declare = _collect_decls(func.body)
 
-        param_strs = [] if is_init else ["&self"]
+        if is_init:
+            param_strs = []
+        elif "self" in self._mutated_vars:
+            param_strs = ["&mut self"]
+        else:
+            param_strs = ["&self"]
         for p in func.params:
             mut = "mut " if p.name in func.mutated_params else ""
             param_strs.append(f"{mut}{_mangle(p.name)}: {_rust_type(p.type_)}")
@@ -338,18 +395,16 @@ class RustCodegen:
         self._indent += 1
 
         self._decl_types = dict(decls)
-        self._loop_vars = _vars_declared_in_loop(func.body)
+        # Note: We no longer exclude loop vars - all variables are pre-declared at function level
 
         for name, type_ in decls.items():
             if name == "_":
-                continue
-            if name in self._loop_vars:
                 continue
             mut = "mut " if name in self._mutated_vars else ""
             default = self._default_value(type_)
             self._emit(f"let {mut}{_mangle(name)}: {_rust_type(type_)} = {default};")
 
-        if any(name not in self._loop_vars for name in decls):
+        if decls:
             self._emit_blank()
 
         if is_init:
@@ -380,12 +435,12 @@ class RustCodegen:
 
     def _gen_function(self, func: IRFunction) -> None:
         self._mutated_vars = _collect_mutated_vars(func.body)
-        decls = _collect_decls(func.body)
+        decls, pre_declare = _collect_decls(func.body)
 
         param_strs = []
         for p in func.params:
             mut = "mut " if p.name in func.mutated_params else ""
-            param_strs.append(f"{mut}{p.name}: {_rust_type(p.type_)}")
+            param_strs.append(f"{mut}{_mangle(p.name)}: {_rust_type(p.type_)}")
         params = ", ".join(param_strs)
 
         is_main = func.name == "main"
@@ -396,18 +451,23 @@ class RustCodegen:
         self._indent += 1
 
         self._decl_types = dict(decls)
-        self._loop_vars = _vars_declared_in_loop(func.body)
+        # We need to track which variables have been pre-declared to avoid double-declaring
+        self._pre_declared = set()
 
-        for name, type_ in decls.items():
+        # Pre-declare only for/while loop targets
+        for name in pre_declare:
             if name == "_":
                 continue
-            if name in self._loop_vars:
+            if name not in self._decl_types:
                 continue
+            type_ = self._decl_types[name]
             mut = "mut " if name in self._mutated_vars else ""
+            # For now, keep default values for safety (Python dynamic initialization)
             default = self._default_value(type_)
             self._emit(f"let {mut}{_mangle(name)}: {_rust_type(type_)} = {default};")
+            self._pre_declared.add(name)
 
-        if any(name not in self._loop_vars for name in decls):
+        if self._pre_declared:
             self._emit_blank()
 
         self._at_top_level = True
@@ -430,19 +490,31 @@ class RustCodegen:
             return f"Vec::<{_rust_type(ir_type.element_type)}>::new()"
         if isinstance(ir_type, IRDictType):
             return f"HashMap::<{_rust_type(ir_type.key_type)}, {_rust_type(ir_type.value_type)}>::new()"
+        if isinstance(ir_type, IRClassType):
+            return f"{_rust_type(ir_type)}::new()"
+        if isinstance(ir_type, IRFileType):
+            return 'FileHandle::open("", "r").unwrap()'
         return "0"
 
     def _gen_stmt(self, stmt) -> None:
         if isinstance(stmt, IRVarDecl):
+            # Skip if variable was pre-declared at function level
+            if stmt.name in self._pre_declared:
+                # Still need to perform the assignment if there is one
+                val = self._strip_parens(self._gen_expr(stmt.value, stmt.type_))
+                self._emit(f"{_mangle(stmt.name)} = {val};")
+                return
             val = self._strip_parens(self._gen_expr(stmt.value, stmt.type_))
             if stmt.name == "_":
                 self._emit(f"{val};")
-            elif stmt.name in self._decl_types and stmt.name not in self._loop_vars:
-                self._emit(f"{_mangle(stmt.name)} = {val};")
             elif stmt.name in self._mutated_vars:
-                self._emit(f"let mut {_mangle(stmt.name)} = {val};")
+                self._emit(
+                    f"let mut {_mangle(stmt.name)}: {_rust_type(stmt.type_)} = {val};"
+                )
             else:
-                self._emit(f"let {_mangle(stmt.name)} = {val};")
+                self._emit(
+                    f"let {_mangle(stmt.name)}: {_rust_type(stmt.type_)} = {val};"
+                )
 
         elif isinstance(stmt, IRAssign):
             target_type = self._decl_types.get(stmt.target)
@@ -508,8 +580,26 @@ class RustCodegen:
             stop = self._gen_expr(stmt.stop)
             step_is_one = stmt.step is None
 
+            # Use a unique internal loop variable to avoid shadowing outer scope
+            loop_var = f"__i_{id(stmt)}"
+
             if step_is_one:
-                self._emit(f"for {stmt.target} in {start}..{stop} {{")
+                # Wrap in a block so the inner loop variable doesn't leak
+                self._emit("{")
+                self._indent += 1
+                # DO NOT redeclare the target here if it already exists in parent scope
+                self._emit(f"for {loop_var} in {start}..{stop} {{")
+                self._indent += 1
+                self._emit(f"{_mangle(stmt.target)} = {loop_var};")
+                old_top_level = self._at_top_level
+                self._at_top_level = False
+                for s in stmt.body:
+                    self._gen_stmt(s)
+                self._at_top_level = old_top_level
+                self._indent -= 1
+                self._emit("}")
+                self._indent -= 1
+                self._emit("}")
             else:
                 step = self._gen_expr(stmt.step)
                 label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
@@ -517,9 +607,10 @@ class RustCodegen:
                 self._indent += 1
                 self._emit(f"let __stop = {stop};")
                 self._emit(f"let __step = {step};")
-                self._emit(f"{stmt.target} = {start};")
+                # Update target directly instead of redeclaring
+                self._emit(f"{_mangle(stmt.target)} = {start};")
                 self._emit(
-                    f"'{label}: while if (__step) > 0 {{ {stmt.target} < (__stop) }} else {{ {stmt.target} > (__stop) }} {{"
+                    f"'{label}: while if (__step) > 0 {{ {_mangle(stmt.target)} < (__stop) }} else {{ {_mangle(stmt.target)} > (__stop) }} {{"
                 )
                 self._indent += 1
                 old_top_level = self._at_top_level
@@ -527,21 +618,11 @@ class RustCodegen:
                 for s in stmt.body:
                     self._gen_stmt(s)
                 self._at_top_level = old_top_level
-                self._emit(f"{stmt.target} += __step;")
+                self._emit(f"{_mangle(stmt.target)} += __step;")
                 self._indent -= 1
                 self._emit("}")
                 self._indent -= 1
                 self._emit("}")
-                return
-
-            self._indent += 1
-            old_top_level = self._at_top_level
-            self._at_top_level = False
-            for s in stmt.body:
-                self._gen_stmt(s)
-            self._at_top_level = old_top_level
-            self._indent -= 1
-            self._emit("}")
 
         elif isinstance(stmt, IRReturn):
             if stmt.value is None or self._in_main:
@@ -595,14 +676,13 @@ class RustCodegen:
                     return
 
                 if isinstance(stmt.target.value_type, IRStrType):
-                    len_expr = f"{target_val}.chars().count() as i32"
-                else:
-                    len_expr = f"{target_val}.len() as i32"
-                index_expr = f"(if {idx_raw} < 0 {{ {idx_raw} + {len_expr} }} else {{ {idx_raw} }}) as usize"
-
-                if isinstance(stmt.value_type, IRStrType):
+                    # For string replacement, we need byte indices for replace_range
+                    # Convert character index to byte index
+                    adjusted_idx = f"(if {idx_raw} < 0 {{ {idx_raw} + {target_val}.chars().count() as i32 }} else {{ {idx_raw} }})"
+                    byte_start = f"{target_val}.chars().take({adjusted_idx} as usize).map(|c| c.len_utf8()).sum::<usize>()"
+                    byte_end = f"{target_val}.chars().take(({adjusted_idx} + 1) as usize).map(|c| c.len_utf8()).sum::<usize>()"
                     self._emit(
-                        f"{target_val}.replace_range({index_expr}..={index_expr}, &{value_val});"
+                        f"{target_val}.replace_range({byte_start}..{byte_end}, &{value_val});"
                     )
                 else:
                     self._emit(f"{target_val}[{index_expr}] = {value_val};")
@@ -624,6 +704,10 @@ class RustCodegen:
                     self._emit(f"{target}[{index}] = {value};")
                 if isinstance(stmt.target, IRName):
                     self._mutated_vars.add(stmt.target.name)
+
+        elif isinstance(stmt, IRExpr):
+            expr = self._gen_expr(stmt)
+            self._emit(f"{expr};")
 
         else:
             raise ValueError(f"Unsupported IR statement: {type(stmt).__name__}")

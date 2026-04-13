@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write, Seek, SeekFrom};
 
+#[derive(Clone, Debug)]
 struct Counter {
     count: i32,
 }
@@ -66,7 +67,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn tell(&self) -> std::io::Result<u64> {
+    fn tell(&mut self) -> std::io::Result<u64> {
         self.file.stream_position()
     }
 
@@ -76,11 +77,14 @@ impl FileHandle {
 }
 
 fn main() -> () {
-    let c = Counter::new();
+    let mut c: Counter = 0;
+    let result: i32 = 0;
+
+    c = Counter::new();
     c.increment();
     c.increment();
     c.increment();
-    let result = c.get_count();
+    result = c.get_count();
     println!("{}", result);
     return;
 }

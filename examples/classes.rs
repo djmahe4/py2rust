@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write, Seek, SeekFrom};
 
+#[derive(Clone, Debug)]
 struct Point {
     x: i32,
     y: i32,
@@ -15,7 +16,9 @@ impl Point {
         return self.y;
     }
     fn distance_to(&self, other_x: i32) -> i32 {
-        let dx = self.x - other_x;
+        let dx: i32 = 0;
+
+        dx = self.x - other_x;
         return dx;
     }
     fn new(x: i32, y: i32) -> Self {
@@ -71,7 +74,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn tell(&self) -> std::io::Result<u64> {
+    fn tell(&mut self) -> std::io::Result<u64> {
         self.file.stream_position()
     }
 
@@ -81,9 +84,14 @@ impl FileHandle {
 }
 
 fn main() -> () {
-    let p = Point::new(3, 4);
-    let x = p.get_x();
-    let y = p.get_y();
-    let d = p.distance_to(0);
+    let mut p: Point = 0;
+    let x: i32 = 0;
+    let y: i32 = 0;
+    let d: i32 = 0;
+
+    p = Point::new(3, 4);
+    x = p.get_x();
+    y = p.get_y();
+    d = p.distance_to(0);
     return;
 }

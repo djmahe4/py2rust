@@ -50,7 +50,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn tell(&self) -> std::io::Result<u64> {
+    fn tell(&mut self) -> std::io::Result<u64> {
         self.file.stream_position()
     }
 
@@ -60,7 +60,9 @@ impl FileHandle {
 }
 
 fn main() -> () {
-    let f = FileHandle::open("test.txt".to_string(), "w".to_string());
+    let mut f: FileHandle = 0;
+
+    f = FileHandle::open("test.txt".to_string(), "w".to_string());
     f.write("Hello".to_string());
     f.close();
     return;

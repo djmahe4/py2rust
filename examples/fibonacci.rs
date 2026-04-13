@@ -50,7 +50,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn tell(&self) -> std::io::Result<u64> {
+    fn tell(&mut self) -> std::io::Result<u64> {
         self.file.stream_position()
     }
 
@@ -60,14 +60,19 @@ impl FileHandle {
 }
 
 fn fib(n: i32) -> i32 {
+    let mut a: i32 = 0;
+    let mut b: i32 = 0;
+    let mut i: i32 = 0;
+    let temp: i32 = 0;
+
     if n <= 1 {
         return n;
     }
-    let mut a = 0;
-    let mut b = 1;
-    let mut i = 2;
+    a = 0;
+    b = 1;
+    i = 2;
     '__loop_0: while i <= n {
-        let temp = a + b;
+        temp = a + b;
         a = b;
         b = temp;
         i += 1;
@@ -76,7 +81,9 @@ fn fib(n: i32) -> i32 {
 }
 
 fn main() -> () {
-    let result = fib(10);
+    let result: i32 = 0;
+
+    result = fib(10);
     println!("{}", result);
     return;
 }

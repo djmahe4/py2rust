@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write, Seek, SeekFrom};
 
+#[derive(Clone, Debug)]
 struct Animal {
     name: String,
 }
@@ -15,6 +16,7 @@ impl Animal {
     }
 }
 
+#[derive(Clone, Debug)]
 struct Dog {
 }
 
@@ -75,7 +77,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn tell(&self) -> std::io::Result<u64> {
+    fn tell(&mut self) -> std::io::Result<u64> {
         self.file.stream_position()
     }
 
@@ -85,8 +87,11 @@ impl FileHandle {
 }
 
 fn main() -> () {
-    let d = Dog::new("Buddy".to_string());
-    let result = d.speak();
+    let mut d: Dog = 0;
+    let result: i32 = 0;
+
+    d = Dog::new("Buddy".to_string());
+    result = d.speak();
     println!("{}", result);
     return;
 }

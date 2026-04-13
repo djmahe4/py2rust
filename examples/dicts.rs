@@ -60,9 +60,12 @@ impl FileHandle {
 }
 
 fn main() -> () {
-    let mut scores = { let mut __d: HashMap<String, i32> = HashMap::new(); __d.insert("alice".to_string(), 90); __d.insert("bob".to_string(), 85); __d };
+    let mut scores: HashMap<String, i32> = HashMap::<String, i32>::new();
+    let alice_score: i32 = 0;
+
+    scores = { let mut __d: HashMap<String, i32> = HashMap::new(); __d.insert("alice".to_string(), 90); __d.insert("bob".to_string(), 85); __d };
     scores.insert("charlie".to_string(), 95);
-    let alice_score = scores.get(&"alice".to_string()).unwrap().clone();
+    alice_score = scores.get(&"alice".to_string()).unwrap().clone();
     println!("{}", alice_score);
     return;
 }

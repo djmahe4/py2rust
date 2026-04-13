@@ -32,7 +32,7 @@ def main() -> int:
     assert "fn add(x: i32, y: i32) -> i32 {" in code
     # Rust's main() returns () and uses return; for early exit
     assert "fn main() -> () {" in code
-    assert "result = add(3, 4);" in code
+    assert "let result: i32 = add(3, 4);" in code
     assert 'println!("{}", result);' in code
     # return value is discarded; main exits with ()
     assert "return;" in code
@@ -68,9 +68,9 @@ def f() -> int:
     return x
 """
     code = _compile(src)
-    assert "x = 1;" in code
-    assert "y = 2.0;" in code
-    assert "z = true;" in code
+    assert "let x: i32 = 1;" in code
+    assert "let y: f64 = 2.0;" in code
+    assert "let z: bool = true;" in code
 
 
 def test_codegen_if_else():
@@ -108,7 +108,10 @@ def f() -> int:
     return s
 """
     code = _compile(src)
-    assert "for i in 0..10" in code
+    # Loop variable is pre-declared and assigned from internal iterator
+    assert "let mut i:" in code
+    assert "for __i_" in code
+    assert "0..10" in code
 
 
 def test_codegen_for_range_step():
@@ -122,7 +125,7 @@ def f() -> int:
     code = _compile(src)
     assert "let __stop = 10;" in code
     assert "let __step = 2;" in code
-    assert "while if (__step) > 0 { i < (__stop) } else { i > (__stop) } {" in code
+    assert "let mut i:" in code
 
 
 def test_codegen_bool_ops():

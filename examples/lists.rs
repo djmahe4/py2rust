@@ -50,7 +50,7 @@ impl FileHandle {
         Ok(())
     }
 
-    fn tell(&self) -> std::io::Result<u64> {
+    fn tell(&mut self) -> std::io::Result<u64> {
         self.file.stream_position()
     }
 
@@ -60,18 +60,26 @@ impl FileHandle {
 }
 
 fn sum_list(nums: Vec<i32>) -> i32 {
+    let mut total: i32 = 0;
     let mut n: i32 = 0;
 
-    let mut total = 0;
-    for n in 0..nums.len() as i32 {
-        total = total + ({ let __coll = &(nums); let __idx_raw = n; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx] });
+    total = 0;
+    {
+        let mut n = 0;
+        for __i_140292894087488 in 0..nums.len() as i32 {
+            n = __i_140292894087488;
+            total = total + ({ let __coll = &(nums); let __idx_raw = n; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx] });
+        }
     }
     return total;
 }
 
 fn main() -> () {
-    let numbers = vec![1, 2, 3, 4, 5];
-    let result = sum_list(numbers);
+    let mut numbers: Vec<i32> = Vec::<i32>::new();
+    let result: i32 = 0;
+
+    numbers = vec![1, 2, 3, 4, 5];
+    result = sum_list(numbers);
     println!("{}", result);
     return;
 }
