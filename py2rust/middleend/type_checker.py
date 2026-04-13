@@ -85,25 +85,15 @@ class TypeChecker:
             source_lines=self.source_lines,
         )
 
-    def check_module(self, module) -> None:
+    def check_module(self, module: Module) -> None:
+        # Pre-scan all classes (including nested ones)
+        self._collect_all_classes(module.classes)
+        self._collect_all_classes(module.functions)
+        
+        # Register top-level classes in global scope
+        from ..frontend.ast_nodes import ClassType
         for cls in module.classes:
-            fields = {}
-            methods = {}
-            constructors = {}
-            for item in cls.body:
-                if hasattr(item, "__class__"):
-                    item_name = type(item).__name__
-                    if item_name == "VarDecl":
-                        fields[item.name] = item.type_annotation
-                    elif item_name == "FunctionDef":
-                        arity = len(item.params)
-                        if item.name == "__init__":
-                            constructors[arity] = item
-                        else:
-                            if item.name not in methods:
-                                methods[item.name] = {}
-                            methods[item.name][arity] = item
-            self.st.define_class(cls.name, cls.base, fields, methods, constructors)
+            self.st.define(cls.name, ClassType(name=cls.name))
 
         for cls in module.classes:
             self.check_class(cls)
@@ -115,17 +105,67 @@ class TypeChecker:
         for func in module.functions:
             self.check_function(func)
 
-    def check_class(self, cls: ClassDef) -> None:
-        self.st.set_current_class(cls.name)
+    def _collect_all_classes(self, items, prefix="") -> None:
+        from ..frontend.ast_nodes import ClassDef, FunctionDef
+        for item in items:
+            if isinstance(item, ClassDef):
+                full_name = f"{prefix}{item.name}"
+                
+                fields = {}
+                methods = {}
+                constructors = {}
+                
+                for sub_item in item.body:
+                    if hasattr(sub_item, "__class__"):
+                        item_name = type(sub_item).__name__
+                        if item_name == "VarDecl":
+                            fields[sub_item.name] = sub_item.type_annotation
+                        elif item_name == "FunctionDef":
+                            arity = len(sub_item.params)
+                            if sub_item.name == "__init__":
+                                constructors[arity] = sub_item
+                            else:
+                                if sub_item.name not in methods:
+                                    methods[sub_item.name] = {}
+                                methods[sub_item.name][arity] = sub_item
+                
+                # Register class with mangled name
+                self.st.define_class(full_name, item.bases, fields, methods, constructors)
+                
+                # Recurse into class body for nested classes
+                self._collect_all_classes(item.body, prefix=f"{full_name}_")
+            
+            elif isinstance(item, FunctionDef):
+                # Recurse into function body for nested classes
+                # Note: Functional nesting prefix could be more complex, but let's use '_' for simplicity
+                self._collect_all_classes(item.body, prefix=f"{prefix}{item.name}_")
+
+    def check_class(self, cls: ClassDef, prefix="") -> None:
+        full_name = f"{prefix}{cls.name}"
+        prev_class = self.st.get_current_class()
+        self.st.set_current_class(full_name)
+        
+        # Define nested items in this class scope
+        from ..frontend.ast_nodes import ClassType
+        for item in cls.body:
+            if hasattr(item, "__class__"):
+                item_name = type(item).__name__
+                if item_name == "ClassDef":
+                    # Register nested class in THIS scope
+                    self.st.define(item.name, ClassType(name=f"{full_name}_{item.name}"))
+        
         for item in cls.body:
             if hasattr(item, "__class__"):
                 item_name = type(item).__name__
                 if item_name == "FunctionDef":
-                    self.check_method(cls.name, item)
-        self.st.set_current_class(None)
+                    self.check_method(full_name, item)
+                elif item_name == "ClassDef":
+                    self.check_class(item, prefix=f"{full_name}_")
+        self.st.set_current_class(prev_class)
 
     def check_method(self, class_name: str, func) -> None:
         self.st.enter_scope(f"{class_name}.{func.name}")
+        old_ret = self._current_return_type
         self._current_return_type = func.return_type
         self.st.define("self", ClassType(name=class_name))
 
@@ -136,11 +176,18 @@ class TypeChecker:
             self.check_stmt(stmt)
 
         self.st.exit_scope()
-        self._current_return_type = None
+        self._current_return_type = old_ret
 
     def check_function(self, func) -> None:
         self.st.enter_scope(func.name)
+        old_ret = self._current_return_type
         self._current_return_type = func.return_type
+
+        # Define local classes in this function scope
+        from ..frontend.ast_nodes import ClassType, ClassDef
+        for item in func.body:
+            if isinstance(item, ClassDef):
+                self.st.define(item.name, ClassType(name=f"{self.st.current_scope.name}_{item.name}"))
 
         for param in func.params:
             self.st.define(param.name, param.type_annotation)
@@ -149,7 +196,7 @@ class TypeChecker:
             self.check_stmt(stmt)
 
         self.st.exit_scope()
-        self._current_return_type = None
+        self._current_return_type = old_ret
 
     def check_expr(self, expr) -> None:
         from ..frontend.ast_nodes import (
@@ -351,8 +398,17 @@ class TypeChecker:
             else:
                 sig = self.st.lookup_function(expr.name)
                 if sig is None:
-                    if self.st.lookup_class(expr.name):
-                        pass  # It's a constructor call, handled in type inferencer
+                    # Check if it's a class (could be mangled or local)
+                    curr_type = self.st.lookup(expr.name)
+                    if isinstance(curr_type, ClassType):
+                        cls_info = self.st.lookup_class(curr_type.name)
+                        if cls_info:
+                            # It's a constructor call
+                            pass
+                        else:
+                            raise self._err(f"Unknown class: '{curr_type.name}'", expr.line, expr.col)
+                    elif self.st.lookup_class(expr.name):
+                        pass  # It's a top-level or absolute class name
                     else:
                         raise self._err(
                             f"Undefined function: '{expr.name}'",
@@ -388,14 +444,32 @@ class TypeChecker:
             ForRange,
             ReturnStmt,
             PrintStmt,
+            SubscriptAssign,
             BreakStmt,
             ContinueStmt,
+            DelStmt,
             ForIter,
             TryStmt,
             RaiseStmt,
-            FunctionCall,
-            Name,
+            ClassDef,
         )
+
+        node_name = type(stmt).__name__
+        if node_name == "ReturnStmt":
+            if stmt.value:
+                self.check_expr(stmt.value)
+                val_type = self.inferencer.infer(stmt.value)
+                if not _types_compatible(self._current_return_type, val_type):
+                    raise self._err(
+                        f"Returning '{val_type}' where '{self._current_return_type}' was expected",
+                        stmt.line,
+                        stmt.col,
+                    )
+        elif node_name == "ClassDef":
+            # Nested class in function/loop
+            # Prefix with current scope name to avoid collisions
+            prefix = f"{self.st.current_scope.name}_"
+            self.check_class(stmt, prefix=prefix)
 
         if isinstance(stmt, VarDecl):
             self.check_expr(stmt.value)

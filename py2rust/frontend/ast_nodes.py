@@ -410,7 +410,7 @@ class FunctionDef:
 @dataclass(frozen=True)
 class ClassDef:
     name: str
-    base: Optional[str] = None
+    bases: tuple = ()
     body: tuple = ()
     line: int = 0
     col: int = 0

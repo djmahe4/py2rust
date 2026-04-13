@@ -25,9 +25,9 @@ class Scope:
 
 
 class ClassInfo:
-    def __init__(self, name, base, fields, methods, constructors):
+    def __init__(self, name, bases, fields, methods, constructors):
         self.name = name
-        self.base = base
+        self.bases = bases
         self.fields = fields  # dict: field_name -> type
         self.methods = methods  # dict: method_name -> {arity -> FunctionDef}
         self.constructors = constructors  # {arity -> FunctionDef}
@@ -72,8 +72,8 @@ class SymbolTable:
     def is_global_scope(self) -> bool:
         return self._current is self._global
 
-    def define_class(self, name, base, fields, methods, constructors) -> None:
-        self._classes[name] = ClassInfo(name, base, fields, methods, constructors)
+    def define_class(self, name, bases, fields, methods, constructors) -> None:
+        self._classes[name] = ClassInfo(name, bases, fields, methods, constructors)
 
     def lookup_class(self, name: str):
         return self._classes.get(name)
@@ -82,8 +82,11 @@ class SymbolTable:
         cls = self._classes.get(class_name)
         if cls and field in cls.fields:
             return cls.fields[field]
-        if cls and cls.base:
-            return self.get_field_type(cls.base, field)
+        if cls:
+            for base_name in cls.bases:
+                field_type = self.get_field_type(base_name, field)
+                if field_type:
+                    return field_type
         return None
 
     def lookup_method(self, class_name: str, method: str, arity: int):
@@ -92,16 +95,22 @@ class SymbolTable:
             arities = cls.methods[method]
             if arity in arities:
                 return arities[arity]
-        if cls and cls.base:
-            return self.lookup_method(cls.base, method, arity)
+        if cls:
+            for base_name in cls.bases:
+                method_def = self.lookup_method(base_name, method, arity)
+                if method_def:
+                    return method_def
         return None
 
     def lookup_constructor(self, class_name: str, arity: int):
         cls = self._classes.get(class_name)
         if cls and arity in cls.constructors:
             return cls.constructors[arity]
-        if cls and cls.base:
-            return self.lookup_constructor(cls.base, arity)
+        if cls:
+            for base_name in cls.bases:
+                ctor = self.lookup_constructor(base_name, arity)
+                if ctor:
+                    return ctor
         return None
 
     def get_current_class(self) -> Optional[str]:

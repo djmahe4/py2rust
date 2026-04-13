@@ -402,7 +402,7 @@ class IRFunction:
 @dataclass(frozen=True)
 class IRClassDefinition:
     name: str
-    base: Optional[str] = None
+    bases: tuple = ()
     fields: tuple = ()
     methods: tuple = ()
     constructors: tuple = ()

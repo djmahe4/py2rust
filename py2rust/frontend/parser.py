@@ -199,17 +199,16 @@ class Parser:
         )
 
     def _parse_classdef(self, node: ast.ClassDef) -> ClassDef:
-        base = None
-        if node.bases:
-            base_node = node.bases[0]
+        bases = []
+        for base_node in node.bases:
             if isinstance(base_node, ast.Name):
-                base = base_node.id
+                bases.append(base_node.id)
 
         body = self._parse_class_body(node.body)
 
         return ClassDef(
             name=node.name,
-            base=base,
+            bases=tuple(bases),
             body=tuple(body),
             line=node.lineno,
             col=node.col_offset + 1,
@@ -244,6 +243,8 @@ class Parser:
                 )
             elif isinstance(s, ast.FunctionDef):
                 result.append(self._parse_funcdef(s, is_method=True))
+            elif isinstance(s, ast.ClassDef):
+                result.append(self._parse_classdef(s))
             elif isinstance(s, ast.Expr):
                 if isinstance(s.value, ast.Call):
                     call = s.value
@@ -443,6 +444,9 @@ class Parser:
                 line=node.lineno,
                 col=node.col_offset + 1,
             )
+
+        if isinstance(node, ast.ClassDef):
+            return self._parse_classdef(node)
 
         if isinstance(node, ast.If):
             cond = self._parse_expr(node.test)

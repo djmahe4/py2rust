@@ -13,6 +13,7 @@ from ..frontend.ast_nodes import (
     ClassDef,
     TryStmt,
     RaiseStmt,
+    FunctionDef,
     AttributeExpr,
     MethodCall,
     SelfExpr,
@@ -113,15 +114,16 @@ def _to_ir_type(t):
 
 
 class IRBuilder:
-    def __init__(self, filename: str = "<unknown>", source_lines: list = None):
+    def __init__(self, filename: str = "<unknown>", source_lines: list = None, symbol_table: SymbolTable = None):
         self.filename = filename
         self.source_lines = source_lines or []
-        self.st = SymbolTable()
-        # Add basic exception types
-        for exc in ["Exception", "ValueError", "TypeError", "KeyError", "IndexError"]:
-            self.st.define_class(exc, None, {}, {}, {})
-            # Also define as functions
-            self.st.define_function(exc, [StrType()], ClassType(exc))
+        self.st = symbol_table or SymbolTable()
+        if symbol_table is None:
+            # Add basic exception types if we created a new symbol table
+            for exc in ["Exception", "ValueError", "TypeError", "KeyError", "IndexError"]:
+                self.st.define_class(exc, (), {}, {}, {})
+                # Also define as functions
+                self.st.define_function(exc, [StrType()], ClassType(exc))
         
         self.inferencer = TypeInferencer(self.st)
         self._loop_stack: list = []
@@ -140,27 +142,48 @@ class IRBuilder:
         checker = TypeChecker(self.st, self.filename, self.source_lines)
         checker.check_module(module)
 
-        ir_classes = []
-        for cls in module.classes:
-            ir_classes.append(self._build_class(cls))
+        self._ir_classes = []
+        # Discovery all classes (from top-level classes AND top-level functions)
+        self._build_all_classes(module.classes)
+        for func in module.functions:
+            self._build_all_classes([c for c in func.body if isinstance(c, ClassDef)], prefix=f"{func.name}_")
 
         ir_funcs = []
         for func in module.functions:
             ir_funcs.append(self._build_function(func))
         return IRModule(
             functions=tuple(ir_funcs),
-            classes=tuple(ir_classes),
+            classes=tuple(self._ir_classes),
             filename=module.filename,
         )
 
-    def _build_class(self, cls: ClassDef) -> IRClassDefinition:
+    def _build_all_classes(self, items, prefix="") -> None:
+        from ..frontend.ast_nodes import ClassDef, FunctionDef
+        for item in items:
+            if isinstance(item, ClassDef):
+                full_name = f"{prefix}{item.name}"
+                ir_cls = self._build_class(item, prefix=prefix)
+                self._ir_classes.append(ir_cls)
+                # Recurse into class body
+                self._build_all_classes(item.body, prefix=f"{full_name}_")
+            elif isinstance(item, FunctionDef):
+                # Recurse into function body
+                self._build_all_classes(item.body, prefix=f"{prefix}{item.name}_")
+
+    def _build_class(self, cls: ClassDef, prefix="") -> IRClassDefinition:
+        full_name = f"{prefix}{cls.name}"
         all_fields = {}
         all_methods = {}
         all_constructors = {}
 
-        # 1. Inherit from base class
-        if cls.base:
-            base_info = self.st.lookup_class(cls.base)
+        # 1. Inherit from base classes (ordered for simple MRO)
+        if len(cls.bases) > 1:
+            # TODO: Add formal multiple inheritance support (traits/composition)
+            # For now, we flatten the hierarchy which may cause conflicts
+            pass
+
+        for base_name in cls.bases:
+            base_info = self.st.lookup_class(base_name)
             if base_info:
                 # Fields
                 for f_name, f_type in base_info.fields.items():
@@ -170,13 +193,18 @@ class IRBuilder:
                 for m_name, arities in base_info.methods.items():
                     for arity, m_def in arities.items():
                         # Rebuild in child context
-                        all_methods[(m_name, arity)] = self._build_method(cls.name, m_def)
+                        all_methods[(m_name, arity)] = self._build_method(full_name, m_def)
 
                 # Constructors
                 for arity, c_def in base_info.constructors.items():
-                    all_constructors[arity] = self._build_method(cls.name, c_def)
+                    all_constructors[arity] = self._build_method(full_name, c_def)
 
         # 2. Add local items
+        # Define nested classes in this scope for resolution
+        for item in cls.body:
+            if isinstance(item, ClassDef):
+                self.st.define(item.name, ClassType(name=f"{full_name}_{item.name}"))
+
         for item in cls.body:
             if hasattr(item, "__class__"):
                 item_name = type(item).__name__
@@ -184,7 +212,7 @@ class IRBuilder:
                     all_fields[item.name] = _to_ir_type(item.type_annotation)
                 elif item_name == "FunctionDef":
                     arity = len(item.params)
-                    ir_func = self._build_method(cls.name, item)
+                    ir_func = self._build_method(full_name, item)
                     if item.name == "__init__":
                         all_constructors[arity] = ir_func
                     else:
@@ -192,8 +220,8 @@ class IRBuilder:
                         all_methods[(item.name, arity)] = ir_func
 
         return IRClassDefinition(
-            name=cls.name,
-            base=cls.base,
+            name=full_name,
+            bases=cls.bases,
             fields=tuple(all_fields.items()),
             methods=tuple(all_methods.values()),
             constructors=tuple(all_constructors.values()),
@@ -272,6 +300,12 @@ class IRBuilder:
             param_names.append(p.name)
 
         ret_type = _to_ir_type(func.return_type)
+
+        # Define local classes in this function scope for resolution
+        for item in func.body:
+            if isinstance(item, ClassDef):
+                self.st.define(item.name, ClassType(name=f"{self.st.current_scope.name}_{item.name}"))
+
         body = self._build_stmts(func.body, ret_type)
 
         mutated_params = tuple(
@@ -331,7 +365,8 @@ class IRBuilder:
         return any(self._stmt_mutates(s, var_name) for s in stmts)
 
     def _build_stmts(self, stmts, return_type=None) -> list:
-        return [self._build_stmt(s, return_type) for s in stmts]
+        res = [self._build_stmt(s, return_type) for s in stmts]
+        return [r for r in res if r is not None]
 
     def _build_stmt(self, stmt, return_type=None):
         name = type(stmt).__name__
@@ -537,6 +572,10 @@ class IRBuilder:
                 target=target_val, index=index_val, value=value, value_type=value_type
             )
 
+        elif name in ("ClassDef", "FunctionDef"):
+            # Already handled in pre-scan or special build pass
+            return None
+
         else:
             raise self._err(f"Unknown statement type: {name}")
 
@@ -681,6 +720,15 @@ class IRBuilder:
 
             sig = self.st.lookup_function(expr.name)
             if sig is None:
+                # Check scope for class type (could be mangled)
+                curr_type = self.st.lookup(expr.name)
+                if isinstance(curr_type, ClassType):
+                    args = []
+                    for a in expr.args:
+                        args.append(self._build_expr(a))
+                    return IRNew(class_name=curr_type.name, args=tuple(args))
+                
+                # Fallback to global class name if not in scope
                 if self.st.lookup_class(expr.name):
                     args = []
                     for a in expr.args:
@@ -699,14 +747,12 @@ class IRBuilder:
 
         elif name == "AttributeExpr":
             val = self._build_expr(expr.value)
-            val_type = self.inferencer.infer(expr.value)
-            if isinstance(val_type, ClassType):
-                field_type = self.st.get_field_type(val_type.name, expr.attr)
-                if field_type:
-                    ir_result = _to_ir_type(field_type)
-                    return IRStructAccess(
-                        value=val, field=expr.attr, result_type=ir_result
-                    )
+            field_type = self.inferencer.infer(expr)
+            if field_type:
+                ir_result = _to_ir_type(field_type)
+                return IRStructAccess(
+                    value=val, field=expr.attr, result_type=ir_result
+                )
             raise self._err(
                 f"Unknown field '{expr.attr}' in class",
                 expr.line,

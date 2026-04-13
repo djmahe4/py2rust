@@ -886,47 +886,68 @@ class RustCodegen:
             self._emit(f"{target}.remove(&{key});")
 
         elif isinstance(stmt, IRSubscriptAssign):
+            final_idx = self._strip_parens(self._gen_expr(stmt.index))
+            value_val = self._gen_expr(stmt.value)
+            
+            # Recursive target generation for deep updates
+            def get_mut_target(node):
+                if isinstance(node, IRName):
+                    self._mutated_vars.add(node.name)
+                    return _mangle(node.name)
+                if isinstance(node, IRSubscript):
+                    inner = get_mut_target(node.value)
+                    idx = self._strip_parens(self._gen_expr(node.index))
+                    if isinstance(node.value_type, IRDictType):
+                        return f"({inner}.get_mut(&{idx}).unwrap())"
+                    return f"(&mut {inner}[{idx} as usize])"
+                return self._gen_expr(node)
+
+            target_expr = get_mut_target(stmt.target)
+            
+            # Check the type of the IMMEDIATE container being updated
+            container_type = stmt.value_type # This is set in IRBuilder to the container's element/value type?
+            # Wait, IRSubscriptAssign.value_type is the type of the VALUE being assigned?
+            # No, let's check IR node definition.
+
+            # Actually, we can check the target's type if it's a subscript
+            target_is_dict = False
             if isinstance(stmt.target, IRSubscript):
-                target_val = self._gen_expr(stmt.target.value)
-                idx_raw = self._gen_expr(stmt.index)
-                value_val = self._gen_expr(stmt.value)
+                # If target is d[k], and we assign d[k][final_idx] = v, 
+                # then target_expr refers to d[k] (mutably).
+                # We need to know if d[k] is a dict.
+                if isinstance(stmt.value_type, IRDictType):
+                     # This is confusing. Let's use a simpler check.
+                     pass
 
-                # Handle dict assignment: d[key] = value -> d.insert(key, value)
-                if isinstance(stmt.target.value_type, IRDictType):
-                    self._emit(f"{target_val}.insert({idx_raw}, {value_val});")
-                    if isinstance(stmt.target.value, IRName):
-                        self._mutated_vars.add(stmt.target.value.name)
-                    return
-
-                if isinstance(stmt.target.value_type, IRStrType):
-                    # For string replacement, we need byte indices for replace_range
-                    # Convert character index to byte index
-                    adjusted_idx = f"(if {idx_raw} < 0 {{ {idx_raw} + {target_val}.chars().count() as i32 }} else {{ {idx_raw} }})"
-                    byte_start = f"{target_val}.chars().take({adjusted_idx} as usize).map(|c| c.len_utf8()).sum::<usize>()"
-                    byte_end = f"{target_val}.chars().take(({adjusted_idx} + 1) as usize).map(|c| c.len_utf8()).sum::<usize>()"
-                    self._emit(
-                        f"{target_val}.replace_range({byte_start}..{byte_end}, &{value_val});"
-                    )
+            # Fallback: if we are assigning to a dict, use .insert()
+            # We can use the type info from the IR builder if available.
+            # For now, let's check if the target expr "looks like" a call that returns a dict.
+            # Better: IRSubscriptAssign should carry information about whether the target is a dict.
+            
+            # Re-evaluating: let's use the same logic as existing shallow assignment but recursive
+            if isinstance(stmt.target, IRSubscript):
+                # Target is d[k], so we are doing d[k][final_idx] = value
+                # get_mut_target(stmt.target) returns "d.get_mut(&k).unwrap()"
+                # We need to know if d[k] is a dict to use .insert()
+                # IRSubscript has result_type.
+                if isinstance(stmt.target.result_type, IRDictType):
+                    self._emit(f"{target_expr}.insert({final_idx}, {value_val});")
+                elif isinstance(stmt.target.result_type, IRStrType):
+                    adjusted_idx = f"(if {final_idx} < 0 {{ {final_idx} + {target_expr}.chars().count() as i32 }} else {{ {final_idx} }})"
+                    byte_start = f"{target_expr}.chars().take({adjusted_idx} as usize).map(|c| c.len_utf8()).sum::<usize>()"
+                    byte_end = f"{target_expr}.chars().take(({adjusted_idx} + 1) as usize).map(|c| c.len_utf8()).sum::<usize>()"
+                    self._emit(f"{target_expr}.replace_range({byte_start}..{byte_end}, &{value_val});")
                 else:
-                    self._emit(f"{target_val}[{idx_raw}] = {value_val};")
-                if isinstance(stmt.target.value, IRName):
-                    self._mutated_vars.add(stmt.target.value.name)
+                    self._emit(f"{target_expr}[{final_idx} as usize] = {value_val};")
             else:
-                target = self._gen_expr(stmt.target)
-                index = self._gen_expr(stmt.index)
-                value = self._gen_expr(stmt.value)
-                # Check if target is a dict by looking up its declaration type
-                target_type = (
-                    self._decl_types.get(stmt.target.name)
-                    if isinstance(stmt.target, IRName)
-                    else None
-                )
+                # Shallow assignment: d[final_idx] = value
+                target_name = _mangle(stmt.target.name)
+                self._mutated_vars.add(stmt.target.name)
+                target_type = self._decl_types.get(stmt.target.name)
                 if isinstance(target_type, IRDictType):
-                    self._emit(f"{target}.insert({index}, {value});")
+                    self._emit(f"{target_name}.insert({final_idx}, {value_val});")
                 else:
-                    self._emit(f"{target}[{index}] = {value};")
-                if isinstance(stmt.target, IRName):
-                    self._mutated_vars.add(stmt.target.name)
+                    self._emit(f"{target_name}[{final_idx} as usize] = {value_val};")
 
         elif isinstance(stmt, IRExpr):
             expr = self._gen_expr(stmt)

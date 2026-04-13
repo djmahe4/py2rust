@@ -120,13 +120,19 @@ class TypeInferencer:
                 return IntType()
         if expr.name == "open":
             return FileType()
+        # Check scope first (for nested/mangled classes)
+        curr_type = self.st.lookup(expr.name)
+        if isinstance(curr_type, ClassType):
+            return curr_type
+
         sig = self.st.lookup_function(expr.name)
         if sig:
             _, ret = sig
             return ret
+
         cls = self.st.lookup_class(expr.name)
         if cls:
-            return ClassType(name=expr.name, base=cls.base)
+            return ClassType(name=expr.name)
         return None
 
     def _infer_attribute(self, expr):
