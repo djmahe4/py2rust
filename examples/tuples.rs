@@ -28,37 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Animal {
-    name: String,
-}
-
-impl Animal {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(0);
-    }
-    fn new(name: String) -> Result<Self, PyError> {
-        Ok(Self { name: name })
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Dog {
-    name: String,
-}
-
-impl Dog {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(42);
-    }
-    fn new(name: String) -> Result<Self, PyError> {
-        Ok(Self { name: name })
-    }
+fn swap(x: i32, y: i32) -> Result<(i32, i32), PyError> {
+    return Ok((y, x));
 }
 
 fn main() -> Result<(), PyError> {
-    let d: Dog = Dog::new("Buddy".to_string())?;
-    let result: i32 = d.speak()?;
-    println!("{}", result);
+    let mut a: i32 = 1;
+    let mut b: i32 = 2;
+    let (a, b) = swap(a, b)?;
+    println!("{}", a);
+    println!("{}", b);
+    let t: (i32, i32) = (10, 20);
+    let (x, y) = t;
+    println!("{}", (x + y));
     { 0; return Ok(()); }
 }

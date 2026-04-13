@@ -313,6 +313,14 @@ class Parser:
                     node,
                     UnsupportedFeatureError,
                 )
+            if isinstance(node.value, ast.Name) and node.value.id == "tuple":
+                if isinstance(node.slice, ast.Tuple):
+                    types = tuple(self._parse_type(e) for e in node.slice.elts)
+                    return TupleType(element_types=types)
+                elif isinstance(node.slice, ast.Constant) and node.slice.value is Ellipsis:
+                    raise self._err("Variadic tuples not supported", node, UnsupportedFeatureError)
+                else:
+                    return TupleType(element_types=(self._parse_type(node.slice),))
             raise self._err("Unsupported generic type", node, UnsupportedFeatureError)
         elif isinstance(node, ast.Constant) and node.value is None:
             return UnitType()  # Use unit type for None return types

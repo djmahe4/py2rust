@@ -28,37 +28,15 @@ impl From<std::io::Error> for PyError {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Animal {
-    name: String,
-}
-
-impl Animal {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(0);
-    }
-    fn new(name: String) -> Result<Self, PyError> {
-        Ok(Self { name: name })
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Dog {
-    name: String,
-}
-
-impl Dog {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(42);
-    }
-    fn new(name: String) -> Result<Self, PyError> {
-        Ok(Self { name: name })
-    }
+fn float_math(x: f64, y: f64) -> Result<f64, PyError> {
+    let z: f64 = ((x as f64) + (y as f64));
+    let a: f64 = ((x as f64) * 2.0);
+    let b: f64 = ((y as f64) / 2.0);
+    return Ok((((z as f64) + (a as f64)) - (b as f64)));
 }
 
 fn main() -> Result<(), PyError> {
-    let d: Dog = Dog::new("Buddy".to_string())?;
-    let result: i32 = d.speak()?;
-    println!("{}", result);
+    let res: f64 = float_math(10.5, 5.5)?;
+    println!("{}", res);
     { 0; return Ok(()); }
 }

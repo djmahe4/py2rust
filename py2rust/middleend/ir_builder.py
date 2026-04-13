@@ -29,6 +29,7 @@ from ..ir.ir_nodes import (
     IRUnitType,
     IRListType,
     IRDictType,
+    IRTupleType,
     IRFileType,
     IRClassType,
     IRIntLit,
@@ -82,7 +83,7 @@ def _to_ir_type(t):
     if t is None:
         return IRUnitType()
     # If already an IR type, return as is
-    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRFileType, IRClassType)):
+    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType)):
         return t
         
     if isinstance(t, IntType):
@@ -107,7 +108,6 @@ def _to_ir_type(t):
     if isinstance(t, ClassType):
         return IRClassType(name=t.name, base=t.base)
     if isinstance(t, TupleType):
-        from ..ir.ir_nodes import IRTupleType
         return IRTupleType(element_types=tuple(_to_ir_type(et) for et in t.element_types))
     raise SemanticError(f"Unknown type: {t}")
 
@@ -125,6 +125,7 @@ class IRBuilder:
         
         self.inferencer = TypeInferencer(self.st)
         self._loop_stack: list = []
+        self._mutating_methods: set = set()  # (class_name, method_name, arity)
 
     def _err(self, msg: str, line: int = 0, col: int = 0) -> SemanticError:
         return SemanticError(
@@ -153,28 +154,81 @@ class IRBuilder:
         )
 
     def _build_class(self, cls: ClassDef) -> IRClassDefinition:
-        fields = []
-        methods = []
-        constructors = []
+        all_fields = {}
+        all_methods = {}
+        all_constructors = {}
+
+        # 1. Inherit from base class
+        if cls.base:
+            base_info = self.st.lookup_class(cls.base)
+            if base_info:
+                # Fields
+                for f_name, f_type in base_info.fields.items():
+                    all_fields[f_name] = _to_ir_type(f_type)
+                
+                # Methods
+                for m_name, arities in base_info.methods.items():
+                    for arity, m_def in arities.items():
+                        # Rebuild in child context
+                        all_methods[(m_name, arity)] = self._build_method(cls.name, m_def)
+
+                # Constructors
+                for arity, c_def in base_info.constructors.items():
+                    all_constructors[arity] = self._build_method(cls.name, c_def)
+
+        # 2. Add local items
         for item in cls.body:
             if hasattr(item, "__class__"):
                 item_name = type(item).__name__
                 if item_name == "VarDecl":
-                    ir_type = _to_ir_type(item.type_annotation)
-                    fields.append((item.name, ir_type))
+                    all_fields[item.name] = _to_ir_type(item.type_annotation)
                 elif item_name == "FunctionDef":
+                    arity = len(item.params)
                     ir_func = self._build_method(cls.name, item)
                     if item.name == "__init__":
-                        constructors.append(ir_func)
+                        all_constructors[arity] = ir_func
                     else:
-                        methods.append(ir_func)
+                        # Override parent's method with same name and arity
+                        all_methods[(item.name, arity)] = ir_func
+
         return IRClassDefinition(
             name=cls.name,
             base=cls.base,
-            fields=tuple(fields),
-            methods=tuple(methods),
-            constructors=tuple(constructors),
+            fields=tuple(all_fields.items()),
+            methods=tuple(all_methods.values()),
+            constructors=tuple(all_constructors.values()),
         )
+
+    def _check_mutates_self(self, body) -> bool:
+        """Check if any statement in a method mutates self."""
+        for stmt in body:
+            name = type(stmt).__name__
+            if name == "Assign":
+                if isinstance(stmt.target, tuple) and len(stmt.target) > 0 and stmt.target[0] == "attr":
+                    if stmt.target[1] == "self":
+                        return True
+            elif name == "AugAssign":
+                if stmt.target == ("attr", "self", stmt.target[2] if isinstance(stmt.target, tuple) and len(stmt.target) > 2 else ""): # Fallback
+                     return True
+                # Simpler check for AugAssign target
+                if isinstance(stmt.target, str) and stmt.target.startswith("self."):
+                    return True
+                # The parser seems to use tuples for attributes
+                if isinstance(stmt.target, tuple) and len(stmt.target) > 1 and stmt.target[1] == "self":
+                    return True
+
+            # Recursively check blocks
+            if hasattr(stmt, "body") and stmt.body:
+                if self._check_mutates_self(stmt.body):
+                    return True
+            if hasattr(stmt, "elif_clauses"):
+                for _, elif_body in stmt.elif_clauses:
+                    if self._check_mutates_self(elif_body):
+                        return True
+            if hasattr(stmt, "else_body") and stmt.else_body:
+                if self._check_mutates_self(stmt.else_body):
+                    return True
+        return False
 
     def _build_method(self, class_name: str, func) -> IRFunction:
         self.st.enter_scope(f"{class_name}.{func.name}")
@@ -192,6 +246,9 @@ class IRBuilder:
         mutated_params = tuple(
             n for n in [p.name for p in func.params] if self._is_param_mutated(body, n)
         )
+
+        if self._check_mutates_self(func.body):
+            self._mutating_methods.add((class_name, func.name, len(func.params)))
 
         self.st.exit_scope()
         return IRFunction(
@@ -673,12 +730,20 @@ class IRBuilder:
                     ir_ret = _to_ir_type(method.return_type)
                     non_fallible_methods = {"push", "insert", "remove", "clone", "to_string", "chars", "count", "extend", "append", "get", "next"}
                     is_fallible = expr.method not in non_fallible_methods
+                    
+                    # Check if it mutates self
+                    mutates_self = (val_type.name, expr.method, arity) in self._mutating_methods
+                    # Core collection methods that mutate
+                    if expr.method in {"append", "extend", "insert", "pop", "remove", "clear", "update"}:
+                        mutates_self = True
+                        
                     return IRMethodCall(
                         value=val,
                         method=expr.method,
                         args=tuple(ir_args),
                         result_type=ir_ret,
                         is_fallible=is_fallible,
+                        mutates_self=mutates_self,
                     )
             if isinstance(val_type, FileType):
                 file_val = self._build_expr(expr.value)

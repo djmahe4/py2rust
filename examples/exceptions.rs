@@ -28,37 +28,33 @@ impl From<std::io::Error> for PyError {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Animal {
-    name: String,
-}
-
-impl Animal {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(0);
+fn divide(a: i32, b: i32) -> Result<i32, PyError> {
+    if b == 0 {
+        return Err(PyError::ValueError("Division by zero".to_string()));
     }
-    fn new(name: String) -> Result<Self, PyError> {
-        Ok(Self { name: name })
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Dog {
-    name: String,
-}
-
-impl Dog {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(42);
-    }
-    fn new(name: String) -> Result<Self, PyError> {
-        Ok(Self { name: name })
-    }
+    return Ok(((a as f64 / b as f64).floor() as i32));
 }
 
 fn main() -> Result<(), PyError> {
-    let d: Dog = Dog::new("Buddy".to_string())?;
-    let result: i32 = d.speak()?;
-    println!("{}", result);
+    {
+        let __result = (|| -> Result<(), PyError> {
+            let x: i32 = divide(10, 0)?;
+            println!("{}", x);
+            Ok(())
+        })();
+        if let Err(__exc) = __result {
+            println!("{}", (-(1)));
+        }
+    }
+    {
+        let __result = (|| -> Result<(), PyError> {
+            let y: i32 = divide(10, 2)?;
+            println!("{}", y);
+            Ok(())
+        })();
+        if let Err(__exc) = __result {
+            println!("{}", (-(2)));
+        }
+    }
     { 0; return Ok(()); }
 }

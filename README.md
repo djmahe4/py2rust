@@ -138,6 +138,11 @@ py2rust input.py --no-format
 
 ## Examples
 
+To test examples:
+```bash
+for f in examples/*.py; do echo "Processing $f..."; PYTHONPATH=. python3 -m py2rust.cli "$f" -o "${f%.py}.rs" --verify || { echo "FAILED: $f"; break; }; done
+```
+
 ### Simple Math
 
 **Input (`examples/simple_math.py`):**

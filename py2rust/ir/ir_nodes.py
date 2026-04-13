@@ -215,6 +215,7 @@ class IRMethodCall:
     args: tuple
     result_type: object
     is_fallible: bool = True
+    mutates_self: bool = False
 
 
 @dataclass(frozen=True)

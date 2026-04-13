@@ -100,6 +100,8 @@ class SymbolTable:
         cls = self._classes.get(class_name)
         if cls and arity in cls.constructors:
             return cls.constructors[arity]
+        if cls and cls.base:
+            return self.lookup_constructor(cls.base, arity)
         return None
 
     def get_current_class(self) -> Optional[str]:

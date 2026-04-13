@@ -28,37 +28,20 @@ impl From<std::io::Error> for PyError {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Animal {
-    name: String,
-}
-
-impl Animal {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(0);
-    }
-    fn new(name: String) -> Result<Self, PyError> {
-        Ok(Self { name: name })
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Dog {
-    name: String,
-}
-
-impl Dog {
-    fn speak(&self) -> Result<i32, PyError> {
-        return Ok(42);
-    }
-    fn new(name: String) -> Result<Self, PyError> {
-        Ok(Self { name: name })
-    }
+fn get_point() -> Result<(i32, i32), PyError> {
+    return Ok((10, 20));
 }
 
 fn main() -> Result<(), PyError> {
-    let d: Dog = Dog::new("Buddy".to_string())?;
-    let result: i32 = d.speak()?;
-    println!("{}", result);
+    let mut x: i32 = 0;
+    let mut y: i32 = 0;
+    let (x, y) = get_point()?;
+    println!("{}", x);
+    println!("{}", y);
+    let mut a: i32 = 30;
+    let mut b: i32 = 40;
+    let (a, b) = (50, 60);
+    println!("{}", a);
+    println!("{}", b);
     { 0; return Ok(()); }
 }

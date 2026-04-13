@@ -99,7 +99,7 @@ def main() -> int:
 """
     code = _compile(src)
     # x is declared at function level
-    assert "let x:" in code
+    assert "let mut x:" in code
     # print uses x after the if block
     assert 'println!("{}", x);' in code
 
@@ -207,7 +207,7 @@ def main() -> int:
 """
     code = _compile(src)
     # x is declared at function level
-    assert "let x:" in code
+    assert "let mut x:" in code
     assert 'println!("{}", x);' in code
 
 
@@ -1218,8 +1218,8 @@ def main() -> int:
     return 0
 """
     code = _compile(src)
-    assert "fn main() -> Result<i32, PyError> {" in code
-    assert "return Ok(0);" in code
+    assert "fn main() -> Result<(), PyError> {" in code
+    assert "{ 0; return Ok(()); }" in code
 
 
 def test_main_discard_return_value():
@@ -1233,7 +1233,7 @@ def main() -> int:
     return result
 """
     code = _compile(src)
-    assert "fn main() -> Result<i32, PyError> {" in code
+    assert "fn main() -> Result<(), PyError> {" in code
 
 
 def test_discard_function_call():
@@ -1288,7 +1288,7 @@ def main() -> int:
 """
     code = _compile(src)
     # Constructor is static, so it doesn't have &self
-    assert "fn new(x: i32, y: i32) -> Result<Self, String> {" in code
+    assert "fn new(x: i32, y: i32) -> Result<Self, PyError> {" in code
 
 
 def test_list_concat_clones_right():
