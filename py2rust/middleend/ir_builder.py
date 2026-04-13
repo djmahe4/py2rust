@@ -62,6 +62,8 @@ from ..ir.ir_nodes import (
     IRPrint,
     IRBreak,
     IRContinue,
+    IRTraitDefinition,
+    IRTraitMethod,
     IRDictDelete,
     IRStructLit,
     IRStructAccess,
@@ -128,6 +130,8 @@ class IRBuilder:
         self.inferencer = TypeInferencer(self.st)
         self._loop_stack: list = []
         self._mutating_methods: set = set()  # (class_name, method_name, arity)
+        self._ir_traits: list = []
+        self._ir_classes: list = []
 
     def _err(self, msg: str, line: int = 0, col: int = 0) -> SemanticError:
         return SemanticError(
@@ -154,6 +158,7 @@ class IRBuilder:
         return IRModule(
             functions=tuple(ir_funcs),
             classes=tuple(self._ir_classes),
+            traits=tuple(self._ir_traits),
             filename=module.filename,
         )
 
@@ -191,9 +196,10 @@ class IRBuilder:
                 
                 # Methods
                 for m_name, arities in base_info.methods.items():
-                    for arity, m_def in arities.items():
-                        # Rebuild in child context
-                        all_methods[(m_name, arity)] = self._build_method(full_name, m_def)
+                    for arity, method_info in arities.items():
+                        m_def, origin = method_info
+                        # Rebuild in child context, preserving original defining class
+                        all_methods[(m_name, arity)] = self._build_method(full_name, m_def, defining_class=origin)
 
                 # Constructors
                 for arity, c_def in base_info.constructors.items():
@@ -219,12 +225,59 @@ class IRBuilder:
                         # Override parent's method with same name and arity
                         all_methods[(item.name, arity)] = ir_func
 
+        # 3. Generate Trait Definition
+        trait_methods = []
+        # Only include local non-init methods in the class's own trait?
+        # No, for the Hybrid model, every class gets a trait.
+        # But if it inherits, the trait should eventually include all methods?
+        # Actually, let's make trait methods match local definitions.
+        # Find which methods are already in the base traits to avoid re-defining them in the sub-trait
+        base_trait_methods = set()
+        for base_name in cls.bases:
+            base_info = self.st.lookup_class(base_name)
+            if base_info:
+                # Recursively gather all inherited method names
+                def gather_methods(c_info):
+                    names = set(c_info.methods.keys())
+                    for b_name in c_info.bases:
+                        b_info = self.st.lookup_class(b_name)
+                        if b_info: names.update(gather_methods(b_info))
+                    return names
+                base_trait_methods.update(gather_methods(base_info))
+
+        for item in cls.body:
+            if type(item).__name__ == "FunctionDef" and item.name != "__init__":
+                if item.name not in base_trait_methods:
+                    trait_methods.append(self._build_trait_method(item))
+
+        trait_def = IRTraitDefinition(
+            name=f"{full_name}Trait",
+            bases=tuple(f"{b}Trait" for b in cls.bases),
+            methods=tuple(trait_methods)
+        )
+        self._ir_traits.append(trait_def)
+
         return IRClassDefinition(
             name=full_name,
             bases=cls.bases,
             fields=tuple(all_fields.items()),
             methods=tuple(all_methods.values()),
             constructors=tuple(all_constructors.values()),
+        )
+
+    def _build_trait_method(self, func) -> IRTraitMethod:
+        from ..ir.ir_nodes import IRTraitMethod
+        params = []
+        for p in func.params:
+            params.append(IRParam(name=p.name, type_=_to_ir_type(p.type_annotation)))
+        
+        # Check if it mutates self (approximation for trait signature)
+        mutates = self._check_mutates_self(func.body)
+        return IRTraitMethod(
+            name=func.name,
+            params=tuple(params),
+            return_type=_to_ir_type(func.return_type),
+            mutates_self=mutates
         )
 
     def _check_mutates_self(self, body) -> bool:
@@ -258,7 +311,7 @@ class IRBuilder:
                     return True
         return False
 
-    def _build_method(self, class_name: str, func) -> IRFunction:
+    def _build_method(self, class_name: str, func, defining_class: Optional[str] = None) -> IRFunction:
         self.st.enter_scope(f"{class_name}.{func.name}")
         self.st.define("self", ClassType(name=class_name))
 
@@ -286,6 +339,7 @@ class IRBuilder:
             body=tuple(body),
             mutated_params=mutated_params,
             is_method=True,
+            defining_class=defining_class or class_name
         )
 
     def _build_function(self, func) -> IRFunction:
@@ -764,8 +818,9 @@ class IRBuilder:
             val_type = self.inferencer.infer(expr.value)
             if isinstance(val_type, ClassType):
                 arity = len(expr.args)
-                method = self.st.lookup_method(val_type.name, expr.method, arity)
-                if method:
+                method_info = self.st.lookup_method(val_type.name, expr.method, arity)
+                if method_info:
+                    method, defining_class = method_info
                     ir_args = []
                     for i, arg in enumerate(expr.args):
                         if i < len(method.params):

@@ -397,6 +397,22 @@ class IRFunction:
     body: tuple
     mutated_params: tuple = ()
     is_method: bool = False
+    defining_class: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class IRTraitMethod:
+    name: str
+    params: tuple
+    return_type: object
+    mutates_self: bool = False
+
+
+@dataclass(frozen=True)
+class IRTraitDefinition:
+    name: str
+    bases: tuple = ()
+    methods: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -412,4 +428,5 @@ class IRClassDefinition:
 class IRModule:
     functions: tuple
     classes: tuple = ()
+    traits: tuple = ()
     filename: str = "<unknown>"

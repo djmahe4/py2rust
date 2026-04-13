@@ -29,7 +29,15 @@ class ClassInfo:
         self.name = name
         self.bases = bases
         self.fields = fields  # dict: field_name -> type
-        self.methods = methods  # dict: method_name -> {arity -> FunctionDef}
+        # methods dict: method_name -> {arity -> (FunctionDef, defining_class)}
+        self.methods = {}
+        for m_name, arities in methods.items():
+            self.methods[m_name] = {}
+            for arity, m_def in arities.items():
+                if isinstance(m_def, tuple):
+                    self.methods[m_name][arity] = m_def
+                else:
+                    self.methods[m_name][arity] = (m_def, name)
         self.constructors = constructors  # {arity -> FunctionDef}
 
 
@@ -97,9 +105,9 @@ class SymbolTable:
                 return arities[arity]
         if cls:
             for base_name in cls.bases:
-                method_def = self.lookup_method(base_name, method, arity)
-                if method_def:
-                    return method_def
+                result = self.lookup_method(base_name, method, arity)
+                if result:
+                    return result
         return None
 
     def lookup_constructor(self, class_name: str, arity: int):

@@ -54,6 +54,8 @@ from ..ir.ir_nodes import (
     IRTupleLit,
     IRTupleUnpack,
     IRClassDefinition,
+    IRTraitDefinition,
+    IRTraitMethod,
 )
 
 
@@ -343,10 +345,17 @@ class RustCodegen:
 
     def generate(self, ir_mod: IRModule) -> str:
         # Reset state
+        self._current_module = ir_mod
         self._lines = []
         self._uses_hashmap = False
         self._uses_file_handle = False
         self._uses_py_error = False
+
+        # Pre-pass: Generate Traits
+        trait_lines = []
+        for trait in ir_mod.traits:
+            trait_lines.append(self._gen_trait(trait))
+            trait_lines.append("")
 
         # First pass: Generate classes and functions to detect feature usage
         # We store them in separate buffers
@@ -417,6 +426,11 @@ class RustCodegen:
             final_lines.append("    file: File,")
             final_lines.append("}")
             final_lines.append("")
+
+        # Traits
+        final_lines.extend(trait_lines)
+
+        if self._uses_file_handle:
             final_lines.append("impl FileHandle {")
             final_lines.append("    fn open(path: &str, mode: &str) -> std::io::Result<Self> {")
             final_lines.append("        let file = match mode {")
@@ -467,6 +481,28 @@ class RustCodegen:
 
         return "\n".join(final_lines) + "\n"
 
+    def _gen_trait(self, trait: IRTraitDefinition) -> str:
+        bases_str = " + ".join(trait.bases) if trait.bases else ""
+        header = f"pub trait {trait.name}"
+        if bases_str:
+            header += f": {bases_str}"
+        
+        res = [f"{header} {{"]
+        for method in trait.methods:
+            params_str = ", ".join(
+                f"{p.name}: {self._get_rust_type(p.type_)}" for p in method.params
+            )
+            self_ref = "&mut self" if method.mutates_self else "&self"
+            sig = f"    fn {method.name}({self_ref}"
+            if params_str:
+                sig += f", {params_str}"
+            # Traits always return Result<T, PyError> for Python-to-Rust mapping
+            ret = self._get_rust_type(method.return_type)
+            sig += f") -> Result<{ret}, PyError>;"
+            res.append(sig)
+        res.append("}")
+        return "\n".join(res)
+
     def _gen_class(self, cls: IRClassDefinition) -> None:
         self._emit(f"#[derive(Clone, Debug)]")
         self._emit(f"struct {cls.name} {{")
@@ -476,14 +512,46 @@ class RustCodegen:
         self._indent -= 1
         self._emit("}")
         self._emit("")
-        self._emit(f"impl {cls.name} {{")
-        self._indent += 1
-        for method in cls.methods:
-            self._gen_method(method)
-        for ctor in cls.constructors:
-            self._gen_method(ctor, is_init=True)
-        self._indent -= 1
-        self._emit("}")
+
+        # Inherent Impl (Constructors)
+        if cls.constructors:
+            self._emit(f"impl {cls.name} {{")
+            self._indent += 1
+            for ctor in cls.constructors:
+                self._gen_method(ctor, is_init=True)
+            self._indent -= 1
+            self._emit("}")
+            self._emit("")
+
+        # Trait Impls (Implement all traits in the hierarchy)
+        # 1. Map trait names to their definitions for easy lookup
+        all_trait_defs = {t.name: t for t in self._current_module.traits}
+        
+        # 2. Get all traits this class must implement (recursively)
+        traits_to_impl = []
+        queue = [f"{cls.name}Trait"]
+        visited = set()
+        while queue:
+            t_name = queue.pop(0)
+            if t_name in visited: continue
+            visited.add(t_name)
+            if t_name in all_trait_defs:
+                traits_to_impl.append(all_trait_defs[t_name])
+                queue.extend(all_trait_defs[t_name].bases)
+        
+        # 3. For each trait, find implementing methods in the class
+        # Map method names in this class for easy lookup
+        class_methods = {m.name: m for m in cls.methods}
+        
+        for trait in traits_to_impl:
+            self._emit(f"impl {trait.name} for {cls.name} {{")
+            self._indent += 1
+            for tm in trait.methods:
+                if tm.name in class_methods:
+                    self._gen_method(class_methods[tm.name])
+            self._indent -= 1
+            self._emit("}")
+            self._emit("")
 
     def _gen_method(self, func: IRFunction, is_init: bool = False) -> None:
         self._uses_py_error = True

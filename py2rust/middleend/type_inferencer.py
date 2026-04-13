@@ -147,8 +147,9 @@ class TypeInferencer:
         val_type = self.infer(expr.value)
         if isinstance(val_type, ClassType):
             arity = len(expr.args)
-            method = self.st.lookup_method(val_type.name, expr.method, arity)
-            if method:
+            method_info = self.st.lookup_method(val_type.name, expr.method, arity)
+            if method_info:
+                method, _ = method_info
                 return method.return_type
         if isinstance(val_type, FileType):
             return self.infer_file_method(expr.method)

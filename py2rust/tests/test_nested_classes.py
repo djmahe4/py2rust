@@ -35,7 +35,7 @@ class Outer:
     
     assert "struct Outer {" in rust_code
     assert "struct Outer_Inner {" in rust_code
-    assert "impl Outer_Inner {" in rust_code
+    assert "impl Outer_InnerTrait for Outer_Inner {" in rust_code
     assert "let i: Outer_Inner = Outer_Inner::new(" in rust_code
 
 def test_nested_classes_in_function():

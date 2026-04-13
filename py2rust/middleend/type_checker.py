@@ -236,8 +236,8 @@ class TypeChecker:
             val_type = self.inferencer.infer(expr.value)
             if isinstance(val_type, ClassType):
                 arity = len(expr.args)
-                method = self.st.lookup_method(val_type.name, expr.method, arity)
-                if method is None:
+                method_info = self.st.lookup_method(val_type.name, expr.method, arity)
+                if method_info is None:
                     raise self._err(
                         f"Method '{expr.method}' with {arity} args not found in class '{val_type.name}'",
                         expr.line,
