@@ -149,6 +149,8 @@ def _get_var_name(expr) -> str | None:
         return expr.name
     if isinstance(expr, IRSelf):
         return "self"
+    if isinstance(expr, IRStructAccess):
+        return _get_var_name(expr.value)
     return None
 
 
@@ -713,7 +715,7 @@ class RustCodegen:
             self._emit("}")
             self._emit("")
 
-        # 4. Handle __str__ magic method -> std::fmt::Display
+        # 4. Handle magic methods -> std::fmt::Display / std::ops etc.
         if "__str__" in class_methods:
             self._emit(f"impl{type_params_str} std::fmt::Display for {cls.name}{type_params_str} {{")
             self._indent += 1
@@ -725,6 +727,86 @@ class RustCodegen:
             self._emit("Err(_) => Err(std::fmt::Error),")
             self._indent -= 1
             self._emit("}")
+            self._indent -= 1
+            self._emit("}")
+            self._indent -= 1
+            self._emit("}")
+            self._emit("")
+
+        # Arithmetic Mappings
+        arith_maps = {
+            "__add__": ("std::ops::Add", "add", "Output", "rhs"),
+            "__sub__": ("std::ops::Sub", "sub", "Output", "rhs"),
+            "__mul__": ("std::ops::Mul", "mul", "Output", "rhs"),
+            "__truediv__": ("std::ops::Div", "div", "Output", "rhs"),
+            "__mod__": ("std::ops::Rem", "rem", "Output", "rhs"),
+        }
+        for dunder, (trait, method, assoc_type, rhs_name) in arith_maps.items():
+            if dunder in class_methods:
+                m_def = class_methods[dunder]
+                # Assume binary operator (self, other)
+                rhs_type = self._get_rust_type(m_def.params[0].type_) if m_def.params else cls.name
+                ret_type = self._get_rust_type(m_def.return_type)
+                
+                self._emit(f"impl{type_params_str} {trait}<{rhs_type}> for {cls.name}{type_params_str} {{")
+                self._indent += 1
+                self._emit(f"type {assoc_type} = {ret_type};")
+                self._emit(f"fn {method}(self, rhs: {rhs_type}) -> Self::{assoc_type} {{")
+                self._indent += 1
+                # Call the dunder method. Dunder methods are fallible in Py2Rust.
+                self._emit(f"self.{dunder}(rhs).unwrap()")
+                self._indent -= 1
+                self._emit("}")
+                self._indent -= 1
+                self._emit("}")
+                self._emit("")
+
+        # Comparison Mappings
+        if "__eq__" in class_methods:
+            m_def = class_methods["__eq__"]
+            rhs_type = self._get_rust_type(m_def.params[0].type_) if m_def.params else cls.name
+            self._emit(f"impl{type_params_str} PartialEq<{rhs_type}> for {cls.name}{type_params_str} {{")
+            self._indent += 1
+            self._emit(f"fn eq(&self, other: &{rhs_type}) -> bool {{")
+            self._indent += 1
+            # Call __eq__. Since it takes self by reference in Python, and returns PyResult<bool>
+            # we need to handle the conversion.
+            self._emit(f"self.__eq__(other.clone()).unwrap_or(false)")
+            self._indent -= 1
+            self._emit("}")
+            self._indent -= 1
+            self._emit("}")
+            self._emit("")
+
+        # Comparison Mappings: PartialOrd
+        if "__lt__" in class_methods:
+            m_def = class_methods["__lt__"]
+            rhs_type = self._get_rust_type(m_def.params[0].type_) if m_def.params else cls.name
+            self._emit(f"impl{type_params_str} PartialOrd<{rhs_type}> for {cls.name}{type_params_str} {{")
+            self._indent += 1
+            self._emit(f"fn partial_cmp(&self, other: &{rhs_type}) -> Option<std::cmp::Ordering> {{")
+            self._indent += 1
+            self._emit("if self.__lt__(other.clone()).unwrap_or(false) {")
+            self._emit("    Some(std::cmp::Ordering::Less)")
+            self._emit("} else if self == other {")
+            self._emit("    Some(std::cmp::Ordering::Equal)")
+            self._emit("} else {")
+            self._emit("    Some(std::cmp::Ordering::Greater)")
+            self._emit("}")
+            self._indent -= 1
+            self._emit("}")
+            self._indent -= 1
+            self._emit("}")
+            self._emit("")
+
+        # Hash Mapping
+        if "__hash__" in class_methods:
+            self._emit(f"impl{type_params_str} std::hash::Hash for {cls.name}{type_params_str} {{")
+            self._indent += 1
+            self._emit("fn hash<H: std::hash::Hasher>(&self, state: &mut H) {")
+            self._indent += 1
+            self._emit("let h = self.__hash__().unwrap_or(0);")
+            self._emit("h.hash(state);")
             self._indent -= 1
             self._emit("}")
             self._indent -= 1
@@ -1247,6 +1329,12 @@ class RustCodegen:
         elif isinstance(stmt, IRSubscriptAssign):
             final_idx = self._strip_parens(self._gen_expr(stmt.index))
             value_val = self._gen_expr(stmt.value)
+
+            # Handle user-defined assignment via dunder methods
+            if stmt.trait_info and stmt.trait_info[0] == "IndexMut":
+                target = self._gen_expr(stmt.target)
+                self._emit(f"{target}.__setitem__({final_idx}, {value_val})?;")
+                return
             
             # Recursive target generation for deep updates
             def get_mut_target(node):
@@ -1299,14 +1387,19 @@ class RustCodegen:
                 else:
                     self._emit(f"{target_expr}[{final_idx} as usize] = {value_val};")
             else:
-                # Shallow assignment: d[final_idx] = value
-                target_name = _mangle(stmt.target.name)
-                self._mutated_vars.add(stmt.target.name)
-                target_type = self._decl_types.get(stmt.target.name)
-                if isinstance(target_type, IRDictType):
-                    self._emit(f"{target_name}.insert({final_idx}, {value_val});")
+                # Shallow assignment: container[final_idx] = value
+                target_expr = self._gen_expr(stmt.target)
+                is_dict = False
+                if isinstance(stmt.target, IRName):
+                    self._mutated_vars.add(stmt.target.name)
+                    target_type = self._decl_types.get(stmt.target.name)
+                    if isinstance(target_type, IRDictType):
+                        is_dict = True
+                
+                if is_dict:
+                    self._emit(f"{target_expr}.insert({final_idx}, {value_val});")
                 else:
-                    self._emit(f"{target_name}[{final_idx} as usize] = {value_val};")
+                    self._emit(f"{target_expr}[{final_idx} as usize] = {value_val};")
 
         elif isinstance(stmt, IRMatchStmt):
             self._gen_match_stmt(stmt)
@@ -1416,6 +1509,21 @@ class RustCodegen:
         elif isinstance(expr, IRCompare):
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
+            
+            # Map Python comparisons to Rust traits if applicable
+            op_to_trait = {
+                "<": "PartialOrd",
+                "<=": "PartialOrd",
+                ">": "PartialOrd",
+                ">=": "PartialOrd",
+                "==": "PartialEq",
+                "!=": "PartialEq",
+            }
+            
+            if isinstance(expr.left.result_type, IRClassType):
+                left = f"{left}.clone()"
+                right = f"{right}.clone()"
+                
             return f"{left} {expr.op} {right}"
         elif isinstance(expr, IRBoolOp):
             parts = [self._gen_expr(v) for v in expr.values]
@@ -1454,14 +1562,16 @@ class RustCodegen:
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
 
+            # Handle user-defined indexing via dunder methods
+            if expr.trait_info and expr.trait_info[0] == "Index":
+                return f"{val}.__getitem__({idx})?"
+
             # Handle dict subscript: d[key] -> __d.get(&key).unwrap().clone()
             if isinstance(expr.value_type, IRDictType):
                 val_t = self._get_rust_type(expr.value_type.value_type)
-                return f"({val}.get(&{idx}).unwrap().clone())"
+                return f"{val}.get(&{idx}).unwrap().clone()"
 
-            # Robust Python indexing: bind collection to a temp reference to avoid redundant evaluations
-            # and then calculate actual usize index relative to length if negative.
-
+            # Robust Python indexing: bind collection to a temp reference
             if isinstance(expr.value_type, IRStrType):
                 len_expr = "__coll.chars().count() as i32"
                 inner_expr = f"__coll.chars().nth(actual_idx).unwrap().to_string()"
@@ -1472,13 +1582,12 @@ class RustCodegen:
             if isinstance(expr.result_type, (IRStrType, IRListType, IRTypeParam)) and not isinstance(
                 expr.value_type, IRStrType
             ):
-                inner_expr = f"({inner_expr}).clone()"
+                inner_expr = f"{inner_expr}.clone()"
 
-            # Use an immediately-invoked block to isolate the temporary collection reference
             return (
-                f"({{ let __coll = &({val}); "
+                f"{{ let __coll = &({val}); "
                 f"let __idx_raw = {idx}; let actual_idx = if __idx_raw < 0 {{ (__idx_raw + ({len_expr}) as i32) as usize }} else {{ __idx_raw as usize }}; "
-                f"{inner_expr} }})"
+                f"{inner_expr} }}"
             )
 
         elif isinstance(expr, IRFunctionCall):
@@ -1761,6 +1870,19 @@ class RustCodegen:
         self._emit("}")
 
     def _gen_binop(self, expr) -> str:
+        if expr.trait_info:
+            trait_name, method_name = expr.trait_info
+            left = self._gen_expr(expr.left)
+            right = self._gen_expr(expr.right)
+            
+            # Prevent move errors for classes in binary ops
+            if isinstance(getattr(expr.left, "result_type", None), IRClassType):
+                left = f"{left}.clone()"
+            if isinstance(getattr(expr.right, "result_type", None), IRClassType):
+                right = f"{right}.clone()"
+                
+            return f"{left} {expr.op} {right}"
+
         if expr.op == "/":
             left = self._gen_expr_as_float(expr.left)
             right = self._gen_expr_as_float(expr.right)
@@ -1778,6 +1900,10 @@ class RustCodegen:
             right = self._gen_expr(expr.right)
             elem_type = self._get_rust_type(expr.result_type.element_type)
             return f"({{ let mut __v: Vec<{elem_type}> = {left}.clone(); __v.extend({right}.clone()); __v }})"
+        if expr.op == "*" and isinstance(expr.result_type, IRListType):
+            left = self._gen_expr(expr.left)
+            right = self._gen_expr(expr.right)
+            return f"{left}.repeat({right} as usize)"
         if expr.op == "*" and isinstance(expr.result_type, IRStrType):
             if isinstance(expr.left, IRStrLit):
                 left_str = self._gen_expr(expr.left)

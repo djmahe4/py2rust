@@ -364,6 +364,12 @@ class TypeChecker:
                 or (isinstance(lt, (IntType, UnknownType)) and isinstance(rt, (StrType, UnknownType)))
             ):
                 pass  # Valid string repetition
+            # Check for list repetition (list * int or int * list)
+            elif expr.op == "*" and (
+                (isinstance(lt, (ListType, UnknownType)) and isinstance(rt, (IntType, UnknownType)))
+                or (isinstance(lt, (IntType, UnknownType)) and isinstance(rt, (ListType, UnknownType)))
+            ):
+                pass  # Valid list repetition
             # Check for list concatenation
             elif (
                 expr.op == "+" and isinstance(lt, (ListType, UnknownType)) and isinstance(rt, (ListType, UnknownType))
@@ -373,6 +379,26 @@ class TypeChecker:
                 else:
                     raise self._err(
                         f"Invalid operand types for '{expr.op}': list[{lt.element_type}] and list[{rt.element_type}]",
+                        expr.line,
+                        expr.col,
+                    )
+            elif isinstance(lt, ClassType):
+                # Check for operator overloading via dunder methods
+                op_to_dunder = {
+                    "+": "__add__",
+                    "-": "__sub__",
+                    "*": "__mul__",
+                    "/": "__truediv__",
+                    "//": "__floordiv__",
+                    "%": "__mod__",
+                    "**": "__pow__",
+                }
+                dunder = op_to_dunder.get(expr.op)
+                if dunder and self.st.lookup_method(lt.name, dunder, arity=1):
+                    pass # Valid via dunder method
+                else:
+                    raise self._err(
+                        f"Invalid operand types for '{expr.op}': {lt} and {rt}",
                         expr.line,
                         expr.col,
                     )

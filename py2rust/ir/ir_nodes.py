@@ -173,6 +173,8 @@ class IRBinOp:
     left: object
     right: object
     result_type: object
+    # (trait_name, method_name) if it maps to a Rust trait (e.g., ("Add", "add"))
+    trait_info: Optional[tuple[str, str]] = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,8 @@ class IRSubscript:
     index: object
     value_type: object
     result_type: object
+    # (trait_name, method_name) if it maps to a Rust trait (e.g., ("Index", "index"))
+    trait_info: Optional[tuple[str, str]] = None
 
 
 @dataclass(frozen=True)
@@ -502,6 +506,8 @@ class IRSubscriptAssign:
     index: object
     value: object
     value_type: object
+    # (trait_name, method_name) if it maps to a Rust trait (e.g., ("IndexMut", "index_mut"))
+    trait_info: Optional[tuple[str, str]] = None
 
 
 @dataclass(frozen=True)

@@ -41,6 +41,10 @@ from ..frontend.ast_nodes import (
     TupleLiteral,
     TypeVarType,
     GenericType,
+    Subscript,
+    SubscriptAssign,
+    Assign,
+    AugAssign,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -131,6 +135,8 @@ from .type_checker import TypeChecker
 
 
 def _to_ir_type(t):
+    if isinstance(t, str):
+        return IRClassType(name=t)
     if t is None:
         return IRUnitType()
     # If already an IR type, return as is
@@ -377,7 +383,7 @@ class IRBuilder:
                 base_trait_methods.update(gather_methods(base_info))
 
         for item in cls.body:
-            if type(item).__name__ == "FunctionDef" and item.name != "__init__":
+            if isinstance(item, FunctionDef) and item.name != "__init__":
                 if item.name not in base_trait_methods:
                     trait_methods.append(self._build_trait_method(item))
 
@@ -436,20 +442,37 @@ class IRBuilder:
     def _check_mutates_self(self, body) -> bool:
         """Check if any statement in a method mutates self."""
         for stmt in body:
-            name = type(stmt).__name__
-            if name == "Assign":
+            if isinstance(stmt, Assign):
+                if (isinstance(stmt.target, AttributeExpr) and 
+                    (isinstance(stmt.target.value, SelfExpr) or (isinstance(stmt.target.value, Name) and stmt.target.value.name == "self"))):
+                    return True
                 if isinstance(stmt.target, tuple) and len(stmt.target) > 0 and stmt.target[0] == "attr":
                     if stmt.target[1] == "self":
                         return True
-            elif name == "AugAssign":
-                if stmt.target == ("attr", "self", stmt.target[2] if isinstance(stmt.target, tuple) and len(stmt.target) > 2 else ""): # Fallback
-                     return True
+            elif isinstance(stmt, AugAssign):
+                if (isinstance(stmt.target, AttributeExpr) and 
+                    (isinstance(stmt.target.value, SelfExpr) or (isinstance(stmt.target.value, Name) and stmt.target.value.name == "self"))):
+                    return True
+                if isinstance(stmt.target, tuple) and len(stmt.target) > 0 and stmt.target[0] == "attr":
+                    if stmt.target[1] == "self":
+                        return True
                 # Simpler check for AugAssign target
                 if isinstance(stmt.target, str) and stmt.target.startswith("self."):
                     return True
-                # The parser seems to use tuples for attributes
-                if isinstance(stmt.target, tuple) and len(stmt.target) > 1 and stmt.target[1] == "self":
+
+            elif isinstance(stmt, SubscriptAssign):
+                # Check for deep targets
+                curr = stmt.target
+                if (isinstance(curr, AttributeExpr) and 
+                    (isinstance(curr.value, SelfExpr) or (isinstance(curr.value, Name) and curr.value.name == "self"))):
                     return True
+                while isinstance(curr, (AttributeExpr, Subscript)):
+                    if isinstance(curr, AttributeExpr):
+                        if isinstance(curr.value, SelfExpr) or (isinstance(curr.value, Name) and curr.value.name == "self"):
+                            return True
+                        curr = curr.value
+                    elif isinstance(curr, Subscript):
+                        curr = curr.value
 
             # Recursively check blocks
             if hasattr(stmt, "body") and stmt.body:
@@ -787,14 +810,23 @@ class IRBuilder:
             target_type = self.inferencer.infer(stmt.target)
             if isinstance(target_type, ListType):
                 value_type = _to_ir_type(target_type.element_type)
-            elif isinstance(target_type, DictType):
+            target_type = self.inferencer.infer(stmt.target)
+            trait_info = None
+            if isinstance(target_type, DictType):
                 value_type = _to_ir_type(target_type.value_type)
             elif isinstance(target_type, StrType):
                 value_type = IRStrType()
+            elif isinstance(target_type, ClassType):
+                # Check for __setitem__
+                if self.st.lookup_method(target_type.name, "__setitem__", 2):
+                    trait_info = ("IndexMut", "index_mut")
+                value_type = IRIntType() # Default
             else:
                 value_type = IRIntType()
+            
             return IRSubscriptAssign(
-                target=target_val, index=index_val, value=value, value_type=value_type
+                target=target_val, index=index_val, value=value, value_type=value_type,
+                trait_info=trait_info
             )
 
         elif name == "MatchStmt":
@@ -866,9 +898,24 @@ class IRBuilder:
             if result_type is None:
                 result_type = IntType()
             ir_result = _to_ir_type(result_type)
+            left_type = self.inferencer.infer(expr.left)
+            
+            trait_info = None
+            if isinstance(left_type, ClassType):
+                op_to_trait = {
+                    "+": ("Add", "add"),
+                    "-": ("Sub", "sub"),
+                    "*": ("Mul", "mul"),
+                    "/": ("Div", "div"),
+                    "//": ("Div", "div"),
+                    "%": ("Rem", "rem"),
+                }
+                if expr.op in op_to_trait:
+                    trait_info = op_to_trait[expr.op]
+
             left = self._build_expr(expr.left, ir_result)
             right = self._build_expr(expr.right, ir_result)
-            return IRBinOp(op=expr.op, left=left, right=right, result_type=ir_result)
+            return IRBinOp(op=expr.op, left=left, right=right, result_type=ir_result, trait_info=trait_info)
 
         elif name == "UnaryOp":
             operand_type = self.inferencer.infer(expr.operand)
@@ -964,16 +1011,27 @@ class IRBuilder:
             idx = self._build_expr(expr.index)
             val_type = self.inferencer.infer(expr.value)
             ir_val_type = _to_ir_type(val_type) if val_type else IRIntType()
+            trait_info = None
             if isinstance(val_type, ListType):
                 result_type = _to_ir_type(val_type.element_type)
             elif isinstance(val_type, StrType):
                 result_type = IRStrType()
             elif isinstance(val_type, DictType):
                 result_type = _to_ir_type(val_type.value_type)
+            elif isinstance(val_type, ClassType):
+                # Check for __getitem__
+                if self.st.lookup_method(val_type.name, "__getitem__", 1):
+                    trait_info = ("Index", "index")
+                    sig = self.st.lookup_method(val_type.name, "__getitem__", 1)
+                    result_type = _to_ir_type(sig[1])
+                else:
+                    result_type = IRIntType()
             else:
                 result_type = IRIntType()
+            
             return IRSubscript(
-                value=val, index=idx, value_type=ir_val_type, result_type=result_type
+                value=val, index=idx, value_type=ir_val_type, result_type=result_type,
+                trait_info=trait_info
             )
 
         elif name == "FunctionCall":

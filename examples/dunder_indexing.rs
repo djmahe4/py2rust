@@ -40,14 +40,41 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn first_element<T: Clone>(items: Vec<T>) -> Result<T, PyError> {
-    return Ok({ let __coll = &(items); let __idx_raw = 0; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx].clone() });
+pub trait ContainerTrait {
+    fn __getitem__(&self, idx: i32) -> Result<i32, PyError>;
+    fn __setitem__(&mut self, idx: i32, val: i32) -> Result<(), PyError>;
+}
+
+#[derive(Clone, Debug)]
+struct Container {
+    items: Vec<i32>,
+}
+
+impl Container {
+    fn new() -> Result<Self, PyError> {
+        Ok(Self { items: vec![0].repeat(3 as usize) })
+    }
+}
+
+impl ContainerTrait for Container {
+    fn __getitem__(&self, idx: i32) -> Result<i32, PyError> {
+        return Ok({ let __coll = &(self.items); let __idx_raw = idx; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx] });
+    }
+    fn __setitem__(&mut self, idx: i32, val: i32) -> Result<(), PyError> {
+        self.items[idx as usize] = val;
+        Ok(())
+    }
+}
+
+
+fn test() -> Result<(), PyError> {
+    let mut c: Container = Container::new()?;
+    c.__setitem__(1, 10)?;
+    println!("{}", c.__getitem__(1)?);
+    Ok(())
 }
 
 fn main() -> Result<(), PyError> {
-    let nums: Vec<i32> = vec![1, 2, 3];
-    let strs: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string()];
-    println!("{}", first_element(nums)?);
-    println!("{}", first_element(strs)?);
+    test()?;
     Ok(())
 }

@@ -141,7 +141,7 @@ def main() -> int:
     code = _compile(src)
     assert "__coll[" in code
     assert "{ let __coll = &(lst);" in code
-    assert "(__coll[actual_idx]).clone()" in code
+    assert "__coll[actual_idx].clone()" in code
 
 
 def test_invalid_condition_type():

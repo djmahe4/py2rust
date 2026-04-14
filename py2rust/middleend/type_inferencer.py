@@ -105,6 +105,26 @@ class TypeInferencer:
             return None
         if isinstance(lt, UnknownType) or isinstance(rt, UnknownType):
             return UnknownType()
+
+        # Check for user-defined dunder methods
+        op_to_dunder = {
+            "+": "__add__",
+            "-": "__sub__",
+            "*": "__mul__",
+            "/": "__truediv__",
+            "//": "__floordiv__",
+            "%": "__mod__",
+            "**": "__pow__",
+        }
+        if expr.op in op_to_dunder and isinstance(lt, ClassType):
+            dunder = op_to_dunder[expr.op]
+            # Binary operators always have 1 argument (other)
+            method_info = self.st.lookup_method(lt.name, dunder, 1)
+            if method_info:
+                # method_info is (FunctionDef, defining_class)
+                m_def, _ = method_info
+                return m_def.return_type
+
         if expr.op == "/":
             return FloatType()
         if isinstance(lt, FloatType) or isinstance(rt, FloatType):
@@ -116,6 +136,10 @@ class TypeInferencer:
                 return StrType()
             if isinstance(lt, IntType) and isinstance(rt, StrType):
                 return StrType()
+            if isinstance(lt, ListType) and isinstance(rt, IntType):
+                return lt
+            if isinstance(lt, IntType) and isinstance(rt, ListType):
+                return rt
         if expr.op == "+":
             if isinstance(lt, ListType) and isinstance(rt, ListType):
                 if type(lt.element_type) is type(rt.element_type):
@@ -181,6 +205,11 @@ class TypeInferencer:
             return StrType()
         if isinstance(t, DictType):
             return t.value_type
+        if isinstance(t, ClassType):
+            # Check for __getitem__
+            sig = self.st.lookup_method(t.name, "__getitem__", 1)
+            if sig:
+                return sig[1]
         return None
 
     def _infer_call(self, expr):

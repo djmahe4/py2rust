@@ -443,8 +443,11 @@ class Parser:
                 elem_type = self._parse_type(node.slice)
                 return SetType(element_type=elem_type)
             raise self._err("Unsupported generic type", node, UnsupportedFeatureError)
-        elif isinstance(node, ast.Constant) and node.value is None:
-            return UnitType()  # Use unit type for None return types
+        elif isinstance(node, ast.Constant):
+            if node.value is None:
+                return UnitType()
+            if isinstance(node.value, str):
+                return ClassType(name=node.value)
         raise self._err(
             f"Unsupported type annotation: {ast.dump(node)}",
             node,

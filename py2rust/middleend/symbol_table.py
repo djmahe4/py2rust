@@ -63,6 +63,25 @@ class SymbolTable:
         self._enums: dict = {}  # name -> EnumInfo
         self._traits: dict = {}  # name -> TraitInfo
         self._current_class: Optional[str] = None
+        self._register_std_traits()
+
+    def _register_std_traits(self):
+        # Arithmetic
+        self.define_trait("Add", [], {"add": {1: (None, None)}})
+        self.define_trait("Sub", [], {"sub": {1: (None, None)}})
+        self.define_trait("Mul", [], {"mul": {1: (None, None)}})
+        self.define_trait("Div", [], {"div": {1: (None, None)}})
+        # Comparison
+        self.define_trait("PartialEq", [], {"eq": {1: (None, None)}})
+        self.define_trait("PartialOrd", [], {"lt": {1: (None, None)}})
+        # Container
+        self.define_trait("Index", [], {"index": {1: (None, None)}})
+        self.define_trait("IndexMut", [], {"index_mut": {1: (None, None)}})
+        # Built-in
+        self.define_trait("Hash", [], {"hash": {1: (None, None)}})
+        self.define_trait("Display", [], {"fmt": {1: (None, None)}})
+        self.define_trait("Debug", [], {"fmt": {1: (None, None)}})
+        self.define_trait("Clone", [], {"clone": {0: (None, None)}})
 
     @property
     def current_scope(self) -> Scope:
