@@ -47,18 +47,74 @@ pub enum TryResult<T> {
     Continue,
 }
 
-fn divide(a: i32, b: i32) -> Result<i32, PyError> {
-    if b == 0 {
-        return Err(PyError::ValueError("Division by zero".to_string()));
+fn main() -> Result<(), PyError> {
+    let mut i: i32 = 0;
+
+    {
+        let __result = (|| -> Result<TryResult<()>, PyError> {
+            return Err(PyError::ValueError("inner err".to_string()));
+            Ok(TryResult::Normal)
+        })();
+        match __result {
+            Ok(TryResult::Return(v)) => return Ok(v),
+            Ok(TryResult::Break) => panic!("break outside loop"),
+            Ok(TryResult::Continue) => panic!("continue outside loop"),
+            Ok(TryResult::Normal) => {}
+            Err(e) => {
+                let e = e.clone();
+                {
+                    let __result = (|| -> Result<TryResult<()>, PyError> {
+                        return Err(PyError::Exception("outer err".to_string())); /* warning: cause lost */
+                        Ok(TryResult::Normal)
+                    })();
+                    match __result {
+                        Ok(TryResult::Return(v)) => return Ok(v),
+                        Ok(TryResult::Break) => panic!("break outside loop"),
+                        Ok(TryResult::Continue) => panic!("continue outside loop"),
+                        Ok(TryResult::Normal) => {}
+                        Err(ex) => {
+                            let ex = ex.clone();
+                            println!("{}", "caught nested".to_string());
+                        }
+                    }
+                }
+            }
+        }
     }
-    return Ok(((a as f64 / b as f64).floor() as i32));
+    {
+        for __i_140503123311456 in 0..5 {
+            i = __i_140503123311456;
+            {
+                let __result = (|| -> Result<TryResult<()>, PyError> {
+                    if i == 3 {
+                        return Ok(TryResult::Break);
+                    }
+                    if i == 1 {
+                        return Ok(TryResult::Continue);
+                    }
+                    println!("{}", i);
+                    Ok(TryResult::Normal)
+                })();
+                match __result {
+                    Ok(TryResult::Return(v)) => return Ok(v),
+                    Ok(TryResult::Break) => break,
+                    Ok(TryResult::Continue) => continue,
+                    Ok(TryResult::Normal) => {}
+                    Err(_) => {
+                        0;
+                    }
+                }
+            }
+        }
+    }
+    println!("{}", test_return()?);
+    Ok(())
 }
 
-fn main() -> Result<(), PyError> {
+fn test_return() -> Result<i32, PyError> {
     {
-        let __result = (|| -> Result<TryResult<()>, PyError> {
-            let x: i32 = divide(10, 0)?;
-            println!("{}", x);
+        let __result = (|| -> Result<TryResult<i32>, PyError> {
+            return Ok(TryResult::Return(42));
             Ok(TryResult::Normal)
         })();
         match __result {
@@ -67,25 +123,9 @@ fn main() -> Result<(), PyError> {
             Ok(TryResult::Continue) => panic!("continue outside loop"),
             Ok(TryResult::Normal) => {}
             Err(_) => {
-                println!("{}", (-(1)));
+                return Ok((-(1)));
             }
         }
     }
-    {
-        let __result = (|| -> Result<TryResult<()>, PyError> {
-            let y: i32 = divide(10, 2)?;
-            println!("{}", y);
-            Ok(TryResult::Normal)
-        })();
-        match __result {
-            Ok(TryResult::Return(v)) => return Ok(v),
-            Ok(TryResult::Break) => panic!("break outside loop"),
-            Ok(TryResult::Continue) => panic!("continue outside loop"),
-            Ok(TryResult::Normal) => {}
-            Err(_) => {
-                println!("{}", (-(2)));
-            }
-        }
-    }
-    return Ok({ 0; () });
+    Ok(0)
 }

@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 pub trait PointTrait {
     fn get_x(&self) -> Result<i32, PyError>;
     fn get_y(&self) -> Result<i32, PyError>;
@@ -65,5 +77,5 @@ fn main() -> Result<(), PyError> {
     let x: i32 = p.get_x()?;
     let y: i32 = p.get_y()?;
     let d: i32 = p.distance_to(0)?;
-    { ((x + y) + d); return Ok(()); }
+    return Ok({ ((x + y) + d); () });
 }

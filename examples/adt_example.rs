@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Color {
     RED,

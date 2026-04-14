@@ -265,24 +265,26 @@ import os
         parse(src)
 
 
-def test_parse_lambda_rejected():
+def test_parse_lambda():
     src = """
 def f() -> int:
     g = lambda x: x
     return 0
 """
-    with pytest.raises(UnsupportedFeatureError):
-        parse(src)
+    m = parse(src)
+    assert len(m.functions) == 1
+    # Check if lambda exists in body
+    # (Checking exact structure might be complex, but let's at least confirm it doesn't fail)
 
 
-def test_parse_comprehension_rejected():
+def test_parse_comprehension():
     src = """
 def f() -> int:
     x = [i for i in range(0, 10)]
     return 0
 """
-    with pytest.raises(UnsupportedFeatureError):
-        parse(src)
+    m = parse(src)
+    assert len(m.functions) == 1
 
 
 

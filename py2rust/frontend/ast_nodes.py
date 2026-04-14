@@ -84,6 +84,30 @@ class EnumType:
         return f"Enum({self.name})"
 
 
+@dataclass(frozen=True)
+class SetType:
+    element_type: object
+
+    def __str__(self):
+        return f"set[{self.element_type}]"
+
+
+@dataclass(frozen=True)
+class FunctionType:
+    param_types: tuple
+    return_type: object
+
+    def __str__(self):
+        params = ", ".join(str(t) for t in self.param_types)
+        return f"({params}) -> {self.return_type}"
+
+
+@dataclass(frozen=True)
+class UnknownType:
+    def __str__(self):
+        return "Unknown"
+
+
 AnyType = Union[
     IntType,
     FloatType,
@@ -91,10 +115,13 @@ AnyType = Union[
     StrType,
     ListType,
     DictType,
+    SetType,
     TupleType,
     FileType,
     ClassType,
     EnumType,
+    UnknownType,
+    FunctionType,
 ]
 
 
@@ -237,7 +264,49 @@ class SelfExpr:
 
 @dataclass(frozen=True)
 class AwaitExpr:
-    value: object
+    value:object
+    line: int = 0
+    col: int = 0
+
+@dataclass(frozen=True)
+class LambdaExpr:
+    params: tuple  # tuple of Param
+    body: Expr
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class Comprehension:
+    target: object  # Name or TupleLiteral
+    iterable: Expr
+    ifs: tuple  # tuple of Expr
+    is_async: bool = False
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class ListComp:
+    elt: Expr
+    generators: tuple  # tuple of Comprehension
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class DictComp:
+    key: Expr
+    value: Expr
+    generators: tuple
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class SetComp:
+    elt: Expr
+    generators: tuple
     line: int = 0
     col: int = 0
 
@@ -262,6 +331,10 @@ Expr = Union[
     SelfExpr,
     TupleLiteral,
     AwaitExpr,
+    LambdaExpr,
+    ListComp,
+    DictComp,
+    SetComp,
 ]
 
 
@@ -431,6 +504,7 @@ class TryStmt:
 @dataclass(frozen=True)
 class RaiseStmt:
     value: object
+    cause: object = None
     line: int = 0
     col: int = 0
 

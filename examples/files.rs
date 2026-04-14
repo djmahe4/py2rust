@@ -31,6 +31,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 struct FileHandle {
     file: File,
 }
@@ -83,5 +95,5 @@ fn main() -> Result<(), PyError> {
     let mut f: FileHandle = FileHandle::open(&"test.txt".to_string(), &"w".to_string())?;
     f.write(&"Hello".to_string())?;
     f.close()?;
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

@@ -28,13 +28,25 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 fn sum_list(nums: Vec<i32>) -> Result<i32, PyError> {
     let mut n: i32 = 0;
 
     let mut total: i32 = 0;
     {
-        for __i_140418752228256 in 0..nums.len() as i32 {
-            n = __i_140418752228256;
+        for __i_140380267344432 in 0..nums.len() as i32 {
+            n = __i_140380267344432;
             total = (total + ({ let __coll = &(nums); let __idx_raw = n; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx] }));
         }
     }
@@ -45,5 +57,5 @@ fn main() -> Result<(), PyError> {
     let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
     let result: i32 = sum_list(numbers)?;
     println!("{}", result);
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

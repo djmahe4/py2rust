@@ -48,6 +48,7 @@ from .ast_nodes import (
     StrType,
     UnitType,
     ListType,
+    SetType,
     DictType,
     TupleType,
     ClassType,
@@ -61,6 +62,11 @@ from .ast_nodes import (
     OrPattern,
     AsPattern,
     EnumDef,
+    LambdaExpr,
+    Comprehension,
+    ListComp,
+    DictComp,
+    SetComp,
 )
 
 _BINOP_MAP = {
@@ -357,6 +363,9 @@ class Parser:
                     raise self._err("Variadic tuples not supported", node, UnsupportedFeatureError)
                 else:
                     return TupleType(element_types=(self._parse_type(node.slice),))
+            if isinstance(node.value, ast.Name) and node.value.id == "set":
+                elem_type = self._parse_type(node.slice)
+                return SetType(element_type=elem_type)
             raise self._err("Unsupported generic type", node, UnsupportedFeatureError)
         elif isinstance(node, ast.Constant) and node.value is None:
             return UnitType()  # Use unit type for None return types
@@ -618,8 +627,10 @@ class Parser:
 
         if isinstance(node, ast.Raise):
             exc = self._parse_expr(node.exc) if node.exc else None
+            cause = self._parse_expr(node.cause) if node.cause else None
             return RaiseStmt(
                 value=exc,
+                cause=cause,
                 line=node.lineno,
                 col=node.col_offset + 1,
             )
@@ -876,13 +887,15 @@ class Parser:
             return Name(name=node.id, line=node.lineno, col=node.col_offset + 1)
 
         if isinstance(node, ast.Lambda):
-            raise self._err("Lambdas are not supported", node, UnsupportedFeatureError)
-        if isinstance(
-            node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
-        ):
-            raise self._err(
-                "Comprehensions are not supported", node, UnsupportedFeatureError
-            )
+            return self._parse_lambda(node)
+        if isinstance(node, ast.ListComp):
+            return self._parse_list_comp(node)
+        if isinstance(node, ast.DictComp):
+            return self._parse_dict_comp(node)
+        if isinstance(node, ast.SetComp):
+            return self._parse_set_comp(node)
+        if isinstance(node, ast.GeneratorExp):
+            return self._parse_gen_exp(node)
         if isinstance(node, ast.IfExp):
             raise self._err(
                 "Ternary expressions are not supported", node, UnsupportedFeatureError
@@ -896,6 +909,83 @@ class Parser:
             f"Unsupported expression: {type(node).__name__}",
             node,
             UnsupportedFeatureError,
+        )
+
+    def _parse_lambda(self, node: ast.Lambda) -> LambdaExpr:
+        params = []
+        for arg in node.args.args:
+            # Type annotation is None for lambda params
+            params.append(
+                Param(
+                    name=arg.arg,
+                    type_annotation=None,
+                    line=arg.lineno,
+                    col=arg.col_offset + 1,
+                )
+            )
+        body = self._parse_expr(node.body)
+        return LambdaExpr(
+            params=tuple(params),
+            body=body,
+            line=node.lineno,
+            col=node.col_offset + 1,
+        )
+
+    def _parse_comprehension(self, node: ast.comprehension) -> Comprehension:
+        target = self._parse_expr(node.target)
+        iterable = self._parse_expr(node.iter)
+        ifs = tuple(self._parse_expr(i) for i in node.ifs)
+        return Comprehension(
+            target=target,
+            iterable=iterable,
+            ifs=ifs,
+            is_async=bool(node.is_async),
+            line=getattr(node, "lineno", 0),
+            col=getattr(node, "col_offset", 0) + 1,
+        )
+
+    def _parse_list_comp(self, node: ast.ListComp) -> ListComp:
+        elt = self._parse_expr(node.elt)
+        generators = tuple(self._parse_comprehension(c) for c in node.generators)
+        return ListComp(
+            elt=elt,
+            generators=generators,
+            line=node.lineno,
+            col=node.col_offset + 1,
+        )
+
+    def _parse_dict_comp(self, node: ast.DictComp) -> DictComp:
+        key = self._parse_expr(node.key)
+        value = self._parse_expr(node.value)
+        generators = tuple(self._parse_comprehension(c) for c in node.generators)
+        return DictComp(
+            key=key,
+            value=value,
+            generators=generators,
+            line=node.lineno,
+            col=node.col_offset + 1,
+        )
+
+    def _parse_set_comp(self, node: ast.SetComp) -> SetComp:
+        elt = self._parse_expr(node.elt)
+        generators = tuple(self._parse_comprehension(c) for c in node.generators)
+        return SetComp(
+            elt=elt,
+            generators=generators,
+            line=node.lineno,
+            col=node.col_offset + 1,
+        )
+
+    def _parse_gen_exp(self, node: ast.GeneratorExp) -> ListComp:
+        # For now, map generator expressions to list comprehensions
+        # until we have full generator support.
+        elt = self._parse_expr(node.elt)
+        generators = tuple(self._parse_comprehension(c) for c in node.generators)
+        return ListComp(
+            elt=elt,
+            generators=generators,
+            line=node.lineno,
+            col=node.col_offset + 1,
         )
 
     def _parse_match(self, node: ast.Match) -> MatchStmt:

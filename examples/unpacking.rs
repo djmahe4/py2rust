@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 fn get_point() -> Result<(i32, i32), PyError> {
     return Ok((10, 20));
 }
@@ -43,5 +55,5 @@ fn main() -> Result<(), PyError> {
     let (a, b) = (50, 60);
     println!("{}", a);
     println!("{}", b);
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

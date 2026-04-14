@@ -37,6 +37,14 @@ from ..frontend.ast_nodes import (
     SelfExpr,
     NewExpr,
     AwaitExpr,
+    LambdaExpr,
+    Comprehension,
+    ListComp,
+    DictComp,
+    SetComp,
+    SetType,
+    UnknownType,
+    FunctionType,
     Module,
 )
 from ..utils.errors import Py2RustTypeError, SemanticError
@@ -45,6 +53,8 @@ from .type_inferencer import TypeInferencer
 
 
 def _types_compatible(a, b) -> bool:
+    if isinstance(a, UnknownType) or isinstance(b, UnknownType):
+        return True
     if type(a) is type(b):
         if isinstance(a, ListType) and isinstance(b, ListType):
             # Rust Vec<T> is invariant — element types must match exactly
@@ -240,6 +250,10 @@ class TypeChecker:
             SelfExpr,
             NewExpr,
             AwaitExpr,
+            LambdaExpr,
+            ListComp,
+            DictComp,
+            SetComp,
         )
 
         if isinstance(expr, Name):
@@ -311,17 +325,17 @@ class TypeChecker:
                     expr.col,
                 )
             # Check for string concatenation
-            if isinstance(lt, StrType) and isinstance(rt, StrType) and expr.op == "+":
-                pass  # Valid string concatenation
+            if (isinstance(lt, StrType) or isinstance(lt, UnknownType)) and (isinstance(rt, StrType) or isinstance(rt, UnknownType)) and expr.op == "+":
+                pass  # Valid string concatenation (or potentially valid if unknown)
             # Check for string repetition (str * int or int * str)
             elif expr.op == "*" and (
-                (isinstance(lt, StrType) and isinstance(rt, IntType))
-                or (isinstance(lt, IntType) and isinstance(rt, StrType))
+                (isinstance(lt, (StrType, UnknownType)) and isinstance(rt, (IntType, UnknownType)))
+                or (isinstance(lt, (IntType, UnknownType)) and isinstance(rt, (StrType, UnknownType)))
             ):
                 pass  # Valid string repetition
             # Check for list concatenation
             elif (
-                expr.op == "+" and isinstance(lt, ListType) and isinstance(rt, ListType)
+                expr.op == "+" and isinstance(lt, (ListType, UnknownType)) and isinstance(rt, (ListType, UnknownType))
             ):
                 if type(lt.element_type) is type(rt.element_type):
                     pass  # Valid list concatenation
@@ -332,8 +346,8 @@ class TypeChecker:
                         expr.col,
                     )
             elif not (
-                isinstance(lt, (IntType, FloatType))
-                and isinstance(rt, (IntType, FloatType))
+                isinstance(lt, (IntType, FloatType, UnknownType))
+                and isinstance(rt, (IntType, FloatType, UnknownType))
             ):
                 raise self._err(
                     f"Invalid operand types for '{expr.op}': {lt} and {rt}",
@@ -415,9 +429,9 @@ class TypeChecker:
                     )
                 self.check_expr(expr.args[0])
                 arg_t = self.inferencer.infer(expr.args[0])
-                if not isinstance(arg_t, (ListType, StrType, DictType)):
+                if not isinstance(arg_t, (ListType, StrType, DictType, SetType)):
                     raise self._err(
-                        f"len() argument must be list, str, or dict, got {arg_t}",
+                        f"len() argument must be list, str, dict, or set, got {arg_t}",
                         expr.line,
                         expr.col,
                     )
@@ -429,8 +443,26 @@ class TypeChecker:
                         cls_info = self.st.lookup_class(curr_type.name)
                         if cls_info:
                             pass
-                        else:
-                            raise self._err(f"Unknown class: '{curr_type.name}'", expr.line, expr.col)
+                    elif isinstance(curr_type, FunctionType):
+                        if len(expr.args) != len(curr_type.param_types):
+                            raise self._err(
+                                f"Function '{expr.name}' expected {len(curr_type.param_types)} arguments, got {len(expr.args)}",
+                                expr.line,
+                                expr.col,
+                            )
+                        for i, arg in enumerate(expr.args):
+                            self.check_expr(arg)
+                            arg_t = self.inferencer.infer(arg)
+                            if not _types_compatible(curr_type.param_types[i], arg_t):
+                                raise self._err(
+                                    f"Argument type mismatch for '{expr.name}': expected {curr_type.param_types[i]}, got {arg_t}",
+                                    arg.line,
+                                    arg.col,
+                                )
+                    elif isinstance(curr_type, UnknownType):
+                        # Allow calls to unknown types (potential lambdas)
+                        for arg in expr.args:
+                            self.check_expr(arg)
                     elif self.st.lookup_class(expr.name):
                         pass
                     else:
@@ -457,6 +489,10 @@ class TypeChecker:
                                 arg.line,
                                 arg.col,
                             )
+        elif isinstance(expr, LambdaExpr):
+            self._check_lambda(expr)
+        elif isinstance(expr, (ListComp, DictComp, SetComp)):
+            self._check_comprehension(expr)
 
     def check_stmt(self, stmt) -> None:
         from ..frontend.ast_nodes import (
@@ -587,7 +623,13 @@ class TypeChecker:
                 elem_t = it_t.element_type
             elif isinstance(it_t, StrType):
                 elem_t = StrType()
-            self.st.define(stmt.target, elem_t)
+            elif isinstance(it_t, DictType):
+                elem_t = it_t.key_type
+            
+            if isinstance(stmt.target, str):
+                self.st.define(stmt.target, elem_t)
+            else:
+                self._bind_target(stmt.target, elem_t)
             for s in stmt.body:
                 self.check_stmt(s)
         elif isinstance(stmt, TryStmt):
@@ -601,6 +643,8 @@ class TypeChecker:
         elif isinstance(stmt, RaiseStmt):
             if stmt.value:
                 self.check_expr(stmt.value)
+            if getattr(stmt, "cause", None):
+                self.check_expr(stmt.cause)
         elif isinstance(stmt, WhileStmt):
             self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
@@ -721,3 +765,58 @@ class TypeChecker:
                  self._check_pattern(p, subject_type) # Recursive check for positional args?
         else:
             raise self._err(f"Unsupported pattern type: {type(pattern).__name__}", 0, 0, SemanticError)
+
+    def _check_lambda(self, expr: LambdaExpr) -> None:
+        self.st.enter_scope("lambda")
+        for param in expr.params:
+            # Lambda params are untyped in Python; default to UnknownType
+            self.st.define(param.name, UnknownType())
+        self.check_expr(expr.body)
+        self.st.exit_scope()
+
+    def _check_comprehension(self, expr: Union[ListComp, DictComp, SetComp]) -> None:
+        self.st.enter_scope("comprehension")
+        for gen in expr.generators:
+            self.check_expr(gen.iterable)
+            it_t = self.inferencer.infer(gen.iterable)
+            
+            elem_t = IntType()
+            if isinstance(it_t, ListType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, StrType):
+                elem_t = StrType()
+            elif isinstance(it_t, DictType):
+                elem_t = it_t.key_type  # Iterating dict yields keys
+            
+            self._bind_target(gen.target, elem_t)
+            for if_expr in gen.ifs:
+                self.check_expr(if_expr)
+        
+        if isinstance(expr, ListComp):
+            self.check_expr(expr.elt)
+        elif isinstance(expr, SetComp):
+            self.check_expr(expr.elt)
+        elif isinstance(expr, DictComp):
+            self.check_expr(expr.key)
+            self.check_expr(expr.value)
+            
+        self.st.exit_scope()
+
+    def _bind_target(self, target, target_type):
+        from ..frontend.ast_nodes import Name, TupleLiteral
+        if isinstance(target, Name):
+            self.st.define(target.name, target_type)
+        elif isinstance(target, str):
+            self.st.define(target, target_type)
+        elif isinstance(target, TupleLiteral):
+            if isinstance(target_type, TupleType):
+                for t, et in zip(target.elements, target_type.element_types):
+                    self._bind_target(t, et)
+            elif isinstance(target_type, ListType):
+                # Unpacking list: assume all elements match list's element type
+                for t in target.elements:
+                    self._bind_target(t, target_type.element_type)
+            else:
+                # Default fallback
+                for t in target.elements:
+                    self._bind_target(t, UnknownType())

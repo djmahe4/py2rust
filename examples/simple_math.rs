@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 fn add(x: i32, y: i32) -> Result<i32, PyError> {
     return Ok((x + y));
 }
@@ -43,5 +55,5 @@ fn main() -> Result<(), PyError> {
     let product: i32 = multiply(a, b)?;
     println!("{}", sum_result);
     println!("{}", product);
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

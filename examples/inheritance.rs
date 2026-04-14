@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 pub trait AnimalTrait {
     fn speak(&self) -> Result<i32, PyError>;
 }
@@ -78,5 +90,5 @@ fn main() -> Result<(), PyError> {
     let d: Dog = Dog::new("Buddy".to_string())?;
     let result: i32 = d.speak()?;
     println!("{}", result);
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

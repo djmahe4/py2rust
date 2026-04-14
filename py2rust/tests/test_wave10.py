@@ -62,8 +62,8 @@ def f(x: int) -> int:
 """
     rust = compile_to_rust(source)
     assert "Result<i32, PyError>" in rust
-    assert "let __result = (|| -> Result<(), PyError>" in rust
+    assert "let __result = (|| -> Result<TryResult<i32>, PyError> {" in rust
     assert "PyError::ValueError(\"negative\".to_string())" in rust
-    assert "if let Err(__exc) = __result" in rust
+    assert "Err(e) => {" in rust
     # When caught, it's cloned for the handler
-    assert "let e = __exc.clone();" in rust
+    assert "let e = e.clone();" in rust

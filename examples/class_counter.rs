@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 pub trait CounterTrait {
     fn increment(&mut self) -> Result<(), PyError>;
     fn get_count(&self) -> Result<i32, PyError>;
@@ -62,5 +74,5 @@ fn main() -> Result<(), PyError> {
     c.increment()?;
     let result: i32 = c.get_count()?;
     println!("{}", result);
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

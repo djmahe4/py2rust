@@ -12,6 +12,8 @@ from ..ir.ir_nodes import (
     IRDictType,
     IRTupleType,
     IRFileType,
+    IRSetType,
+    IRFunctionType,
     IRClassType,
     IRIntLit,
     IRFloatLit,
@@ -68,6 +70,11 @@ from ..ir.ir_nodes import (
     IRWildcardPattern,
     IROrPattern,
     IRAsPattern,
+    IRLambda,
+    IRComprehension,
+    IRListComp,
+    IRDictComp,
+    IRSetComp,
 )
 
 
@@ -308,6 +315,10 @@ class RustCodegen:
         self._uses_file_handle = False
         self._uses_py_error = False
         self._uses_async = False
+        self._inside_try = 0
+        self._loop_depth = 0
+        self._current_fn_return_type = "()"
+        self._uses_try_result = False
 
     def _get_rust_type(self, t) -> str:
         if t is None:
@@ -335,6 +346,11 @@ class RustCodegen:
         if isinstance(t, IRTupleType):
             types = ", ".join(self._get_rust_type(et) for et in t.element_types)
             return f"({types})"
+        if isinstance(t, IRSetType):
+            self._uses_hashset = True
+            return f"HashSet<{self._get_rust_type(t.element_type)}>"
+        if isinstance(t, IRFunctionType):
+            return "_"  # Let Rust infer closure types
         raise ValueError(f"Unknown type {type(t).__name__}")
 
     def _emit(self, line: str) -> None:
@@ -363,6 +379,7 @@ class RustCodegen:
         self._current_module = ir_mod
         self._lines = []
         self._uses_hashmap = False
+        self._uses_hashset = False
         self._uses_file_handle = False
         self._uses_py_error = False
         self._uses_async = False
@@ -405,6 +422,8 @@ class RustCodegen:
         imports = []
         if self._uses_hashmap:
             imports.append("use std::collections::HashMap;")
+        if self._uses_hashset:
+            imports.append("use std::collections::HashSet;")
         if self._uses_file_handle:
             imports.append("use std::fs::{File, OpenOptions};")
             imports.append("use std::io::{self, Read, Write, BufRead, BufReader, Seek, SeekFrom};")
@@ -442,6 +461,27 @@ class RustCodegen:
             final_lines.append("    fn from(err: std::io::Error) -> Self {")
             final_lines.append("        PyError::IOError(err.to_string())")
             final_lines.append("    }")
+            final_lines.append("}")
+            final_lines.append("")
+            final_lines.append("impl From<std::num::ParseIntError> for PyError {")
+            final_lines.append("    fn from(err: std::num::ParseIntError) -> Self {")
+            final_lines.append("        PyError::ValueError(err.to_string())")
+            final_lines.append("    }")
+            final_lines.append("}")
+            final_lines.append("")
+            final_lines.append("impl From<std::num::ParseFloatError> for PyError {")
+            final_lines.append("    fn from(err: std::num::ParseFloatError) -> Self {")
+            final_lines.append("        PyError::ValueError(err.to_string())")
+            final_lines.append("    }")
+            final_lines.append("}")
+            final_lines.append("")
+
+        if self._uses_try_result:
+            final_lines.append("pub enum TryResult<T> {")
+            final_lines.append("    Normal,")
+            final_lines.append("    Return(T),")
+            final_lines.append("    Break,")
+            final_lines.append("    Continue,")
             final_lines.append("}")
             final_lines.append("")
 
@@ -679,6 +719,7 @@ class RustCodegen:
         self._in_main = is_main
         if is_main:
             ret_type_str = "()"
+            self._current_fn_return_type = ret_type_str
             if func.is_async:
                 self._uses_async = True
                 self._emit(f"fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
@@ -688,6 +729,7 @@ class RustCodegen:
                 self._emit(f"fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
         else:
             ret_type_str = self._get_rust_type(func.return_type)
+            self._current_fn_return_type = ret_type_str
             if func.is_async:
                 self._uses_async = True
             async_kw = "async " if func.is_async else ""
@@ -821,6 +863,7 @@ class RustCodegen:
             self._emit("}")
 
         elif isinstance(stmt, IRWhile):
+            self._loop_depth += 1
             cond = self._strip_parens(self._gen_expr(stmt.condition))
             label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
             self._emit(f"'{label}: while {cond} {{")
@@ -832,6 +875,7 @@ class RustCodegen:
             self._at_top_level = old_top_level
             self._indent -= 1
             self._emit("}")
+            self._loop_depth -= 1
 
         elif isinstance(stmt, IRForRange):
             start = self._gen_expr(stmt.start)
@@ -844,6 +888,7 @@ class RustCodegen:
             if step_is_one:
                 # Wrap in a block so the inner loop variable doesn't leak
                 self._emit("{")
+                self._loop_depth += 1
                 self._indent += 1
                 # DO NOT redeclare the target here if it already exists in parent scope
                 self._emit(f"for {loop_var} in {start}..{stop} {{")
@@ -856,12 +901,14 @@ class RustCodegen:
                 self._at_top_level = old_top_level
                 self._indent -= 1
                 self._emit("}")
+                self._loop_depth -= 1
                 self._indent -= 1
                 self._emit("}")
             else:
                 step = self._gen_expr(stmt.step)
                 label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
                 self._emit("{")
+                self._loop_depth += 1
                 self._indent += 1
                 self._emit(f"let __stop = {stop};")
                 self._emit(f"let __step = {step};")
@@ -879,6 +926,7 @@ class RustCodegen:
                 self._emit(f"{_mangle(stmt.target)} += __step;")
                 self._indent -= 1
                 self._emit("}")
+                self._loop_depth -= 1
                 self._indent -= 1
                 self._emit("}")
 
@@ -900,6 +948,7 @@ class RustCodegen:
 
             label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
             self._emit("{")
+            self._loop_depth += 1
             self._indent += 1
             # Use a unique internal loop variable
             loop_var = f"__val_{id(stmt)}"
@@ -916,50 +965,72 @@ class RustCodegen:
 
             self._indent -= 1
             self._emit("}")
+            self._loop_depth -= 1
             self._indent -= 1
             self._emit("}")
 
         elif isinstance(stmt, IRReturn):
+            val_str = ""
             if self._in_main:
                 if stmt.value is not None:
                     val = self._gen_expr(stmt.value)
-                    self._emit(f"{{ {val}; return Ok(()); }}")
+                    val_str = f"{{ {val}; () }}"
                 else:
-                    self._emit("return Ok(());")
-                return
-
-            if stmt.value is None:
-                # Use default value for the expected return type
-                dv = self._default_value(stmt.result_type)
-                self._emit(f"return Ok({dv});")
+                    val_str = "()"
+            elif stmt.value is None:
+                val_str = self._default_value(stmt.result_type)
             else:
                 if isinstance(stmt.result_type, IRFloatType):
-                    val = self._gen_expr_as_float(stmt.value)
+                    val_str = self._gen_expr_as_float(stmt.value)
                 else:
-                    val = self._gen_expr(stmt.value)
-                self._emit(f"return Ok({val});")
+                    val_str = self._gen_expr(stmt.value)
+            
+            if self._inside_try > 0:
+                self._emit(f"return Ok(TryResult::Return({val_str}));")
+            else:
+                self._emit(f"return Ok({val_str});")
 
         elif isinstance(stmt, IRTryExcept):
             self._uses_py_error = True
+            self._uses_try_result = True
             self._emit("{")
             self._indent += 1
-            self._emit("let __result = (|| -> Result<(), PyError> {")
+            self._emit(f"let __result = (|| -> Result<TryResult<{self._current_fn_return_type}>, PyError> {{")
+            self._inside_try += 1
             self._indent += 1
             for s in stmt.body:
                 self._gen_stmt(s)
-            self._emit("Ok(())")
+            self._emit("Ok(TryResult::Normal)")
             self._indent -= 1
+            self._inside_try -= 1
             self._emit("})();")
             
-            self._emit("if let Err(__exc) = __result {")
+            self._emit("match __result {")
             self._indent += 1
-            # Simple catch-all for now
+            self._emit("Ok(TryResult::Return(v)) => return Ok(v),")
+            if self._loop_depth > 0:
+                self._emit("Ok(TryResult::Break) => break,")
+                self._emit("Ok(TryResult::Continue) => continue,")
+            else:
+                self._emit('Ok(TryResult::Break) => panic!("break outside loop"),')
+                self._emit('Ok(TryResult::Continue) => panic!("continue outside loop"),')
+            self._emit("Ok(TryResult::Normal) => {}")
+            
+            # Catch-all for now
             if stmt.handlers:
                 h_type, h_name, h_body = stmt.handlers[0]
+                binder = _mangle(h_name) if h_name else "_"
+                self._emit(f"Err({binder}) => {{")
+                self._indent += 1
                 if h_name:
-                    self._emit(f"let {_mangle(h_name)} = __exc.clone();")
+                    self._emit(f"let {binder} = {binder}.clone();")
                 for s in h_body:
                     self._gen_stmt(s)
+                self._indent -= 1
+                self._emit("}")
+            else:
+                self._emit("Err(e) => return Err(e),")
+                
             self._indent -= 1
             self._emit("}")
             self._indent -= 1
@@ -969,10 +1040,17 @@ class RustCodegen:
             self._uses_py_error = True
             if stmt.value:
                 val = self._gen_expr(stmt.value)
-                if "PyError::" in val:
-                    self._emit(f"return Err({val});")
+                if getattr(stmt, "cause", None):
+                    cause_val = self._gen_expr(stmt.cause)
+                    if "PyError::" in val:
+                        self._emit(f"return Err({val}); /* warning: cause lost */")
+                    else:
+                        self._emit(f'return Err(PyError::Exception(format!("{{}} (caused by {{}})", {val}, {cause_val})));')
                 else:
-                    self._emit(f"return Err(PyError::Exception({val}));")
+                    if "PyError::" in val:
+                        self._emit(f"return Err({val});")
+                    else:
+                        self._emit(f"return Err(PyError::Exception({val}));")
             else:
                 self._emit('return Err(PyError::Exception("Exception raised".to_string()));')
 
@@ -987,17 +1065,23 @@ class RustCodegen:
 
         elif isinstance(stmt, IRBreak):
             label = stmt.label if hasattr(stmt, "label") and stmt.label else None
-            if label:
-                self._emit(f"break '{label};")
+            if self._inside_try > 0:
+                self._emit("return Ok(TryResult::Break);")
             else:
-                self._emit("break;")
+                if label:
+                    self._emit(f"break '{label};")
+                else:
+                    self._emit("break;")
 
         elif isinstance(stmt, IRContinue):
             label = stmt.label if hasattr(stmt, "label") and stmt.label else None
-            if label:
-                self._emit(f"continue '{label};")
+            if self._inside_try > 0:
+                self._emit("return Ok(TryResult::Continue);")
             else:
-                self._emit("continue;")
+                if label:
+                    self._emit(f"continue '{label};")
+                else:
+                    self._emit("continue;")
 
         elif isinstance(stmt, IRDictDelete):
             target = self._gen_expr(stmt.target)
@@ -1281,7 +1365,10 @@ class RustCodegen:
         elif isinstance(expr, IRMethodCall):
             val = self._gen_expr(expr.value)
             args = ", ".join(self._gen_expr(a) for a in expr.args)
-            return f"{val}.{_mangle(expr.method)}({args})?"
+            res = f"{val}.{_mangle(expr.method)}({args})"
+            if getattr(expr, "is_fallible", True):
+                res += "?"
+            return res
         elif isinstance(expr, IRNew):
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             return f"{expr.class_name}::new({args})?"
@@ -1293,7 +1380,103 @@ class RustCodegen:
             if val.endswith("?"):
                 return f"{val[:-1]}.await?"
             return f"{val}.await"
+
+        elif isinstance(expr, IRLambda):
+            return self._gen_lambda(expr)
+
+        elif isinstance(expr, IRListComp):
+            return self._gen_list_comp(expr)
+
+        elif isinstance(expr, IRDictComp):
+            return self._gen_dict_comp(expr)
+
+        elif isinstance(expr, IRSetComp):
+            return self._gen_set_comp(expr)
+
         return f"/* unknown expr {type(expr).__name__} */"
+
+    def _gen_lambda(self, expr: IRLambda) -> str:
+        params = ", ".join(f"{p.name}" for p in expr.params)
+        body = self._gen_expr(expr.body)
+        return f"|{params}| {{ {body} }}"
+
+    def _gen_list_comp(self, node: IRListComp) -> str:
+        elem_t = self._get_rust_type(node.result_type.element_type)
+        inner = f"let mut __res = Vec::<{elem_t}>::new(); "
+        
+        # Build nested loops for generators
+        loop_code = ""
+        close_braces = ""
+        for gen in node.generators:
+            target = self._gen_comp_target(gen.target)
+            iterable = self._gen_expr(gen.iterable)
+            loop_code += f"for &{target} in &{iterable} {{ "
+            for if_expr in gen.ifs:
+                cond = self._gen_expr(if_expr)
+                loop_code += f"if {cond} {{ "
+                close_braces += " } "
+            close_braces += " } "
+        
+        elt = self._gen_expr(node.elt)
+        push_code = f"__res.push({elt}); "
+        
+        return f"({{ {inner}{loop_code}{push_code}{close_braces} __res }})"
+
+    def _gen_dict_comp(self, node: IRDictComp) -> str:
+        self._uses_hashmap = True
+        key_t = self._get_rust_type(node.result_type.key_type)
+        val_t = self._get_rust_type(node.result_type.value_type)
+        inner = f"let mut __res = HashMap::<{key_t}, {val_t}>::new(); "
+        
+        loop_code = ""
+        close_braces = ""
+        for gen in node.generators:
+            target = self._gen_comp_target(gen.target)
+            iterable = self._gen_expr(gen.iterable)
+            loop_code += f"for &{target} in &{iterable} {{ "
+            for if_expr in gen.ifs:
+                cond = self._gen_expr(if_expr)
+                loop_code += f"if {cond} {{ "
+                close_braces += " } "
+            close_braces += " } "
+            
+        key = self._gen_expr(node.key)
+        val = self._gen_expr(node.value)
+        insert_code = f"__res.insert({key}, {val}); "
+        
+        return f"({{ {inner}{loop_code}{insert_code}{close_braces} __res }})"
+
+    def _gen_set_comp(self, node: IRSetComp) -> str:
+        # In Rust, HashSet is usually used for Python set
+        # Check if uses_hashmap or dedicated flag is needed
+        self._uses_hashmap = True # Standard lib for HashSet too
+        elem_t = self._get_rust_type(node.result_type.element_type)
+        inner = f"let mut __res = HashSet::<{elem_t}>::new(); "
+        
+        loop_code = ""
+        close_braces = ""
+        for gen in node.generators:
+            target = self._gen_comp_target(gen.target)
+            iterable = self._gen_expr(gen.iterable)
+            loop_code += f"for &{target} in &{iterable} {{ "
+            for if_expr in gen.ifs:
+                cond = self._gen_expr(if_expr)
+                loop_code += f"if {cond} {{ "
+                close_braces += " } "
+            close_braces += " } "
+        
+        elt = self._gen_expr(node.elt)
+        insert_code = f"__res.insert({elt}); "
+        
+        return f"({{ {inner}{loop_code}{insert_code}{close_braces} __res }})"
+
+    def _gen_comp_target(self, target) -> str:
+        if isinstance(target, IRName):
+            return _mangle(target.name)
+        if isinstance(target, IRTupleLit):
+            elems = ", ".join(self._gen_comp_target(e) for e in target.elements)
+            return f"({elems})"
+        return "_"
 
     def _emit_async_runtime(self) -> None:
         self._emit("mod py_async {")

@@ -20,6 +20,9 @@ from ..frontend.ast_nodes import (
     NewExpr,
     AwaitExpr,
     EnumType,
+    SetType,
+    FunctionType,
+    UnknownType,
     EnumDef,
     MatchStmt,
     MatchCase,
@@ -30,6 +33,11 @@ from ..frontend.ast_nodes import (
     WildcardPattern,
     OrPattern,
     AsPattern,
+    LambdaExpr,
+    ListComp,
+    DictComp,
+    SetComp,
+    Name,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -43,6 +51,8 @@ from ..ir.ir_nodes import (
     IRListType,
     IRDictType,
     IRTupleType,
+    IRSetType,
+    IRFunctionType,
     IRFileType,
     IRClassType,
     IRIntLit,
@@ -99,6 +109,11 @@ from ..ir.ir_nodes import (
     IRWildcardPattern,
     IROrPattern,
     IRAsPattern,
+    IRLambda,
+    IRComprehension,
+    IRListComp,
+    IRDictComp,
+    IRSetComp,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -136,6 +151,15 @@ def _to_ir_type(t):
         return IRClassType(name=t.name, base=t.base)
     if isinstance(t, EnumType):
         return IREnumType(name=t.name)
+    if isinstance(t, SetType):
+        return IRSetType(element_type=_to_ir_type(t.element_type))
+    if isinstance(t, FunctionType):
+        return IRFunctionType(
+            param_types=tuple(_to_ir_type(pt) for pt in t.param_types),
+            return_type=_to_ir_type(t.return_type),
+        )
+    if isinstance(t, UnknownType):
+        return IRIntType()  # Default to i32 for unknown types
     if isinstance(t, TupleType):
         return IRTupleType(element_types=tuple(_to_ir_type(et) for et in t.element_types))
     raise SemanticError(f"Unknown type: {t}")
@@ -607,12 +631,13 @@ class IRBuilder:
             
             self.st.define(stmt.target, elem_type)
             
+            target = self._build_comp_target(stmt.target)
             iterable = self._build_expr(stmt.iterable)
             body = tuple(self._build_stmts(stmt.body, return_type))
             self._loop_stack.pop()
             
             return IRForIter(
-                target=stmt.target,
+                target=target,
                 iterable=iterable,
                 iterable_type=ir_iter_type,
                 body=body,
@@ -644,7 +669,8 @@ class IRBuilder:
 
         elif name == "RaiseStmt":
             val = self._build_expr(stmt.value) if stmt.value else None
-            return IRRaise(value=val)
+            cause = self._build_expr(stmt.cause) if stmt.cause else None
+            return IRRaise(value=val, cause=cause)
 
         elif name == "BreakStmt":
             if not self._loop_stack:
@@ -868,6 +894,13 @@ class IRBuilder:
                     for a in expr.args:
                         args.append(self._build_expr(a))
                     return IRNew(class_name=curr_type.name, args=tuple(args))
+                elif isinstance(curr_type, (FunctionType, UnknownType)):
+                    ret_t = curr_type.return_type if isinstance(curr_type, FunctionType) else UnknownType()
+                    ir_ret = _to_ir_type(ret_t)
+                    args = []
+                    for a in expr.args:
+                        args.append(self._build_expr(a))
+                    return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret, is_fallible=False)
                 
                 # Fallback to global class name if not in scope
                 if self.st.lookup_class(expr.name):
@@ -960,8 +993,162 @@ class IRBuilder:
             val = self._build_expr(expr.value)
             return IRAwait(value=val, result_type=ir_res_t)
 
+        elif name == "LambdaExpr":
+            return self._build_lambda(expr)
+
+        elif name == "ListComp":
+            return self._build_list_comp(expr)
+
+        elif name == "DictComp":
+            return self._build_dict_comp(expr)
+
+        elif name == "SetComp":
+            return self._build_set_comp(expr)
+
         else:
             raise self._err(f"Unknown expression type: {name}")
+
+    def _build_lambda(self, expr: LambdaExpr) -> IRLambda:
+        self.st.enter_scope("lambda")
+        params = []
+        for p in expr.params:
+            self.st.define(p.name, None)
+            params.append(IRParam(name=p.name, type_=IRIntType()))  # Generic type for lambda params
+        
+        body = self._build_expr(expr.body)
+        res_type = self.inferencer.infer(expr)
+        self.st.exit_scope()
+        return IRLambda(
+            params=tuple(params),
+            body=body,
+            result_type=_to_ir_type(res_type)
+        )
+
+    def _build_list_comp(self, node: ListComp) -> IRListComp:
+        self.st.enter_scope("comprehension")
+        generators = []
+        for gen in node.generators:
+            target = self._build_comp_target(gen.target)
+            iterable = self._build_expr(gen.iterable)
+            
+            # Define target in symbol table for inner parts
+            it_t = self.inferencer.infer(gen.iterable)
+            elem_t = IntType()
+            if isinstance(it_t, ListType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, StrType):
+                elem_t = StrType()
+            elif isinstance(it_t, DictType):
+                elem_t = it_t.key_type
+
+            self._bind_target(gen.target, elem_t)
+
+            ifs = tuple(self._build_expr(i) for i in gen.ifs)
+            generators.append(IRComprehension(target=target, iterable=iterable, ifs=ifs, is_async=gen.is_async))
+        
+        elt = self._build_expr(node.elt)
+        elt_t = self.inferencer.infer(node.elt)
+        ir_elt_t = _to_ir_type(elt_t) if elt_t else IRIntType()
+        res_ir_t = IRListType(element_type=ir_elt_t)
+        self.st.exit_scope()
+        return IRListComp(elt=elt, generators=tuple(generators), result_type=res_ir_t)
+
+    def _bind_target(self, target, target_type):
+        import ast
+        if isinstance(target, ast.Name):
+            self.st.define(target.id, target_type)
+        elif isinstance(target, str):
+            self.st.define(target, target_type)
+        elif isinstance(target, ast.Tuple):
+            if isinstance(target_type, TupleType):
+                for t, et in zip(target.elts, target_type.element_types):
+                    self._bind_target(t, et)
+            elif isinstance(target_type, ListType):
+                for t in target.elts:
+                    self._bind_target(t, target_type.element_type)
+            else:
+                for t in target.elts:
+                    self._bind_target(t, IntType())
+        elif isinstance(target, Name): # My AST Name
+            self.st.define(target.name, target_type)
+        elif isinstance(target, TupleLiteral): # My AST TupleLiteral
+            if isinstance(target_type, TupleType):
+                for t, et in zip(target.elements, target_type.element_types):
+                    self._bind_target(t, et)
+            else:
+                for t in target.elements:
+                    self._bind_target(t, IntType())
+
+    def _build_dict_comp(self, node: DictComp) -> IRDictComp:
+        self.st.enter_scope("comprehension")
+        generators = []
+        for gen in node.generators:
+            target = self._build_comp_target(gen.target)
+            iterable = self._build_expr(gen.iterable)
+            # Define target logic (same as list comp)
+            it_t = self.inferencer.infer(gen.iterable)
+            elem_t = IntType()
+            if isinstance(it_t, ListType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, StrType):
+                elem_t = StrType()
+            elif isinstance(it_t, DictType):
+                elem_t = it_t.key_type
+
+            self._bind_target(gen.target, elem_t)
+
+            ifs = tuple(self._build_expr(i) for i in gen.ifs)
+            generators.append(IRComprehension(target=target, iterable=iterable, ifs=ifs, is_async=gen.is_async))
+        
+        key = self._build_expr(node.key)
+        value = self._build_expr(node.value)
+        k_t = self.inferencer.infer(node.key)
+        v_t = self.inferencer.infer(node.value)
+        ir_k_t = _to_ir_type(k_t) if k_t else IRIntType()
+        ir_v_t = _to_ir_type(v_t) if v_t else IRIntType()
+        res_ir_t = IRDictType(key_type=ir_k_t, value_type=ir_v_t)
+        self.st.exit_scope()
+        return IRDictComp(key=key, value=value, generators=tuple(generators), result_type=res_ir_t)
+
+    def _build_set_comp(self, node: SetComp) -> IRSetComp:
+        self.st.enter_scope("comprehension")
+        generators = []
+        for gen in node.generators:
+            target = self._build_comp_target(gen.target)
+            iterable = self._build_expr(gen.iterable)
+            
+            it_t = self.inferencer.infer(gen.iterable)
+            elem_t = IntType()
+            if isinstance(it_t, ListType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, StrType):
+                elem_t = StrType()
+            elif isinstance(it_t, DictType):
+                elem_t = it_t.key_type
+
+            self._bind_target(gen.target, elem_t)
+
+            ifs = tuple(self._build_expr(i) for i in gen.ifs)
+            generators.append(IRComprehension(target=target, iterable=iterable, ifs=ifs, is_async=gen.is_async))
+        
+        elt = self._build_expr(node.elt)
+        elt_t = self.inferencer.infer(node.elt)
+        ir_elt_t = _to_ir_type(elt_t) if elt_t else IRIntType()
+        res_ir_t = IRSetType(element_type=ir_elt_t)
+        self.st.exit_scope()
+        return IRSetComp(elt=elt, generators=tuple(generators), result_type=res_ir_t)
+
+    def _build_comp_target(self, target):
+        from ..frontend.ast_nodes import Name, TupleLiteral
+        if isinstance(target, str):
+            return IRName(name=target)
+        if isinstance(target, Name):
+            return IRName(name=target.name)
+        if isinstance(target, TupleLiteral):
+            elements = tuple(self._build_comp_target(e) for e in target.elements)
+            types = tuple(IRIntType() for _ in elements) # Simplified
+            return IRTupleLit(elements=elements, element_types=types)
+        return IRName(name="unknown")
 
 
 def build_ir(module, filename: str = "<unknown>", source_lines: list = None):

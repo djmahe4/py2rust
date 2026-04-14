@@ -1219,7 +1219,7 @@ def main() -> int:
 """
     code = _compile(src)
     assert "fn main() -> Result<(), PyError> {" in code
-    assert "{ 0; return Ok(()); }" in code
+    assert "{ 0; () }" in code
 
 
 def test_main_discard_return_value():

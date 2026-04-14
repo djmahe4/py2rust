@@ -11,6 +11,9 @@ from ..frontend.ast_nodes import (
     ClassType,
     TupleType,
     EnumType,
+    SetType,
+    FunctionType,
+    UnknownType,
     Name,
 )
 from .symbol_table import SymbolTable
@@ -61,13 +64,43 @@ class TypeInferencer:
                 return self._infer_self(expr)
             case "AwaitExpr":
                 return self.infer(expr.value)
+            case "LambdaExpr":
+                return self._infer_lambda(expr)
+            case "ListComp":
+                return self._infer_list_comp(expr)
+            case "DictComp":
+                return self._infer_dict_comp(expr)
+            case "SetComp":
+                return self._infer_set_comp(expr)
         return None
+
+    def _infer_lambda(self, expr):
+        # Infer return type from body.
+        # Use UnknownType for params as they are not explicitly typed.
+        param_types = tuple(UnknownType() for _ in expr.params)
+        return_t = self.infer(expr.body)
+        return FunctionType(param_types=param_types, return_type=return_t or UnknownType())
+
+    def _infer_list_comp(self, expr):
+        elt_t = self.infer(expr.elt)
+        return ListType(element_type=elt_t) if elt_t else None
+
+    def _infer_dict_comp(self, expr):
+        key_t = self.infer(expr.key)
+        val_t = self.infer(expr.value)
+        return DictType(key_type=key_t, value_type=val_t) if (key_t and val_t) else None
+
+    def _infer_set_comp(self, expr):
+        elt_t = self.infer(expr.elt)
+        return SetType(element_type=elt_t) if elt_t else None
 
     def _infer_binop(self, expr):
         lt = self.infer(expr.left)
         rt = self.infer(expr.right)
         if lt is None or rt is None:
             return None
+        if isinstance(lt, UnknownType) or isinstance(rt, UnknownType):
+            return UnknownType()
         if expr.op == "/":
             return FloatType()
         if isinstance(lt, FloatType) or isinstance(rt, FloatType):
@@ -120,7 +153,7 @@ class TypeInferencer:
     def _infer_call(self, expr):
         if expr.name == "len" and len(expr.args) == 1:
             arg_type = self.infer(expr.args[0])
-            if isinstance(arg_type, (ListType, StrType, DictType)):
+            if isinstance(arg_type, (ListType, StrType, DictType, SetType)):
                 return IntType()
         if expr.name == "open":
             return FileType()

@@ -16,9 +16,8 @@ class Scope:
         return self._symbols.get(name)
 
     def lookup(self, name: str):
-        result = self._symbols.get(name)
-        if result is not None:
-            return result
+        if name in self._symbols:
+            return self._symbols[name]
         if self.parent:
             return self.parent.lookup(name)
         return None

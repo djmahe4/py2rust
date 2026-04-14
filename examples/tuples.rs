@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 fn swap(x: i32, y: i32) -> Result<(i32, i32), PyError> {
     return Ok((y, x));
 }
@@ -41,5 +53,5 @@ fn main() -> Result<(), PyError> {
     let t: (i32, i32) = (10, 20);
     let (x, y) = t;
     println!("{}", (x + y));
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

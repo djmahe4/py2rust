@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 pub trait ATrait {
     fn greet(&self) -> Result<String, PyError>;
 }
@@ -143,5 +155,5 @@ fn main() -> Result<(), PyError> {
     println!("{}", d.greet()?);
     println!("{}", d.specific_b()?);
     println!("{}", d.specific_c()?);
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 fn float_math(x: f64, y: f64) -> Result<f64, PyError> {
     let z: f64 = ((x as f64) + (y as f64));
     let a: f64 = ((x as f64) * 2.0);
@@ -38,5 +50,5 @@ fn float_math(x: f64, y: f64) -> Result<f64, PyError> {
 fn main() -> Result<(), PyError> {
     let res: f64 = float_math(10.5, 5.5)?;
     println!("{}", res);
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

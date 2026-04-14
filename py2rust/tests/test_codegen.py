@@ -35,7 +35,7 @@ def main() -> int:
     assert "let result: i32 = add(3, 4)?;" in code
     assert 'println!("{}", result);' in code
     # return value is discarded; main exits with ()
-    assert "{ 0; return Ok(()); }" in code
+    assert "{ 0; () }" in code
 
 
 def test_codegen_float_division():

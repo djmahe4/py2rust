@@ -57,6 +57,14 @@ class IRTupleType:
 
 
 @dataclass(frozen=True)
+class IRSetType:
+    element_type: object
+
+    def __str__(self):
+        return f"HashSet<{self.element_type}>"
+
+
+@dataclass(frozen=True)
 class IREnumType:
     name: str
 
@@ -81,6 +89,16 @@ class IRClassType:
         return self.name
 
 
+@dataclass(frozen=True)
+class IRFunctionType:
+    param_types: tuple
+    return_type: object
+
+    def __str__(self):
+        params = ", ".join(str(t) for t in self.param_types)
+        return f"fn({params}) -> {self.return_type}"
+
+
 IRType = Union[
     IRIntType,
     IRFloatType,
@@ -88,9 +106,11 @@ IRType = Union[
     IRStrType,
     IRListType,
     IRDictType,
+    IRSetType,
     IRTupleType,
     IRFileType,
     IRClassType,
+    IRFunctionType,
     IREnumType,
 ]
 
@@ -243,6 +263,42 @@ class IRAwait:
     value: object
     result_type: object
 
+@dataclass(frozen=True)
+class IRLambda:
+    params: tuple  # tuple of IRParam
+    body: IRExpr
+    result_type: object  # Functional type
+
+
+@dataclass(frozen=True)
+class IRComprehension:
+    target: object  # IRName or IRTupleLit
+    iterable: IRExpr
+    ifs: tuple  # tuple of IRExpr
+    is_async: bool = False
+
+
+@dataclass(frozen=True)
+class IRListComp:
+    elt: IRExpr
+    generators: tuple  # tuple of IRComprehension
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRDictComp:
+    key: IRExpr
+    value: IRExpr
+    generators: tuple
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRSetComp:
+    elt: IRExpr
+    generators: tuple
+    result_type: object
+
 
 @dataclass(frozen=True)
 class IRMatchPattern:
@@ -357,6 +413,7 @@ class IRTryExcept:
 @dataclass(frozen=True)
 class IRRaise:
     value: object
+    cause: object = None
 
 
 @dataclass(frozen=True)
@@ -490,6 +547,10 @@ IRExpr = Union[
     IRNew,
     IRSelf,
     IRAwait,
+    IRLambda,
+    IRListComp,
+    IRDictComp,
+    IRSetComp,
 ]
 
 IRStmt = Union[

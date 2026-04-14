@@ -30,6 +30,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 fn main() -> Result<(), PyError> {
     let lst: Vec<i32> = vec![1, 2, 3];
     if lst.contains(&1) {
@@ -46,5 +58,5 @@ fn main() -> Result<(), PyError> {
     if s.contains(&"h".to_string()) {
         println!("{}", 400);
     }
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }

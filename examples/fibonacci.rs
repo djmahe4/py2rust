@@ -28,6 +28,18 @@ impl From<std::io::Error> for PyError {
     }
 }
 
+impl From<std::num::ParseIntError> for PyError {
+    fn from(err: std::num::ParseIntError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
+impl From<std::num::ParseFloatError> for PyError {
+    fn from(err: std::num::ParseFloatError) -> Self {
+        PyError::ValueError(err.to_string())
+    }
+}
+
 fn fib(n: i32) -> Result<i32, PyError> {
     let mut temp: i32 = 0;
 
@@ -49,5 +61,5 @@ fn fib(n: i32) -> Result<i32, PyError> {
 fn main() -> Result<(), PyError> {
     let result: i32 = fib(10)?;
     println!("{}", result);
-    { 0; return Ok(()); }
+    return Ok({ 0; () });
 }
