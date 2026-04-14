@@ -75,6 +75,11 @@ from ..ir.ir_nodes import (
     IRListComp,
     IRDictComp,
     IRSetComp,
+    IRFormattedValue,
+    IRJoinedStr,
+    IRTraitImpl,
+    IRTypeParam,
+    IRGenericType,
 )
 
 
@@ -126,8 +131,15 @@ _RUST_KEYWORDS = frozenset(
 )
 
 
-def _mangle(name: str) -> str:
+def _mangle(name) -> str:
     """Escape Python identifiers that collide with Rust keywords."""
+    if not isinstance(name, str):
+        if hasattr(name, "name"):
+            name = name.name
+        else:
+            name = str(name)
+    if name == "__str__":
+        return "__str__"
     return name + "_" if name in _RUST_KEYWORDS else name
 
 
@@ -138,6 +150,20 @@ def _get_var_name(expr) -> str | None:
     if isinstance(expr, IRSelf):
         return "self"
     return None
+
+
+def _get_names(target):
+    """Recursively extract string names from a target (str, IRName, or IRTupleLit)."""
+    if isinstance(target, str):
+        return [target]
+    if isinstance(target, IRName):
+        return [target.name]
+    if isinstance(target, IRTupleLit):
+        names = []
+        for e in target.elements:
+            names.extend(_get_names(e))
+        return names
+    return []
 
 
 def _collect_vars_from_expr(expr) -> set:
@@ -224,12 +250,14 @@ def _collect_mutated_vars(stmts) -> set:
                     if isinstance(stmt.value.file, IRName):
                         mutated.add(stmt.value.file.name)
             elif isinstance(stmt, IRForRange):
-                mutated.add(stmt.target)
-                assigned_vars[stmt.target] = assigned_vars.get(stmt.target, 0) + 1
+                for name in _get_names(stmt.target):
+                    mutated.add(name)
+                    assigned_vars[name] = assigned_vars.get(name, 0) + 1
                 _visit(stmt.body, True)
             elif isinstance(stmt, IRForIter):
-                mutated.add(stmt.target)
-                assigned_vars[stmt.target] = assigned_vars.get(stmt.target, 0) + 1
+                for name in _get_names(stmt.target):
+                    mutated.add(name)
+                    assigned_vars[name] = assigned_vars.get(name, 0) + 1
                 _visit(stmt.body, True)
             elif isinstance(stmt, IRWhile):
                 _visit(stmt.body, True)
@@ -262,22 +290,34 @@ def _collect_decls(stmts) -> tuple[dict[str, object], set[str]]:
                 if depth > 0:
                     pre_declare.add(stmt.name)
             elif isinstance(stmt, IRForRange):
-                decls[stmt.target] = IRIntType()
-                pre_declare.add(stmt.target)
+                for name in _get_names(stmt.target):
+                    decls[name] = IRIntType()
+                    pre_declare.add(name)
                 _recurse(stmt.body, depth + 1)
             elif isinstance(stmt, IRForIter):
                 # Target type depends on iterable
-                target_type = IRIntType()  # Default
                 it_t = stmt.iterable_type
-                if isinstance(it_t, IRListType):
-                    target_type = it_t.element_type
-                elif isinstance(it_t, IRDictType):
-                    target_type = it_t.key_type
-                elif isinstance(it_t, IRStrType):
-                    target_type = IRStrType()
+                names = _get_names(stmt.target)
                 
-                decls[stmt.target] = target_type
-                pre_declare.add(stmt.target)
+                # Determine element types if it's a tuple
+                if isinstance(it_t, IRListType) and isinstance(it_t.element_type, IRTupleType):
+                    elem_types = it_t.element_type.element_types
+                    for i, name in enumerate(names):
+                        t = elem_types[i] if i < len(elem_types) else IRIntType()
+                        decls[name] = t
+                        pre_declare.add(name)
+                else:
+                    target_type = IRIntType()  # Default
+                    if isinstance(it_t, IRListType):
+                        target_type = it_t.element_type
+                    elif isinstance(it_t, IRDictType):
+                        target_type = it_t.key_type
+                    elif isinstance(it_t, IRStrType):
+                        target_type = IRStrType()
+                    
+                    for name in names:
+                        decls[name] = target_type
+                        pre_declare.add(name)
                 _recurse(stmt.body, depth + 1)
             elif isinstance(stmt, IRWhile):
                 _recurse(stmt.body, depth + 1)
@@ -320,6 +360,15 @@ class RustCodegen:
         self._current_fn_return_type = "()"
         self._uses_try_result = False
 
+    def _is_protocol(self, name: str) -> bool:
+        """Check if a name corresponds to a defined Protocol/Trait."""
+        if not hasattr(self, "_current_module"):
+            return False
+        for trait in self._current_module.traits:
+            if trait.name == name:
+                return True
+        return False
+
     def _get_rust_type(self, t) -> str:
         if t is None:
             return "()"
@@ -334,7 +383,10 @@ class RustCodegen:
         if isinstance(t, IRUnitType):
             return "()"
         if isinstance(t, IRListType):
-            return f"Vec<{self._get_rust_type(t.element_type)}>"
+            elem_t = self._get_rust_type(t.element_type)
+            if isinstance(t.element_type, IRClassType) and self._is_protocol(t.element_type.name):
+                return f"Vec<Box<dyn {t.element_type.name}>>"
+            return f"Vec<{elem_t}>"
         if isinstance(t, IRDictType):
             self._uses_hashmap = True
             return f"HashMap<{self._get_rust_type(t.key_type)}, {self._get_rust_type(t.value_type)}>"
@@ -342,6 +394,11 @@ class RustCodegen:
             self._uses_file_handle = True
             return "FileHandle"
         if isinstance(t, IRClassType):
+            # If the class name corresponds to a known trait, use a trait object reference
+            if hasattr(self, "_current_module"):
+                for trait in self._current_module.traits:
+                    if trait.name == t.name:
+                        return f"&dyn {t.name}"
             return t.name
         if isinstance(t, IRTupleType):
             types = ", ".join(self._get_rust_type(et) for et in t.element_types)
@@ -351,6 +408,12 @@ class RustCodegen:
             return f"HashSet<{self._get_rust_type(t.element_type)}>"
         if isinstance(t, IRFunctionType):
             return "_"  # Let Rust infer closure types
+        if isinstance(t, IRTypeParam):
+            return t.name
+        if isinstance(t, IRGenericType):
+            base = self._get_rust_type(t.base)
+            params = ", ".join(self._get_rust_type(p) for p in t.params)
+            return f"{base}<{params}>"
         raise ValueError(f"Unknown type {type(t).__name__}")
 
     def _emit(self, line: str) -> None:
@@ -389,6 +452,14 @@ class RustCodegen:
         for trait in ir_mod.traits:
             trait_lines.append(self._gen_trait(trait))
             trait_lines.append("")
+
+        # Generate Trait Impls
+        trait_impl_lines = []
+        for impl_def in ir_mod.trait_impls:
+            self._gen_trait_impl(impl_def)
+            trait_impl_lines.extend(self._lines)
+            self._lines = []
+            trait_impl_lines.append("")
 
         # First pass: Generate classes and functions to detect feature usage
         # We store them in separate buffers
@@ -547,6 +618,7 @@ class RustCodegen:
             final_lines.append("")
 
         final_lines.extend(class_lines)
+        final_lines.extend(trait_impl_lines)
         final_lines.extend(enum_lines)
         final_lines.extend(func_lines)
 
@@ -567,7 +639,7 @@ class RustCodegen:
             if method.is_async:
                 self._uses_async = True
             async_kw = "async " if method.is_async else ""
-            sig = f"    {async_kw}fn {method.name}({self_ref}"
+            sig = f"    {async_kw}fn {_mangle(method.name)}({self_ref}"
             if params_str:
                 sig += f", {params_str}"
             # Traits always return Result<T, PyError> for Python-to-Rust mapping
@@ -577,9 +649,23 @@ class RustCodegen:
         res.append("}")
         return "\n".join(res)
 
+    def _gen_trait_impl(self, impl_def: IRTraitImpl) -> None:
+        self._emit(f"impl {impl_def.trait_name} for {impl_def.target_name} {{")
+        self._indent += 1
+        for method in impl_def.methods:
+            self._gen_method(method)
+            self._emit("")
+        self._indent -= 1
+        self._emit("}")
+
     def _gen_class(self, cls: IRClassDefinition) -> None:
+        type_params_str = ""
+        if cls.type_params:
+            tp_list = ", ".join(str(tp) for tp in cls.type_params)
+            type_params_str = f"<{tp_list}>"
+
         self._emit(f"#[derive(Clone, Debug)]")
-        self._emit(f"struct {cls.name} {{")
+        self._emit(f"struct {cls.name}{type_params_str} {{")
         self._indent += 1
         for field_name, field_type in cls.fields:
             self._emit(f"{_mangle(field_name)}: {self._get_rust_type(field_type)},")
@@ -589,7 +675,7 @@ class RustCodegen:
 
         # Inherent Impl (Constructors)
         if cls.constructors:
-            self._emit(f"impl {cls.name} {{")
+            self._emit(f"impl{type_params_str} {cls.name}{type_params_str} {{")
             self._indent += 1
             for ctor in cls.constructors:
                 self._gen_method(ctor, is_init=True)
@@ -627,6 +713,24 @@ class RustCodegen:
             self._emit("}")
             self._emit("")
 
+        # 4. Handle __str__ magic method -> std::fmt::Display
+        if "__str__" in class_methods:
+            self._emit(f"impl{type_params_str} std::fmt::Display for {cls.name}{type_params_str} {{")
+            self._indent += 1
+            self._emit("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {")
+            self._indent += 1
+            self._emit("match self.__str__() {")
+            self._indent += 1
+            self._emit("Ok(s) => write!(f, \"{}\", s),")
+            self._emit("Err(_) => Err(std::fmt::Error),")
+            self._indent -= 1
+            self._emit("}")
+            self._indent -= 1
+            self._emit("}")
+            self._indent -= 1
+            self._emit("}")
+            self._emit("")
+
     def _gen_method(self, func: IRFunction, is_init: bool = False) -> None:
         self._uses_py_error = True
         self._mutated_vars = _collect_mutated_vars(func.body)
@@ -643,6 +747,11 @@ class RustCodegen:
             param_strs.append(f"{mut}{_mangle(p.name)}: {self._get_rust_type(p.type_)}")
         params = ", ".join(param_strs)
 
+        type_params_str = ""
+        if func.type_params:
+            tp_list = ", ".join(str(tp) for tp in func.type_params)
+            type_params_str = f"<{tp_list}>"
+
         if is_init:
             self._emit(f"fn new({params}) -> Result<Self, PyError> {{")
         else:
@@ -650,7 +759,7 @@ class RustCodegen:
             if func.is_async:
                 self._uses_async = True
             async_kw = "async " if func.is_async else ""
-            self._emit(f"{async_kw}fn {_mangle(func.name)}({params}) -> Result<{ret}, PyError> {{")
+            self._emit(f"{async_kw}fn {_mangle(func.name)}{type_params_str}({params}) -> Result<{ret}, PyError> {{")
 
         self._indent += 1
 
@@ -667,7 +776,11 @@ class RustCodegen:
             type_ = self._decl_types[name]
             mut = "mut " if name in self._mutated_vars else ""
             default = self._default_value(type_)
-            self._emit(f"let {mut}{_mangle(name)}: {self._get_rust_type(type_)} = {default};")
+            rust_t = self._get_rust_type(type_)
+            if not default or not str(default).strip():
+                self._emit(f"let {mut}{_mangle(name)}: {rust_t};")
+            else:
+                self._emit(f"let {mut}{_mangle(name)}: {rust_t} = {default};")
             self._pre_declared.add(name)
 
         if self._pre_declared:
@@ -717,23 +830,25 @@ class RustCodegen:
 
         is_main = func.name == "main"
         self._in_main = is_main
+        t_params = f"<{', '.join(p.name + ': Clone' for p in func.type_params)}>" if func.type_params else ""
+        
         if is_main:
             ret_type_str = "()"
             self._current_fn_return_type = ret_type_str
             if func.is_async:
                 self._uses_async = True
-                self._emit(f"fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
+                self._emit(f"fn {func.name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
                 self._indent += 1
                 self._emit("py_async::block_on(async {")
             else:
-                self._emit(f"fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
+                self._emit(f"fn {func.name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
         else:
             ret_type_str = self._get_rust_type(func.return_type)
             self._current_fn_return_type = ret_type_str
             if func.is_async:
                 self._uses_async = True
             async_kw = "async " if func.is_async else ""
-            self._emit(f"{async_kw}fn {func.name}({params}) -> Result<{ret_type_str}, PyError> {{")
+            self._emit(f"{async_kw}fn {func.name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
 
         self._indent += 1
 
@@ -751,7 +866,11 @@ class RustCodegen:
             mut = "mut " if name in self._mutated_vars else ""
             # For now, keep default values for safety (Python dynamic initialization)
             default = self._default_value(type_)
-            self._emit(f"let {mut}{_mangle(name)}: {self._get_rust_type(type_)} = {default};")
+            rust_t = self._get_rust_type(type_)
+            if not default or not str(default).strip():
+                self._emit(f"let {mut}{_mangle(name)}: {rust_t};")
+            else:
+                self._emit(f"let {mut}{_mangle(name)}: {rust_t} = {default};")
             self._pre_declared.add(name)
 
         if self._pre_declared:
@@ -791,7 +910,12 @@ class RustCodegen:
         if isinstance(ir_type, IRDictType):
             return f"HashMap::<{self._get_rust_type(ir_type.key_type)}, {self._get_rust_type(ir_type.value_type)}>::new()"
         if isinstance(ir_type, IRClassType):
-            return f"{self._get_rust_type(ir_type)}::new()"
+            rust_type = self._get_rust_type(ir_type)
+            if "dyn " in rust_type:
+                # Trait objects cannot be easily instantiated with a default.
+                # Return empty string to signal uninitialized pre-declaration.
+                return ""
+            return f"{rust_type}::new()"
         if isinstance(ir_type, IRFileType):
             return 'FileHandle::open("", "r").unwrap()'
         return "0"
@@ -808,13 +932,15 @@ class RustCodegen:
             if stmt.name == "_":
                 self._emit(f"{val};")
             elif stmt.name in self._mutated_vars:
-                self._emit(
-                    f"let mut {_mangle(stmt.name)}: {self._get_rust_type(stmt.type_)} = {val};"
-                )
+                if val:
+                    self._emit(f"let mut {_mangle(stmt.name)}: {self._get_rust_type(stmt.type_)} = {val};")
+                else:
+                    self._emit(f"let mut {_mangle(stmt.name)}: {self._get_rust_type(stmt.type_)};")
             else:
-                self._emit(
-                    f"let {_mangle(stmt.name)}: {self._get_rust_type(stmt.type_)} = {val};"
-                )
+                if val:
+                    self._emit(f"let {_mangle(stmt.name)}: {self._get_rust_type(stmt.type_)} = {val};")
+                else:
+                    self._emit(f"let {_mangle(stmt.name)}: {self._get_rust_type(stmt.type_)};")
 
         elif isinstance(stmt, IRAssign):
             target_type = self._decl_types.get(stmt.target)
@@ -881,9 +1007,13 @@ class RustCodegen:
             start = self._gen_expr(stmt.start)
             stop = self._gen_expr(stmt.stop)
             step_is_one = stmt.step is None
+            
+            # ForRange always has exactly one target name
+            target_names = _get_names(stmt.target)
+            target_name = target_names[0] if target_names else "unknown"
 
-            # Use a unique internal loop variable to avoid shadowing outer scope
-            loop_var = f"__i_{id(stmt)}"
+            # Use a more readable internal loop variable to avoid shadowing outer scope
+            loop_var = f"__i_{target_name}"
 
             if step_is_one:
                 # Wrap in a block so the inner loop variable doesn't leak
@@ -893,7 +1023,7 @@ class RustCodegen:
                 # DO NOT redeclare the target here if it already exists in parent scope
                 self._emit(f"for {loop_var} in {start}..{stop} {{")
                 self._indent += 1
-                self._emit(f"{_mangle(stmt.target)} = {loop_var};")
+                self._emit(f"{_mangle(target_name)} = {loop_var};")
                 old_top_level = self._at_top_level
                 self._at_top_level = False
                 for s in stmt.body:
@@ -913,9 +1043,9 @@ class RustCodegen:
                 self._emit(f"let __stop = {stop};")
                 self._emit(f"let __step = {step};")
                 # Update target directly instead of redeclaring
-                self._emit(f"{_mangle(stmt.target)} = {start};")
+                self._emit(f"{_mangle(target_name)} = {start};")
                 self._emit(
-                    f"'{label}: while if (__step) > 0 {{ {_mangle(stmt.target)} < (__stop) }} else {{ {_mangle(stmt.target)} > (__stop) }} {{"
+                    f"'{label}: while if (__step) > 0 {{ {_mangle(target_name)} < (__stop) }} else {{ {_mangle(target_name)} > (__stop) }} {{"
                 )
                 self._indent += 1
                 old_top_level = self._at_top_level
@@ -923,7 +1053,7 @@ class RustCodegen:
                 for s in stmt.body:
                     self._gen_stmt(s)
                 self._at_top_level = old_top_level
-                self._emit(f"{_mangle(stmt.target)} += __step;")
+                self._emit(f"{_mangle(target_name)} += __step;")
                 self._indent -= 1
                 self._emit("}")
                 self._loop_depth -= 1
@@ -937,25 +1067,51 @@ class RustCodegen:
 
         elif isinstance(stmt, IRForIter):
             iterable = self._gen_expr(stmt.iterable)
-            iter_expr = iterable
+            is_direct_iter = False
+            if isinstance(stmt.iterable, IRFunctionCall):
+                if stmt.iterable.name in ("zip", "enumerate", "map", "reversed"):
+                    is_direct_iter = True
+
             if isinstance(stmt.iterable_type, IRDictType):
                 iter_expr = f"{iterable}.keys()"
             elif isinstance(stmt.iterable_type, IRStrType):
                 iter_expr = f"{iterable}.chars().map(|c| c.to_string())"
+            elif is_direct_iter:
+                iter_expr = iterable
             else:
-                # Assuming list
+                # Assuming list or generic collection
                 iter_expr = f"&{iterable}"
 
             label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
             self._emit("{")
             self._loop_depth += 1
             self._indent += 1
-            # Use a unique internal loop variable
-            loop_var = f"__val_{id(stmt)}"
+            
+            loop_var = "__loop_val"
             self._emit(f"'{label}: for {loop_var} in {iter_expr} {{")
             self._indent += 1
-            # Assign to target (cloning to avoid ownership issues in this subset)
-            self._emit(f"{_mangle(stmt.target)} = {loop_var}.clone();")
+
+            if isinstance(stmt.target, (str, IRName)):
+                t_name = stmt.target.name if isinstance(stmt.target, IRName) else stmt.target
+                t_type = self._decl_types.get(t_name)
+                rust_t = self._get_rust_type(t_type) if t_type else ""
+                
+                if "dyn " in rust_t and not rust_t.startswith("Box<"):
+                    # Trait object reference: usually from a Boxed collection
+                    it_t_str = self._get_rust_type(stmt.iterable_type) if stmt.iterable_type else ""
+                    if "Box<dyn " in it_t_str:
+                        self._emit(f"{_mangle(t_name)} = &**{loop_var};")
+                    else:
+                        self._emit(f"{_mangle(t_name)} = {loop_var};")
+                else:
+                    self._emit(f"{_mangle(t_name)} = {loop_var}.clone();")
+            elif isinstance(stmt.target, IRTupleLit):
+                temp_names = [f"__tmp_{i}" for i in range(len(stmt.target.elements))]
+                temps_str = ", ".join(temp_names)
+                self._emit(f"let ({temps_str}) = {loop_var}.clone();")
+                for i, e in enumerate(stmt.target.elements):
+                    if isinstance(e, IRName):
+                        self._emit(f"{_mangle(e.name)} = {temp_names[i]}.clone();")
 
             old_top_level = self._at_top_level
             self._at_top_level = False
@@ -1265,9 +1421,17 @@ class RustCodegen:
             parts = [self._gen_expr(v) for v in expr.values]
             return f"({(f' {expr.op} ').join(parts)})"
         elif isinstance(expr, IRListLit):
+            is_proto = isinstance(expr.element_type, IRClassType) and self._is_protocol(expr.element_type.name)
+            elem_t_str = self._get_rust_type(expr.element_type)
+            
             if not expr.elements:
-                return f"Vec::<{self._get_rust_type(expr.element_type)}>::new()"
-            elems = ", ".join(self._gen_expr(e) for e in expr.elements)
+                res_t = f"Vec::<Box<dyn {expr.element_type.name}>>" if is_proto else f"Vec::<{elem_t_str}>"
+                return f"{res_t}::new()"
+            
+            if is_proto:
+                elems = ", ".join(f"Box::new({self._gen_expr(e)})" for e in expr.elements)
+            else:
+                elems = ", ".join(self._gen_expr(e) for e in expr.elements)
             return f"vec![{elems}]"
         elif isinstance(expr, IRDictLit):
             self._uses_hashmap = True
@@ -1305,7 +1469,7 @@ class RustCodegen:
                 len_expr = "__coll.len() as i32"
                 inner_expr = f"__coll[actual_idx]"
 
-            if isinstance(expr.result_type, (IRStrType, IRListType)) and not isinstance(
+            if isinstance(expr.result_type, (IRStrType, IRListType, IRTypeParam)) and not isinstance(
                 expr.value_type, IRStrType
             ):
                 inner_expr = f"({inner_expr}).clone()"
@@ -1321,6 +1485,60 @@ class RustCodegen:
             if expr.name == "len":
                 arg = self._gen_expr(expr.args[0])
                 return f"{arg}.len() as i32"
+            
+            if expr.name == "zip":
+                # zip(a, b)
+                arg0 = self._gen_expr(expr.args[0])
+                arg1 = self._gen_expr(expr.args[1])
+                return f"(&{arg0}).iter().zip((&{arg1}).iter())"
+            
+            if expr.name == "enumerate":
+                arg = self._gen_expr(expr.args[0])
+                return f"(&{arg}).iter().enumerate().map(|(i, x)| (i as i32, x))"
+                
+            if expr.name == "map":
+                func = self._gen_expr(expr.args[0])
+                iterable = self._gen_expr(expr.args[1])
+                return f"(&{iterable}).iter().map({func}).collect::<Vec<_>>()"
+                
+            if expr.name == "reversed":
+                arg = self._gen_expr(expr.args[0])
+                return f"(&{arg}).iter().rev()"
+
+            if expr.name == "str":
+                arg = self._gen_expr(expr.args[0])
+                arg_t = getattr(expr.args[0], "result_type", None)
+                if isinstance(arg_t, IRClassType):
+                    return f"{arg}.__str__()?"
+                return f"{arg}.to_string()"
+            
+            if expr.name == "int":
+                arg = self._gen_expr(expr.args[0])
+                arg_t = getattr(expr.args[0], "result_type", None)
+                if isinstance(arg_t, IRStrType):
+                    return f'{arg}.parse::<i32>().map_err(|e| PyError::ValueError(e.to_string()))?'
+                if isinstance(arg_t, IRFloatType):
+                    return f"({arg} as i32)"
+                # Use a string conversion fallback
+                return f"{arg}.to_string().parse::<i32>().map_err(|e| PyError::ValueError(e.to_string()))?"
+            
+            if expr.name == "float":
+                arg = self._gen_expr(expr.args[0])
+                arg_t = getattr(expr.args[0], "result_type", None)
+                if isinstance(arg_t, IRStrType):
+                    return f'{arg}.parse::<f64>().map_err(|e| PyError::ValueError(e.to_string()))?'
+                if isinstance(arg_t, IRIntType):
+                    return f"({arg} as f64)"
+                return f"{arg}.to_string().parse::<f64>().map_err(|e| PyError::ValueError(e.to_string()))?"
+
+            if expr.name == "bool":
+                arg = self._gen_expr(expr.args[0])
+                arg_t = getattr(expr.args[0], "result_type", None)
+                if isinstance(arg_t, (IRIntType, IRFloatType)):
+                    return f"({arg} != 0.0)"
+                if isinstance(arg_t, (IRStrType, IRListType, IRDictType, IRSetType)):
+                    return f"!{arg}.is_empty()"
+                return "true"
             
             if expr.name in ("Exception", "ValueError", "TypeError", "KeyError", "IndexError"):
                 # Exception constructor call
@@ -1392,6 +1610,32 @@ class RustCodegen:
 
         elif isinstance(expr, IRSetComp):
             return self._gen_set_comp(expr)
+
+        elif isinstance(expr, IRJoinedStr):
+            fmt_parts = []
+            args = []
+            for v in expr.values:
+                if isinstance(v, (IRStrLit, str)):
+                    val = v.value if isinstance(v, IRStrLit) else v
+                    # Escape braces for Rust format string
+                    escaped = val.replace("{", "{{").replace("}", "}}")
+                    fmt_parts.append(escaped)
+                elif isinstance(v, IRFormattedValue):
+                    spec = v.format_spec or ""
+                    # Handle conversions: !r -> {:?}, !s -> {} (default)
+                    if v.conversion == 114: # ord('r')
+                        spec = f":?{spec}"
+                    elif spec:
+                        spec = f":{spec}"
+                    
+                    fmt_parts.append(f"{{{spec}}}")
+                    args.append(self._gen_expr(v.value))
+            
+            fmt_str = "".join(fmt_parts)
+            if not args:
+                return f'"{fmt_str}".to_string()'
+            args_str = ", ".join(args)
+            return f'format!("{fmt_str}", {args_str})'
 
         return f"/* unknown expr {type(expr).__name__} */"
 

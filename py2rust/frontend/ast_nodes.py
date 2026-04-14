@@ -101,6 +101,23 @@ class FunctionType:
         params = ", ".join(str(t) for t in self.param_types)
         return f"({params}) -> {self.return_type}"
 
+@dataclass(frozen=True)
+class TypeVarType:
+    name: str
+    bound: Optional[object] = None
+
+    def __str__(self):
+        return self.name
+
+
+@dataclass(frozen=True)
+class GenericType:
+    base: object
+    params: tuple
+
+    def __str__(self):
+        params = ", ".join(str(p) for p in self.params)
+        return f"{self.base}[{params}]"
 
 @dataclass(frozen=True)
 class UnknownType:
@@ -311,6 +328,22 @@ class SetComp:
     col: int = 0
 
 
+@dataclass(frozen=True)
+class FormattedValue:
+    value: Expr
+    conversion: int = -1
+    format_spec: Optional[str] = None
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class JoinedStr:
+    values: tuple  # tuple of FormattedValue or StrLiteral
+    line: int = 0
+    col: int = 0
+
+
 Expr = Union[
     IntLiteral,
     FloatLiteral,
@@ -335,6 +368,8 @@ Expr = Union[
     ListComp,
     DictComp,
     SetComp,
+    JoinedStr,
+    FormattedValue,
 ]
 
 
@@ -480,6 +515,12 @@ class BreakStmt:
 
 
 @dataclass(frozen=True)
+class PassStmt:
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
 class ContinueStmt:
     line: int = 0
     col: int = 0
@@ -551,6 +592,7 @@ Stmt = Union[
     RaiseStmt,
     MatchStmt,
     EnumDef,
+    PassStmt,
 ]
 
 
@@ -569,6 +611,7 @@ class FunctionDef:
     return_type: object
     body: tuple
     is_async: bool = False
+    type_params: tuple = ()
     line: int = 0
     col: int = 0
 
@@ -578,6 +621,7 @@ class ClassDef:
     name: str
     bases: tuple = ()
     body: tuple = ()
+    type_params: tuple = ()
     line: int = 0
     col: int = 0
 

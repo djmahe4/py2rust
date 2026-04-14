@@ -82,8 +82,8 @@ fn main() -> Result<(), PyError> {
         }
     }
     {
-        for __i_140503123311456 in 0..5 {
-            i = __i_140503123311456;
+        for __i_i in 0..5 {
+            i = __i_i;
             {
                 let __result = (|| -> Result<TryResult<()>, PyError> {
                     if i == 3 {

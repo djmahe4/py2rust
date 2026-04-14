@@ -41,6 +41,9 @@ from .ast_nodes import (
     ForIter,
     TryStmt,
     RaiseStmt,
+    PassStmt,
+    JoinedStr,
+    FormattedValue,
     AwaitExpr,
     IntType,
     FloatType,
@@ -51,6 +54,9 @@ from .ast_nodes import (
     SetType,
     DictType,
     TupleType,
+    TypeVarType,
+    GenericType,
+    UnknownType,
     ClassType,
     EnumType,
     MatchStmt,
@@ -102,6 +108,7 @@ class Parser:
         self.source = source
         self.filename = filename
         self.source_lines = source.splitlines()
+        self.type_vars = set()
 
     def _err(self, msg: str, node, cls=ParseError, suggestion: str = None):
         line = getattr(node, "lineno", 0)
@@ -137,6 +144,15 @@ class Parser:
                 source_lines=self.source_lines,
             )
 
+        # Pre-scan for TypeVar declarations at the top level
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target = node.targets[0]
+                if isinstance(target, ast.Name):
+                    if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+                        if node.value.func.id == "TypeVar":
+                            self.type_vars.add(target.id)
+
         functions = []
         classes = []
         enums = []
@@ -150,8 +166,32 @@ class Parser:
                 else:
                     enums.append(res)
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                # Allow and ignore typing and enum imports
+                is_ignored = False
+                if isinstance(node, ast.Import):
+                    if any(alias.name in ("typing", "enum") for alias in node.names):
+                        is_ignored = True
+                elif isinstance(node, ast.ImportFrom):
+                    if node.module in ("typing", "enum"):
+                        is_ignored = True
+                
+                if not is_ignored:
+                    raise self._err(
+                        "Import statements are not supported", node, UnsupportedFeatureError
+                    )
+            elif isinstance(node, ast.Assign):
+                # Detect T = TypeVar('T')
+                if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                    target_name = node.targets[0].id
+                    if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+                        if node.value.func.id == "TypeVar":
+                            self.type_vars.add(target_name)
+                            continue
+                
                 raise self._err(
-                    "Import statements are not supported", node, UnsupportedFeatureError
+                    f"Top-level {type(node).__name__} is not supported except for TypeVar",
+                    node,
+                    UnsupportedFeatureError,
                 )
             else:
                 raise self._err(
@@ -211,12 +251,34 @@ class Parser:
 
         body = self._parse_stmts(node.body)
 
+        # Implicitly discover used TypeVars
+        type_params = []
+        def collect_type_vars(t):
+            if isinstance(t, TypeVarType):
+                if t.name not in type_params:
+                    type_params.append(t.name)
+            elif isinstance(t, ListType):
+                collect_type_vars(t.element_type)
+            elif isinstance(t, DictType):
+                collect_type_vars(t.key_type)
+                collect_type_vars(t.value_type)
+            elif isinstance(t, TupleType):
+                for et in t.element_types:
+                    collect_type_vars(et)
+            elif isinstance(t, SetType):
+                collect_type_vars(t.element_type)
+        
+        for p in params:
+            collect_type_vars(p.type_annotation)
+        collect_type_vars(return_type)
+
         return FunctionDef(
             name=node.name,
             params=tuple(params),
             return_type=return_type,
             body=tuple(body),
             is_async=is_async,
+            type_params=tuple(type_params),
             line=node.lineno,
             col=node.col_offset + 1,
         )
@@ -224,11 +286,22 @@ class Parser:
     def _parse_classdef(self, node: ast.ClassDef) -> Union[ClassDef, EnumDef]:
         bases = []
         is_enum = False
+        type_params = []
         for base_node in node.bases:
             if isinstance(base_node, ast.Name):
                 bases.append(base_node.id)
                 if base_node.id == "Enum":
                     is_enum = True
+            elif isinstance(base_node, ast.Subscript):
+                # Handle Generic[T] or Protocol[T]
+                if isinstance(base_node.value, ast.Name) and base_node.value.id in ("Generic", "Protocol"):
+                    bases.append(base_node.value.id)
+                    if isinstance(base_node.slice, ast.Tuple):
+                        for elt in base_node.slice.elts:
+                            if isinstance(elt, ast.Name):
+                                type_params.append(elt.id)
+                    elif isinstance(base_node.slice, ast.Name):
+                        type_params.append(base_node.slice.id)
 
         if is_enum:
             variants = []
@@ -251,6 +324,7 @@ class Parser:
             name=node.name,
             bases=tuple(bases),
             body=tuple(body),
+            type_params=tuple(type_params),
             line=node.lineno,
             col=node.col_offset + 1,
         )
@@ -330,22 +404,24 @@ class Parser:
 
     def _parse_type(self, node):
         if isinstance(node, ast.Name):
+            if node.id in self.type_vars:
+                return TypeVarType(name=node.id)
             match node.id:
-                case "int":
+                case "int" | "Int":
                     return IntType()
-                case "float":
+                case "float" | "Float":
                     return FloatType()
-                case "bool":
+                case "bool" | "Bool":
                     return BoolType()
-                case "str":
+                case "str" | "Str":
                     return StrType()
                 case _:
                     return ClassType(name=node.id)
         elif isinstance(node, ast.Subscript):
-            if isinstance(node.value, ast.Name) and node.value.id == "list":
+            if isinstance(node.value, ast.Name) and node.value.id in ("list", "List"):
                 elem_type = self._parse_type(node.slice)
                 return ListType(element_type=elem_type)
-            if isinstance(node.value, ast.Name) and node.value.id == "dict":
+            if isinstance(node.value, ast.Name) and node.value.id in ("dict", "Dict"):
                 if isinstance(node.slice, ast.Tuple):
                     key_type = self._parse_type(node.slice.elts[0])
                     value_type = self._parse_type(node.slice.elts[1])
@@ -355,7 +431,7 @@ class Parser:
                     node,
                     UnsupportedFeatureError,
                 )
-            if isinstance(node.value, ast.Name) and node.value.id == "tuple":
+            if isinstance(node.value, ast.Name) and node.value.id in ("tuple", "Tuple"):
                 if isinstance(node.slice, ast.Tuple):
                     types = tuple(self._parse_type(e) for e in node.slice.elts)
                     return TupleType(element_types=types)
@@ -363,7 +439,7 @@ class Parser:
                     raise self._err("Variadic tuples not supported", node, UnsupportedFeatureError)
                 else:
                     return TupleType(element_types=(self._parse_type(node.slice),))
-            if isinstance(node.value, ast.Name) and node.value.id == "set":
+            if isinstance(node.value, ast.Name) and node.value.id in ("set", "Set"):
                 elem_type = self._parse_type(node.slice)
                 return SetType(element_type=elem_type)
             raise self._err("Unsupported generic type", node, UnsupportedFeatureError)
@@ -560,7 +636,14 @@ class Parser:
                 UnsupportedFeatureError,
             )
 
+        if isinstance(node, ast.Pass):
+            return PassStmt(line=node.lineno, col=node.col_offset + 1)
+
         if isinstance(node, ast.Expr):
+            # Special case for Ellipsis (...)
+            if isinstance(node.value, ast.Constant) and node.value.value is Ellipsis:
+                return PassStmt(line=node.lineno, col=node.col_offset + 1)
+            
             if isinstance(node.value, ast.Call):
                 call = node.value
                 if isinstance(call.func, ast.Name) and call.func.id == "print":
@@ -646,11 +729,11 @@ class Parser:
         )
 
     def _parse_for(self, node: ast.For):
-        if not isinstance(node.target, ast.Name):
+        if not isinstance(node.target, (ast.Name, ast.Tuple)):
             raise self._err(
-                "For loop target must be a simple name", node, UnsupportedFeatureError
+                "For loop target must be a simple name or tuple", node, UnsupportedFeatureError
             )
-        target = node.target.id
+        target = self._parse_expr(node.target)
 
         if (
             isinstance(node.iter, ast.Call)
@@ -905,6 +988,12 @@ class Parser:
             val = self._parse_expr(node.value)
             return AwaitExpr(value=val, line=node.lineno, col=node.col_offset + 1)
 
+        if isinstance(node, ast.JoinedStr):
+            return self._parse_joined_str(node)
+
+        if isinstance(node, ast.FormattedValue):
+            return self._parse_formatted_value(node)
+
         raise self._err(
             f"Unsupported expression: {type(node).__name__}",
             node,
@@ -1009,6 +1098,32 @@ class Parser:
             cases=tuple(cases),
             line=node.lineno,
             col=node.col_offset + 1,
+        )
+
+    def _parse_joined_str(self, node: ast.JoinedStr) -> JoinedStr:
+        # Recursively parse each component (can be StrLiteral or FormattedValue)
+        values = tuple(self._parse_expr(v) for v in node.values)
+        return JoinedStr(values=values, line=node.lineno, col=node.col_offset + 1)
+
+    def _parse_formatted_value(self, node: ast.FormattedValue) -> FormattedValue:
+        val = self._parse_expr(node.value)
+        # format_spec is usually an ast.JoinedStr
+        spec = None
+        if node.format_spec:
+            # We only support simple string literal specs for now (e.g. .2f)
+            if isinstance(node.format_spec, ast.JoinedStr):
+                # Extract first static value if it's a simple spec
+                if len(node.format_spec.values) == 1:
+                    v = node.format_spec.values[0]
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        spec = v.value
+        
+        return FormattedValue(
+            value=val,
+            conversion=node.conversion,
+            format_spec=spec,
+            line=node.lineno,
+            col=node.col_offset + 1
         )
 
     def _parse_pattern(self, node: ast.pattern) -> MatchPattern:

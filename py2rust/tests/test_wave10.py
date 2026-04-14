@@ -28,7 +28,7 @@ def f() -> int:
     return total
 """
     rust = compile_to_rust(source)
-    assert "for __val_" in rust
+    assert "__loop_val" in rust
     assert "total = total + x" in rust or "total += x" in rust
 
 def test_membership_operators():

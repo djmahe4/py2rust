@@ -72,6 +72,10 @@ class TypeInferencer:
                 return self._infer_dict_comp(expr)
             case "SetComp":
                 return self._infer_set_comp(expr)
+            case "JoinedStr":
+                return StrType()
+            case "FormattedValue":
+                return StrType()
         return None
 
     def _infer_lambda(self, expr):
@@ -126,10 +130,39 @@ class TypeInferencer:
     def _infer_list(self, expr):
         if not expr.elements:
             return None
-        elem_t = self.infer(expr.elements[0])
-        if elem_t is None:
+        
+        element_types = [self.infer(e) for e in expr.elements]
+        if not element_types or any(t is None for t in element_types):
             return None
-        return ListType(element_type=elem_t)
+        
+        first_t = element_types[0]
+        if all(type(t) is type(first_t) and getattr(t, "name", None) == getattr(first_t, "name", None) for t in element_types):
+            return ListType(element_type=first_t)
+
+        # Heterogeneous: find common protocols
+        common = self._find_common_protocols(element_types)
+        if common:
+            # Pick first for now
+            return ListType(element_type=ClassType(name=common[0]))
+
+        return ListType(element_type=first_t)
+
+    def _find_common_protocols(self, types):
+        candidates = []
+        for trait_name, trait_info in self.st._traits.items():
+            if all(self._satisfies_protocol(t, trait_info) for t in types):
+                candidates.append(trait_name)
+        return candidates
+
+    def _satisfies_protocol(self, t, trait_info):
+        if not isinstance(t, ClassType):
+            return False
+        
+        for m_name, arities in trait_info.methods.items():
+            for arity, _ in arities.items():
+                if not self.st.lookup_method(t.name, m_name, arity):
+                    return False
+        return True
 
     def _infer_dict(self, expr):
         if not expr.pairs:
@@ -157,6 +190,41 @@ class TypeInferencer:
                 return IntType()
         if expr.name == "open":
             return FileType()
+        if expr.name == "zip":
+            # zip(a, b) -> list[tuple[type_a, type_b]]
+            types = []
+            for arg in expr.args:
+                it_t = self.infer(arg)
+                if isinstance(it_t, ListType):
+                    types.append(it_t.element_type)
+                elif isinstance(it_t, StrType):
+                    types.append(StrType())
+                else:
+                    types.append(UnknownType())
+            return ListType(element_type=TupleType(element_types=tuple(types)))
+        if expr.name == "str":
+            return StrType()
+        if expr.name == "int":
+            return IntType()
+        if expr.name == "float":
+            return FloatType()
+        if expr.name == "bool":
+            return BoolType()
+        if expr.name == "enumerate":
+            # enumerate(a) -> list[tuple[int, type_a]]
+            it_t = self.infer(expr.args[0])
+            elem_t = UnknownType()
+            if isinstance(it_t, ListType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, StrType):
+                elem_t = StrType()
+            return ListType(element_type=TupleType(element_types=(IntType(), elem_t)))
+        if expr.name == "map":
+            # map(f, a) -> list[return_type_f]
+            # Simple heuristic for now
+            return ListType(element_type=UnknownType())
+        if expr.name == "reversed":
+            return self.infer(expr.args[0])
         # Check scope first (for nested/mangled classes)
         curr_type = self.st.lookup(expr.name)
         if isinstance(curr_type, ClassType):

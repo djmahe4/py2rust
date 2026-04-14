@@ -24,7 +24,7 @@ class Scope:
 
 
 class ClassInfo:
-    def __init__(self, name, bases, fields, methods, constructors):
+    def __init__(self, name, bases, fields, methods, constructors, type_params=()):
         self.name = name
         self.bases = bases
         self.fields = fields  # dict: field_name -> type
@@ -37,13 +37,20 @@ class ClassInfo:
                     self.methods[m_name][arity] = m_def
                 else:
                     self.methods[m_name][arity] = (m_def, name)
-        self.constructors = constructors  # {arity -> FunctionDef}
-
-
+        self.constructors = constructors
+        self.type_params = type_params
 class EnumInfo:
     def __init__(self, name, variants):
         self.name = name
         self.variants = variants  # dict: variant_name -> value_expr
+
+
+class TraitInfo:
+    def __init__(self, name, bases, methods):
+        self.name = name
+        self.bases = bases
+        # methods dict: method_name -> {arity -> (TypedSignature)}
+        self.methods = methods
 
 
 class SymbolTable:
@@ -54,6 +61,7 @@ class SymbolTable:
         self._functions: dict = {}
         self._classes: dict = {}  # name -> ClassInfo
         self._enums: dict = {}  # name -> EnumInfo
+        self._traits: dict = {}  # name -> TraitInfo
         self._current_class: Optional[str] = None
 
     @property
@@ -74,8 +82,8 @@ class SymbolTable:
     def define(self, name: str, type_) -> None:
         self._current.define(name, type_)
 
-    def define_function(self, name: str, param_types: list, return_type, is_async: bool = False) -> None:
-        self._functions[name] = (param_types, return_type, is_async)
+    def define_function(self, name: str, param_types: list, return_type, is_async: bool = False, type_params: tuple = ()) -> None:
+        self._functions[name] = (param_types, return_type, is_async, type_params)
 
     def lookup(self, name: str):
         return self._current.lookup(name)
@@ -86,8 +94,8 @@ class SymbolTable:
     def is_global_scope(self) -> bool:
         return self._current is self._global
 
-    def define_class(self, name, bases, fields, methods, constructors) -> None:
-        self._classes[name] = ClassInfo(name, bases, fields, methods, constructors)
+    def define_class(self, name, bases, fields, methods, constructors, type_params=()) -> None:
+        self._classes[name] = ClassInfo(name, bases, fields, methods, constructors, type_params)
 
     def lookup_class(self, name: str):
         return self._classes.get(name)
@@ -97,6 +105,12 @@ class SymbolTable:
 
     def lookup_enum(self, name: str) -> Optional[EnumInfo]:
         return self._enums.get(name)
+
+    def define_trait(self, name: str, bases: list, methods: dict) -> None:
+        self._traits[name] = TraitInfo(name, bases, methods)
+
+    def lookup_trait(self, name: str) -> Optional[TraitInfo]:
+        return self._traits.get(name)
 
     def get_field_type(self, class_name: str, field: str):
         cls = self._classes.get(class_name)
@@ -109,17 +123,27 @@ class SymbolTable:
                     return field_type
         return None
 
-    def lookup_method(self, class_name: str, method: str, arity: int):
-        cls = self._classes.get(class_name)
+    def lookup_method(self, target_name: str, method: str, arity: int):
+        # Check classes
+        cls = self._classes.get(target_name)
         if cls and method in cls.methods:
             arities = cls.methods[method]
             if arity in arities:
                 return arities[arity]
+        
         if cls:
             for base_name in cls.bases:
                 result = self.lookup_method(base_name, method, arity)
                 if result:
                     return result
+        
+        # Check traits
+        trait = self._traits.get(target_name)
+        if trait and method in trait.methods:
+            arities = trait.methods[method]
+            if arity in arities:
+                return arities[arity]
+
         return None
 
     def lookup_constructor(self, class_name: str, arity: int):

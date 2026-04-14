@@ -189,7 +189,7 @@ def f() -> int:
     m = parse(src)
     stmt = m.functions[0].body[1]
     assert isinstance(stmt, ForRange)
-    assert stmt.target == "i"
+    assert stmt.target.name == "i"
     assert stmt.step is None
 
 

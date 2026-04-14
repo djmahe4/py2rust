@@ -40,22 +40,44 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn sum_list(nums: Vec<i32>) -> Result<i32, PyError> {
-    let mut n: i32 = 0;
-
-    let mut total: i32 = 0;
-    {
-        for __i_n in 0..nums.len() as i32 {
-            n = __i_n;
-            total = (total + ({ let __coll = &(nums); let __idx_raw = n; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx] }));
-        }
-    }
-    return Ok(total);
+pub trait PointTrait {
+    fn __str__(&self) -> Result<String, PyError>;
 }
 
+#[derive(Clone, Debug)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Point {
+    fn new(x: i32, y: i32) -> Result<Self, PyError> {
+        Ok(Self { x: x, y: y })
+    }
+}
+
+impl PointTrait for Point {
+    fn __str__(&self) -> Result<String, PyError> {
+        return Ok(format!("({}, {})", self.x, self.y));
+    }
+}
+
+impl std::fmt::Display for Point {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.__str__() {
+            Ok(s) => write!(f, "{}", s),
+            Err(_) => Err(std::fmt::Error),
+        }
+    }
+}
+
+
 fn main() -> Result<(), PyError> {
-    let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
-    let result: i32 = sum_list(numbers)?;
-    println!("{}", result);
-    return Ok({ 0; () });
+    let p: Point = Point::new(1, 2)?;
+    let s: String = p.__str__()?;
+    println!("{}", s);
+    let num_str: String = "42".to_string();
+    let num: i32 = num_str.parse::<i32>().map_err(|e| PyError::ValueError(e.to_string()))?;
+    println!("{}", num);
+    Ok(())
 }

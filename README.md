@@ -19,8 +19,12 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
 #### Basic Constructs
 - Function definitions with **mandatory** type hints on all parameters and return type
 - Variable declarations with type annotations or inferable literals
+- `async def` and `await` for asynchronous programming
 - `return` statements
-- `print(expr)` with simple arguments
+- `print(expr)` supports simple arguments and interpolated strings
+- f-strings: `f"Value: {val:.2f}"` mapped to Rust `format!` macro
+- `pass` statements and `...` (Ellipsis)
+- Limited imports: `typing` and `enum` modules are ignored to support standard Python type declarations
 
 #### Primitive Types
 - `int` → `i32`
@@ -57,7 +61,10 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
 - Field access via `self.field`
 - Method calls via `obj.method(args)`
 - Single inheritance (base class)
+- Multiple inheritance (discovery and member flattening)
+- Protocols: `typing.Protocol` mapped to Rust `trait`
 - Method overloading by argument count
+- Automatic structural matching for trait implementations
 
 ### ❌ Forbidden Features (raises `UnsupportedFeatureError`)
 
@@ -66,12 +73,9 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
 - Dynamic typing, `Any`, `typing.Any`
 - `eval`, `exec`, `globals`, `locals`
 - Decorators
-- Async functions, generators, `yield`
-- Import statements
-- Exception handling (`try`/`except`)
+- Generators, `yield`
+- Custom module imports (only `typing` and `enum` are ignored)
 - Context managers (`with`)
-- Lambda expressions
-- List/set/dict comprehensions
 - Ternary expressions (`x if cond else y`)
 - Multiple inheritance
 

@@ -60,8 +60,10 @@ class IRTupleType:
 class IRSetType:
     element_type: object
 
+@dataclass(frozen=True)
+class IRUnknownType:
     def __str__(self):
-        return f"HashSet<{self.element_type}>"
+        return "_"
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,30 @@ class IRFunctionType:
         return f"fn({params}) -> {self.return_type}"
 
 
+@dataclass(frozen=True)
+class IRTypeParam:
+    name: str
+    bound: Optional[object] = None
+
+    def __str__(self):
+        if self.bound:
+            return f"{self.name}: {self.bound}"
+        return self.name
+
+
+@dataclass(frozen=True)
+class IRGenericType:
+    base: object
+    params: tuple
+
+    def __str__(self):
+        params = ", ".join(str(p) for p in self.params)
+        return f"{self.base}<{params}>"
+
+
 IRType = Union[
+    IRTypeParam,
+    IRGenericType,
     IRIntType,
     IRFloatType,
     IRBoolType,
@@ -112,6 +137,7 @@ IRType = Union[
     IRClassType,
     IRFunctionType,
     IREnumType,
+    IRUnknownType,
 ]
 
 
@@ -138,6 +164,7 @@ class IRStrLit:
 @dataclass(frozen=True)
 class IRName:
     name: str
+    result_type: Optional[IRType] = None
 
 
 @dataclass(frozen=True)
@@ -387,7 +414,7 @@ class IRWhile:
 
 @dataclass(frozen=True)
 class IRForRange:
-    target: str
+    target: object
     start: object
     stop: object
     step: object
@@ -397,7 +424,7 @@ class IRForRange:
 
 @dataclass(frozen=True)
 class IRForIter:
-    target: str
+    target: object
     iterable: object
     iterable_type: object
     body: tuple
@@ -487,6 +514,7 @@ class IRFunction:
     is_async: bool = False
     is_method: bool = False
     defining_class: Optional[str] = None
+    type_params: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -499,10 +527,31 @@ class IRTraitMethod:
 
 
 @dataclass(frozen=True)
+class IRFormattedValue:
+    value: object # IRExpr
+    conversion: int = -1
+    format_spec: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class IRJoinedStr:
+    values: tuple  # tuple of IRFormattedValue or IRStrLit
+
+
+@dataclass(frozen=True)
 class IRTraitDefinition:
     name: str
     bases: tuple = ()
     methods: tuple = ()
+    type_params: tuple = ()
+
+
+@dataclass(frozen=True)
+class IRTraitImpl:
+    trait_name: str
+    target_name: str
+    methods: tuple = ()
+    type_params: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -512,6 +561,7 @@ class IRClassDefinition:
     fields: tuple = ()
     methods: tuple = ()
     constructors: tuple = ()
+    type_params: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -520,6 +570,7 @@ class IRModule:
     classes: tuple = ()
     enums: tuple = ()
     traits: tuple = ()
+    trait_impls: tuple = ()
     filename: str = "<unknown>"
 
 
@@ -551,6 +602,8 @@ IRExpr = Union[
     IRListComp,
     IRDictComp,
     IRSetComp,
+    IRJoinedStr,
+    IRFormattedValue,
 ]
 
 IRStmt = Union[

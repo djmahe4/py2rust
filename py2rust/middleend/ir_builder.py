@@ -38,6 +38,9 @@ from ..frontend.ast_nodes import (
     DictComp,
     SetComp,
     Name,
+    TupleLiteral,
+    TypeVarType,
+    GenericType,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -55,10 +58,13 @@ from ..ir.ir_nodes import (
     IRFunctionType,
     IRFileType,
     IRClassType,
+    IRUnknownType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
     IRStrLit,
+    IRFormattedValue,
+    IRJoinedStr,
     IRName,
     IRBinOp,
     IRUnaryOpExpr,
@@ -85,6 +91,7 @@ from ..ir.ir_nodes import (
     IRBreak,
     IRContinue,
     IRTraitDefinition,
+    IRTraitImpl,
     IRTraitMethod,
     IRDictDelete,
     IRStructLit,
@@ -94,6 +101,8 @@ from ..ir.ir_nodes import (
     IRSelf,
     IRTupleLit,
     IRTupleUnpack,
+    IRTypeParam,
+    IRGenericType,
     IRTryExcept,
     IRRaise,
     IRClassDefinition,
@@ -125,7 +134,7 @@ def _to_ir_type(t):
     if t is None:
         return IRUnitType()
     # If already an IR type, return as is
-    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType)):
+    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType)):
         return t
         
     if isinstance(t, IntType):
@@ -162,6 +171,10 @@ def _to_ir_type(t):
         return IRIntType()  # Default to i32 for unknown types
     if isinstance(t, TupleType):
         return IRTupleType(element_types=tuple(_to_ir_type(et) for et in t.element_types))
+    if isinstance(t, TypeVarType):
+        return IRTypeParam(name=t.name)
+    if isinstance(t, GenericType):
+        return IRGenericType(base=_to_ir_type(t.base), params=tuple(_to_ir_type(p) for p in t.params))
     raise SemanticError(f"Unknown type: {t}")
 
 
@@ -181,6 +194,7 @@ class IRBuilder:
         self._loop_stack: list = []
         self._mutating_methods: set = set()  # (class_name, method_name, arity)
         self._ir_traits: list = []
+        self._ir_trait_impls: list = []
         self._ir_classes: list = []
         self._ir_enums: list = []
 
@@ -213,6 +227,7 @@ class IRBuilder:
             classes=tuple(self._ir_classes),
             enums=tuple(self._ir_enums),
             traits=tuple(self._ir_traits),
+            trait_impls=tuple(self._ir_trait_impls),
             filename=module.filename,
         )
 
@@ -220,8 +235,12 @@ class IRBuilder:
         for item in items:
             if isinstance(item, ClassDef):
                 full_name = f"{prefix}{item.name}"
-                ir_cls = self._build_class(item, prefix=prefix)
-                self._ir_classes.append(ir_cls)
+                is_protocol = any(b == "Protocol" for b in item.bases)
+                if is_protocol:
+                    self._build_protocol(item, prefix=prefix)
+                else:
+                    ir_cls = self._build_class(item, prefix=prefix)
+                    self._ir_classes.append(ir_cls)
                 self._build_all_types(item.body, prefix=f"{full_name}_")
             elif isinstance(item, EnumDef):
                 ir_enum = self._build_enum(item, prefix=prefix)
@@ -237,18 +256,68 @@ class IRBuilder:
             ir_variants.append((name, ir_val))
         return IREnumDef(name=full_name, variants=tuple(ir_variants))
 
+    def _build_protocol(self, cls, prefix="") -> None:
+        from ..frontend.ast_nodes import FunctionDef
+        full_name = f"{prefix}{cls.name}"
+        trait_methods = []
+        st_methods = {}
+        for item in cls.body:
+            if type(item).__name__ == "FunctionDef":
+                arity = len(item.params)
+                ir_t_meth = self._build_trait_method(item)
+                trait_methods.append(ir_t_meth)
+                
+                # Register in symbol table
+                arg_types = [p.type_annotation for p in item.params]
+                ret_type = item.return_type
+                if item.name not in st_methods:
+                    st_methods[item.name] = {}
+                st_methods[item.name][arity] = (item, (arg_types, ret_type))
+        
+        self.st.define_trait(full_name, cls.bases, st_methods)
+        self._ir_traits.append(IRTraitDefinition(
+            name=full_name,
+            bases=tuple(b for b in cls.bases if b != "Protocol"),
+            methods=tuple(trait_methods)
+        ))
+
+    def _check_and_register_trait_impls(self, class_name: str, methods: dict) -> None:
+        """Link a class to any traits it structurally implements."""
+        for trait_name, trait_info in self.st._traits.items():
+            if trait_name == "Protocol":
+                continue
+            
+            # Check if class has all required methods with matching arity
+            implements = True
+            impl_methods = []
+            for m_name, arities in trait_info.methods.items():
+                if not any((m_name, arity) in methods for arity in arities):
+                    implements = False
+                    break
+                else:
+                    # Collect the actual IR functions for the impl block
+                    for arity in arities:
+                        if (m_name, arity) in methods:
+                            impl_methods.append(methods[(m_name, arity)])
+
+            if implements:
+                self._ir_trait_impls.append(
+                    IRTraitImpl(trait_name=trait_name, target_name=class_name, methods=tuple(impl_methods)),
+                )
+
     def _build_class(self, cls: ClassDef, prefix="") -> IRClassDefinition:
         full_name = f"{prefix}{cls.name}"
         all_fields = {}
         all_methods = {}
         all_constructors = {}
 
-        # 1. Inherit from base classes (ordered for simple MRO)
-        if len(cls.bases) > 1:
-            # TODO: Add formal multiple inheritance support (traits/composition)
-            # For now, we flatten the hierarchy which may cause conflicts
-            pass
+        # 1. Gather all fields and methods from SymbolTable (includes discovered ones)
+        info = self.st.lookup_class(full_name)
+        if info:
+            for f_name, f_type in info.fields.items():
+                all_fields[f_name] = _to_ir_type(f_type)
 
+        # 2. Inherit from base classes and local items
         for base_name in cls.bases:
             base_info = self.st.lookup_class(base_name)
             if base_info:
@@ -330,13 +399,23 @@ class IRBuilder:
                 defining_class=full_name
             )
 
-        return IRClassDefinition(
+
+        # Type params
+        type_params = tuple(IRTypeParam(name=tp) for tp in cls.type_params)
+
+        res = IRClassDefinition(
             name=full_name,
             bases=cls.bases,
             fields=tuple(all_fields.items()),
             methods=tuple(all_methods.values()),
             constructors=tuple(all_constructors.values()),
+            type_params=type_params,
         )
+        
+        # Link to traits
+        self._check_and_register_trait_impls(full_name, all_methods)
+        
+        return res
 
     def _build_trait_method(self, func) -> IRTraitMethod:
         from ..ir.ir_nodes import IRTraitMethod
@@ -441,6 +520,9 @@ class IRBuilder:
             n for n in param_names if self._is_param_mutated(body, n)
         )
 
+        # Type params
+        type_params = tuple(IRTypeParam(name=tp) for tp in func.type_params)
+
         self.st.exit_scope()
         return IRFunction(
             name=func.name,
@@ -449,6 +531,7 @@ class IRBuilder:
             body=tuple(body),
             mutated_params=mutated_params,
             is_async=func.is_async,
+            type_params=type_params,
         )
 
     def _is_param_mutated(self, stmts, param_name) -> bool:
@@ -598,14 +681,21 @@ class IRBuilder:
         elif name == "ForRange":
             label = f"__loop_{len(self._loop_stack)}"
             self._loop_stack.append(label)
-            self.st.define(stmt.target, IntType())
+            
+            # Extract name and define in symbol table
+            target_name = stmt.target.name if isinstance(stmt.target, (Name, IRName)) else stmt.target
+            self.st.define(target_name, IntType())
+            
+            # Create IR target (IRName)
+            ir_target = self._build_comp_target(stmt.target)
+            
             start = self._build_expr(stmt.start)
             stop = self._build_expr(stmt.stop)
             step = self._build_expr(stmt.step) if stmt.step else None
             body = tuple(self._build_stmts(stmt.body, return_type))
             self._loop_stack.pop()
             return IRForRange(
-                target=stmt.target,
+                target=ir_target,
                 start=start,
                 stop=stop,
                 step=step,
@@ -629,7 +719,7 @@ class IRBuilder:
             elif isinstance(iterable_type, StrType):
                 elem_type = StrType()
             
-            self.st.define(stmt.target, elem_type)
+            self._bind_target(stmt.target, elem_type)
             
             target = self._build_comp_target(stmt.target)
             iterable = self._build_expr(stmt.iterable)
@@ -681,6 +771,9 @@ class IRBuilder:
             if not self._loop_stack:
                 raise self._err("'continue' must be inside a loop", stmt.line, stmt.col)
             return IRContinue(label=self._loop_stack[-1])
+
+        elif name == "PassStmt":
+            return None
 
         elif name == "DelStmt":
             target_val = self._build_expr(stmt.target)
@@ -764,7 +857,9 @@ class IRBuilder:
             return IRStrLit(value=expr.value)
 
         elif name == "Name":
-            return IRName(name=expr.name)
+            expr_type = self.st.lookup(expr.name)
+            ir_type = _to_ir_type(expr_type) if expr_type else None
+            return IRName(name=expr.name, result_type=ir_type)
 
         elif name == "BinOp":
             result_type = self.inferencer.infer(expr)
@@ -828,8 +923,14 @@ class IRBuilder:
                 if isinstance(expected_type, IRListType):
                     elem_type = expected_type.element_type
                 return IRListLit(elements=(), element_type=elem_type)
-            elem_t = self.inferencer.infer(expr.elements[0])
-            ir_elem_t = _to_ir_type(elem_t) if elem_t else IRIntType()
+            
+            inferred_list_t = self.inferencer.infer(expr)
+            if isinstance(inferred_list_t, ListType):
+                elem_t = inferred_list_t.element_type
+            else:
+                elem_t = self.inferencer.infer(expr.elements[0]) or IntType()
+            
+            ir_elem_t = _to_ir_type(elem_t)
             elems = tuple(self._build_expr(e, ir_elem_t) for e in expr.elements)
             return IRListLit(elements=elems, element_type=ir_elem_t)
 
@@ -880,6 +981,22 @@ class IRBuilder:
                 arg = self._build_expr(expr.args[0])
                 return IRFunctionCall(name="len", args=(arg,), return_type=IRIntType(), is_fallible=False)
 
+            if expr.name in ("str", "int", "float", "bool"):
+                arg = self._build_expr(expr.args[0])
+                ret_t = {
+                    "str": IRStrType(),
+                    "int": IRIntType(),
+                    "float": IRFloatType(),
+                    "bool": IRBoolType()
+                }[expr.name]
+                return IRFunctionCall(name=expr.name, args=(arg,), return_type=ret_t, is_fallible=True)
+
+            if expr.name in ("zip", "enumerate", "map", "reversed"):
+                args = [self._build_expr(a) for a in expr.args]
+                inferred = self.inferencer._infer_call(expr)
+                ir_ret_t = _to_ir_type(inferred) if inferred else IRUnknownType()
+                return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret_t, is_fallible=False)
+
             if expr.name == "open":
                 path = self._build_expr(expr.args[0])
                 mode = self._build_expr(expr.args[1]) if len(expr.args) > 1 else None
@@ -911,7 +1028,7 @@ class IRBuilder:
                 raise self._err(
                     f"Undefined function '{expr.name}'", expr.line, expr.col
                 )
-            param_types, ret_type, _is_async = sig
+            param_types, ret_type, _is_async, _type_params = sig
             ir_ret = _to_ir_type(ret_type)
             args = []
             for i, a in enumerate(expr.args):
@@ -1004,6 +1121,18 @@ class IRBuilder:
 
         elif name == "SetComp":
             return self._build_set_comp(expr)
+
+        elif name == "JoinedStr":
+            values = tuple(self._build_expr(v) for v in expr.values)
+            return IRJoinedStr(values=values)
+
+        elif name == "FormattedValue":
+            val = self._build_expr(expr.value)
+            return IRFormattedValue(
+                value=val,
+                conversion=expr.conversion,
+                format_spec=expr.format_spec
+            )
 
         else:
             raise self._err(f"Unknown expression type: {name}")

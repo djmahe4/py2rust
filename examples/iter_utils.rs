@@ -40,22 +40,45 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn sum_list(nums: Vec<i32>) -> Result<i32, PyError> {
+fn main() -> Result<(), PyError> {
+    let mut i: i32 = 0;
     let mut n: i32 = 0;
+    let mut c: String = String::new();
+    let mut d: i32 = 0;
+    let mut r: i32 = 0;
 
-    let mut total: i32 = 0;
+    let nums: Vec<i32> = vec![1, 2, 3];
+    let chars: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string()];
     {
-        for __i_n in 0..nums.len() as i32 {
-            n = __i_n;
-            total = (total + ({ let __coll = &(nums); let __idx_raw = n; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx] }));
+        '__loop_0: for __loop_val in (&nums).iter().zip((&chars).iter()) {
+            let (__tmp_0, __tmp_1) = __loop_val.clone();
+            n = __tmp_0.clone();
+            c = __tmp_1.clone();
+            println!("{}", n);
+            println!("{}", c);
         }
     }
-    return Ok(total);
-}
-
-fn main() -> Result<(), PyError> {
-    let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
-    let result: i32 = sum_list(numbers)?;
-    println!("{}", result);
+    {
+        '__loop_0: for __loop_val in (&nums).iter().enumerate().map(|(i, x)| (i as i32, x)) {
+            let (__tmp_0, __tmp_1) = __loop_val.clone();
+            i = __tmp_0.clone();
+            n = __tmp_1.clone();
+            println!("{}", i);
+            println!("{}", n);
+        }
+    }
+    let doubled: Vec<i32> = (&nums).iter().map(|x| { (x * 2) }).collect::<Vec<_>>();
+    {
+        '__loop_0: for __loop_val in &doubled {
+            d = __loop_val.clone();
+            println!("{}", d);
+        }
+    }
+    {
+        '__loop_0: for __loop_val in (&nums).iter().rev() {
+            r = __loop_val.clone();
+            println!("{}", r);
+        }
+    }
     return Ok({ 0; () });
 }

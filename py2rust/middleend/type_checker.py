@@ -22,6 +22,7 @@ from ..frontend.ast_nodes import (
     AsPattern,
     ClassDef,
     FunctionDef,
+    Assign,
     Name,
     BinOp,
     UnaryOp,
@@ -42,6 +43,10 @@ from ..frontend.ast_nodes import (
     ListComp,
     DictComp,
     SetComp,
+    JoinedStr,
+    FormattedValue,
+    TypeVarType,
+    PassStmt,
     SetType,
     UnknownType,
     FunctionType,
@@ -52,21 +57,25 @@ from .symbol_table import SymbolTable
 from .type_inferencer import TypeInferencer
 
 
-def _types_compatible(a, b) -> bool:
+def _types_compatible(a, b, invariant=False) -> bool:
     if isinstance(a, UnknownType) or isinstance(b, UnknownType):
+        return True
+    if isinstance(a, TypeVarType) or isinstance(b, TypeVarType):
         return True
     if type(a) is type(b):
         if isinstance(a, ListType) and isinstance(b, ListType):
-            # Rust Vec<T> is invariant — element types must match exactly
-            return type(a.element_type) is type(b.element_type)
+            # Collections are invariant in Rust (Vec<T>)
+            return _types_compatible(a.element_type, b.element_type, invariant=True)
         if isinstance(a, DictType) and isinstance(b, DictType):
-            # HashMap<K, V> requires exact key/value type match
-            return type(a.key_type) is type(b.key_type) and type(a.value_type) is type(
-                b.value_type
-            )
+            return _types_compatible(
+                a.key_type, b.key_type, invariant=True
+            ) and _types_compatible(a.value_type, b.value_type, invariant=True)
+        if isinstance(a, SetType) and isinstance(b, SetType):
+            return _types_compatible(a.element_type, b.element_type, invariant=True)
         return True
     if isinstance(a, FloatType) and isinstance(b, IntType):
-        return True
+        # f64 accepts i32, but Vec<f64> does NOT accept Vec<i32>
+        return not invariant
     if isinstance(a, (EnumType, ClassType)) and isinstance(b, (EnumType, ClassType)):
         return getattr(a, "name", None) == getattr(b, "name", None)
     return False
@@ -129,7 +138,7 @@ class TypeChecker:
 
         for func in module.functions:
             param_types = [p.type_annotation for p in func.params]
-            self.st.define_function(func.name, param_types, func.return_type, func.is_async)
+            self.st.define_function(func.name, param_types, func.return_type, func.is_async, func.type_params)
 
         for func in module.functions:
             self.check_function(func)
@@ -152,13 +161,21 @@ class TypeChecker:
                             arity = len(sub_item.params)
                             if sub_item.name == "__init__":
                                 constructors[arity] = sub_item
+                                # Scan __init__ for self.attr = ... assignments to discover fields
+                                for stmt in sub_item.body:
+                                    if isinstance(stmt, Assign) and isinstance(stmt.target, tuple) and len(stmt.target) == 3 and stmt.target[0] == "attr" and stmt.target[1] == "self":
+                                        attr_name = stmt.target[2]
+                                        if attr_name not in fields:
+                                            # Using a simple inferencer pass during collection
+                                            inf_t = self.inferencer.infer(stmt.value)
+                                            fields[attr_name] = inf_t or UnknownType()
                             else:
                                 if sub_item.name not in methods:
                                     methods[sub_item.name] = {}
                                 methods[sub_item.name][arity] = sub_item
                 
                 # Register class with mangled name
-                self.st.define_class(full_name, item.bases, fields, methods, constructors)
+                self.st.define_class(full_name, item.bases, fields, methods, constructors, item.type_params)
                 
                 # Recurse into class body for nested classes
                 self._collect_all_classes(item.body, prefix=f"{full_name}_")
@@ -175,6 +192,12 @@ class TypeChecker:
     def check_class(self, cls: ClassDef, prefix="") -> None:
         full_name = f"{prefix}{cls.name}"
         prev_class = self.st.get_current_class()
+        self.st.enter_scope(full_name)
+
+        # Define type parameters in the class scope
+        for tp in cls.type_params:
+            self.st.define(tp, TypeVarType(name=tp))
+
         self.st.set_current_class(full_name)
         
         # Define nested items in this class scope
@@ -187,10 +210,15 @@ class TypeChecker:
                 self.check_method(full_name, item)
             elif isinstance(item, ClassDef):
                 self.check_class(item, prefix=f"{full_name}_")
+        
         self.st.set_current_class(prev_class)
+        self.st.exit_scope()
 
     def check_method(self, class_name: str, func: FunctionDef) -> None:
         self.st.enter_scope(f"{class_name}.{func.name}")
+        # Define type parameters in the method scope
+        for tp in func.type_params:
+            self.st.define(tp, TypeVarType(name=tp))
         old_ret = self._current_return_type
         self._current_return_type = func.return_type
         old_async = self._within_async
@@ -209,6 +237,9 @@ class TypeChecker:
 
     def check_function(self, func: FunctionDef) -> None:
         self.st.enter_scope(func.name)
+        # Define type parameters in the function scope
+        for tp in func.type_params:
+            self.st.define(tp, TypeVarType(name=tp))
         old_ret = self._current_return_type
         self._current_return_type = func.return_type
         old_async = self._within_async
@@ -435,6 +466,17 @@ class TypeChecker:
                         expr.line,
                         expr.col,
                     )
+            elif expr.name in ("str", "int", "float", "bool"):
+                if len(expr.args) != 1:
+                    raise self._err(
+                        f"{expr.name}() expected 1 argument, got {len(expr.args)}",
+                        expr.line,
+                        expr.col,
+                    )
+                self.check_expr(expr.args[0])
+            elif expr.name in ("zip", "enumerate", "map", "reversed"):
+                for arg in expr.args:
+                    self.check_expr(arg)
             else:
                 sig = self.st.lookup_function(expr.name)
                 if sig is None:
@@ -473,7 +515,7 @@ class TypeChecker:
                             cls=SemanticError,
                         )
                 else:
-                    params, _, _ = sig
+                    params, _, _, _ = sig
                     if len(expr.args) != len(params):
                         raise self._err(
                             f"Function '{expr.name}' expected {len(params)} arguments, got {len(expr.args)}",
@@ -493,6 +535,11 @@ class TypeChecker:
             self._check_lambda(expr)
         elif isinstance(expr, (ListComp, DictComp, SetComp)):
             self._check_comprehension(expr)
+        elif isinstance(expr, JoinedStr):
+            for v in expr.values:
+                self.check_expr(v)
+        elif isinstance(expr, FormattedValue):
+            self.check_expr(expr.value)
 
     def check_stmt(self, stmt) -> None:
         from ..frontend.ast_nodes import (
@@ -664,10 +711,12 @@ class TypeChecker:
                     arg_t = self.inferencer.infer(arg)
                     if arg_t is not None and not isinstance(arg_t, IntType):
                         raise self._err(f"range() {arg_name} must be int, got {arg_t}", stmt.line, stmt.col)
-            existing = self.st.lookup(stmt.target)
+            from ..frontend.ast_nodes import Name
+            target_name = stmt.target.name if isinstance(stmt.target, Name) else stmt.target
+            existing = self.st.lookup(target_name)
             if existing is not None and not isinstance(existing, IntType):
-                 raise self._err(f"Cannot use '{stmt.target}' as loop target: already defined as {existing}", stmt.line, stmt.col)
-            self.st.define(stmt.target, IntType())
+                 raise self._err(f"Cannot use '{target_name}' as loop target: already defined as {existing}", stmt.line, stmt.col)
+            self.st.define(target_name, IntType())
             for s in stmt.body:
                 self.check_stmt(s)
         elif isinstance(stmt, ReturnStmt):
@@ -697,7 +746,7 @@ class TypeChecker:
             self.check_expr(stmt.key)
         elif isinstance(stmt, (BreakStmt, ContinueStmt)):
             pass
-        elif isinstance(stmt, (ClassDef, FunctionDef, ReturnStmt)):
+        elif isinstance(stmt, (ClassDef, FunctionDef, ReturnStmt, PassStmt)):
             pass
         else:
             raise self._err(

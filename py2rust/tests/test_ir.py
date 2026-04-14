@@ -139,7 +139,7 @@ def f() -> int:
     ir = _build(src)
     stmt = ir.functions[0].body[1]
     assert isinstance(stmt, IRForRange)
-    assert stmt.target == "i"
+    assert stmt.target == IRName(name="i")
     assert stmt.step is None
 
 
