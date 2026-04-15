@@ -102,6 +102,15 @@ class IRFunctionType:
 
 
 @dataclass(frozen=True)
+class IRExternalPythonType:
+    module: str
+    name: Optional[str] = None
+
+    def __str__(self):
+        return f"PyObject({self.module}.{self.name if self.name else ''})"
+
+
+@dataclass(frozen=True)
 class IRTypeParam:
     name: str
     bound: Optional[object] = None
@@ -577,6 +586,7 @@ class IRModule:
     enums: tuple = ()
     traits: tuple = ()
     trait_impls: tuple = ()
+    statements: tuple = ()
     filename: str = "<unknown>"
 
 
@@ -610,6 +620,7 @@ IRExpr = Union[
     IRSetComp,
     IRJoinedStr,
     IRFormattedValue,
+    IRExternalPythonType,
 ]
 
 IRStmt = Union[

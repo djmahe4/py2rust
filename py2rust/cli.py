@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--verify", action="store_true", help="Run rustc on the output")
     parser.add_argument("--no-format", action="store_true", help="Disable rustfmt formatting")
+    parser.add_argument("--mock-mode", "-M", action="store_true", help="Mock missing imports as ExternalPythonType")
 
     args = parser.parse_args()
 
@@ -30,6 +31,7 @@ def main():
         verbose=args.verbose,
         verify=args.verify,
         format_output=not args.no_format,
+        mock_mode=args.mock_mode,
     )
 
     success = compile_file(config)

@@ -41,11 +41,11 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 fn main() -> Result<(), PyError> {
-    let mut d: i32 = 0;
-    let mut i: i32 = 0;
-    let mut c: String = String::new();
     let mut n: i32 = 0;
+    let mut c: String = String::new();
+    let mut d: i32 = 0;
     let mut r: i32 = 0;
+    let mut i: i32 = 0;
 
     let nums: Vec<i32> = vec![1, 2, 3];
     let chars: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string()];

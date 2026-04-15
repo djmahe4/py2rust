@@ -36,7 +36,7 @@ def compile_file(config: CompilerConfig) -> bool:
 
     logger.debug("Building IR")
     try:
-        ir_module = build_ir(module, filename, source_lines)
+        ir_module = build_ir(module, filename, source_lines, config)
     except CompilerError as e:
         print(str(e), file=sys.stderr)
         return False

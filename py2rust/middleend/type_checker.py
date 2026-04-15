@@ -51,6 +51,9 @@ from ..frontend.ast_nodes import (
     UnknownType,
     FunctionType,
     Module,
+    Import,
+    ImportFrom,
+    ExternalPythonType,
 )
 from ..utils.errors import Py2RustTypeError, SemanticError
 from .symbol_table import SymbolTable
@@ -121,11 +124,34 @@ class TypeChecker:
             source_lines=self.source_lines,
         )
 
-    def check_module(self, module: Module) -> None:
         # Pre-scan all classes (including nested ones)
         self._collect_all_classes(module.classes)
         self._collect_all_classes(module.functions)
         
+    def check_module(self, module: Module) -> Module:
+        # Process Imports first to load plugins
+        for imp in module.imports:
+            plugin = None
+            if isinstance(imp, Import):
+                for alias in imp.names:
+                    plugin = self.st.pm.load_plugin(alias.name)
+                    if plugin is None and not getattr(self.st.config, "mock_mode", False):
+                        raise self._sem_err(f"Unsupported import: '{alias.name}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
+            elif isinstance(imp, ImportFrom):
+                if imp.module:
+                    plugin = self.st.pm.load_plugin(imp.module)
+                    if plugin is None and not getattr(self.st.config, "mock_mode", False):
+                        raise self._sem_err(f"Unsupported import: '{imp.module}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
+            # Call transform_ast to allow plugins to register aliases/members
+            self.st.pm.transform_ast(imp, self)
+
+        # Allow plugins to transform the whole module (e.g. ClassDef -> EnumDef)
+        module = self.st.pm.transform_module(module, self)
+
+        # Pre-scan all classes (including nested ones)
+        self._collect_all_classes(module.classes)
+        self._collect_all_classes(module.functions)
+
         # Register top-level classes in global scope
         for cls in module.classes:
             self.st.define(cls.name, ClassType(name=cls.name))
@@ -138,10 +164,29 @@ class TypeChecker:
 
         for func in module.functions:
             param_types = [p.type_annotation for p in func.params]
-            self.st.define_function(func.name, param_types, func.return_type, func.is_async, func.type_params)
+            self.st.define_function(
+                func.name,
+                param_types,
+                func.return_type,
+                func.is_async,
+                func.type_params,
+            )
 
         for func in module.functions:
             self.check_function(func)
+
+        new_stmts = []
+        for stmt in module.statements:
+            transformed = self.st.pm.transform_ast(stmt, self)
+            if transformed is not None:
+                new_stmts.append(transformed)
+                self.check_stmt(transformed)
+        
+        # Update module with potentially transformed statements
+        import dataclasses
+        module = dataclasses.replace(module, statements=tuple(new_stmts))
+
+        return module
 
     def _collect_all_classes(self, items, prefix="") -> None:
         for item in items:
@@ -319,6 +364,9 @@ class TypeChecker:
                         expr.line,
                         expr.col,
                     )
+            elif isinstance(val_type, ExternalPythonType):
+                # Always valid for external types (resolved at runtime)
+                pass
         elif isinstance(expr, SelfExpr):
             if self.st.get_current_class() is None:
                 raise self._err(
@@ -529,6 +577,10 @@ class TypeChecker:
                                 )
                     elif isinstance(curr_type, UnknownType):
                         # Allow calls to unknown types (potential lambdas)
+                        for arg in expr.args:
+                            self.check_expr(arg)
+                    elif isinstance(curr_type, ExternalPythonType):
+                        # Always valid for external types (resolved at runtime)
                         for arg in expr.args:
                             self.check_expr(arg)
                     elif self.st.lookup_class(expr.name):

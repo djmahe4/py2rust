@@ -45,6 +45,7 @@ from ..frontend.ast_nodes import (
     SubscriptAssign,
     Assign,
     AugAssign,
+    ExternalPythonType,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -127,6 +128,7 @@ from ..ir.ir_nodes import (
     IRListComp,
     IRDictComp,
     IRSetComp,
+    IRExternalPythonType,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -140,7 +142,7 @@ def _to_ir_type(t):
     if t is None:
         return IRUnitType()
     # If already an IR type, return as is
-    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType)):
+    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType, IRExternalPythonType)):
         return t
         
     if isinstance(t, IntType):
@@ -181,14 +183,16 @@ def _to_ir_type(t):
         return IRTypeParam(name=t.name)
     if isinstance(t, GenericType):
         return IRGenericType(base=_to_ir_type(t.base), params=tuple(_to_ir_type(p) for p in t.params))
+    if isinstance(t, ExternalPythonType):
+        return IRExternalPythonType(module=t.module, name=t.name)
     raise SemanticError(f"Unknown type: {t}")
 
 
 class IRBuilder:
-    def __init__(self, filename: str = "<unknown>", source_lines: list = None, symbol_table: SymbolTable = None):
+    def __init__(self, filename: str = "<unknown>", source_lines: list = None, symbol_table: SymbolTable = None, config=None):
         self.filename = filename
         self.source_lines = source_lines or []
-        self.st = symbol_table or SymbolTable()
+        self.st = symbol_table or SymbolTable(config=config)
         if symbol_table is None:
             # Add basic exception types if we created a new symbol table
             for exc in ["Exception", "ValueError", "TypeError", "KeyError", "IndexError"]:
@@ -215,7 +219,7 @@ class IRBuilder:
 
     def build(self, module) -> IRModule:
         checker = TypeChecker(self.st, self.filename, self.source_lines)
-        checker.check_module(module)
+        module = checker.check_module(module)
 
         self._ir_classes = []
         self._ir_enums = []
@@ -228,12 +232,20 @@ class IRBuilder:
         ir_funcs = []
         for func in module.functions:
             ir_funcs.append(self._build_function(func))
+        
+        ir_stmts = []
+        for stmt in module.statements:
+            ir_stmt = self._build_stmt(stmt)
+            if ir_stmt is not None:
+                ir_stmts.append(ir_stmt)
+
         return IRModule(
             functions=tuple(ir_funcs),
             classes=tuple(self._ir_classes),
             enums=tuple(self._ir_enums),
             traits=tuple(self._ir_traits),
             trait_impls=tuple(self._ir_trait_impls),
+            statements=tuple(ir_stmts),
             filename=module.filename,
         )
 
@@ -889,6 +901,8 @@ class IRBuilder:
             return IRStrLit(value=expr.value)
 
         elif name == "Name":
+            if expr.name == "self":
+                return IRSelf()
             expr_type = self.st.lookup(expr.name)
             ir_type = _to_ir_type(expr_type) if expr_type else None
             return IRName(name=expr.name, result_type=ir_type)
@@ -1083,6 +1097,14 @@ class IRBuilder:
                     for a in expr.args:
                         args.append(self._build_expr(a))
                     return IRNew(class_name=expr.name, args=tuple(args))
+                
+                # Check for external python object/module
+                lookup_res = self.st.lookup(expr.name)
+                if isinstance(lookup_res, ExternalPythonType):
+                    ir_ret = IRExternalPythonType(module=lookup_res.module, name=f"{lookup_res.name or expr.name}()")
+                    args = [self._build_expr(a) for a in expr.args]
+                    return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret, is_fallible=True)
+
                 raise self._err(
                     f"Undefined function '{expr.name}'", expr.line, expr.col
                 )
@@ -1102,6 +1124,12 @@ class IRBuilder:
                 return IRStructAccess(
                     value=val, field=expr.attr, result_type=ir_result
                 )
+            # Fallback for external python types
+            val_type = self.inferencer.infer(expr.value)
+            if isinstance(val_type, ExternalPythonType):
+                ir_result = IRExternalPythonType(module=val_type.module, name=f"{val_type.name or ''}.{expr.attr}")
+                return IRStructAccess(value=val, field=expr.attr, result_type=ir_result)
+            
             raise self._err(
                 f"Unknown field '{expr.attr}' in class",
                 expr.line,
@@ -1147,8 +1175,20 @@ class IRBuilder:
                 return IRFileMethod(
                     file=file_val, method=expr.method, args=tuple(ir_args)
                 )
+            if isinstance(val_type, ExternalPythonType):
+                ir_ret = IRExternalPythonType(module=val_type.module, name=f"{val_type.name or ''}.{expr.method}()")
+                args = [self._build_expr(a) for a in expr.args]
+                return IRMethodCall(
+                    value=val,
+                    method=expr.method,
+                    args=tuple(args),
+                    result_type=ir_ret,
+                    is_fallible=True,
+                    mutates_self=True
+                )
+
             raise self._err(
-                f"Unknown method '{expr.method}' in class",
+                f"Unknown method '{expr.method}' in type {val_type}",
                 expr.line,
                 expr.col,
             )
@@ -1338,6 +1378,6 @@ class IRBuilder:
         return IRName(name="unknown")
 
 
-def build_ir(module, filename: str = "<unknown>", source_lines: list = None):
-    builder = IRBuilder(filename, source_lines)
+def build_ir(module, filename: str = "<unknown>", source_lines: list = None, config=None):
+    builder = IRBuilder(filename, source_lines, config=config)
     return builder.build(module)

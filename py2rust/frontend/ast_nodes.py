@@ -125,6 +125,17 @@ class UnknownType:
         return "Unknown"
 
 
+@dataclass(frozen=True)
+class ExternalPythonType:
+    module: str
+    name: Optional[str] = None
+
+    def __str__(self):
+        if self.name:
+            return f"py({self.module}.{self.name})"
+        return f"py({self.module})"
+
+
 AnyType = Union[
     IntType,
     FloatType,
@@ -139,6 +150,7 @@ AnyType = Union[
     EnumType,
     UnknownType,
     FunctionType,
+    ExternalPythonType,
 ]
 
 
@@ -574,6 +586,28 @@ class EnumDef:
     col: int = 0
 
 
+@dataclass(frozen=True)
+class Alias:
+    name: str
+    asname: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class Import:
+    names: tuple  # tuple of Alias
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class ImportFrom:
+    module: Optional[str]
+    names: tuple  # tuple of Alias
+    level: int = 0
+    line: int = 0
+    col: int = 0
+
+
 Stmt = Union[
     VarDecl,
     Assign,
@@ -593,6 +627,8 @@ Stmt = Union[
     MatchStmt,
     EnumDef,
     PassStmt,
+    Import,
+    ImportFrom,
 ]
 
 
@@ -631,4 +667,6 @@ class Module:
     functions: tuple
     classes: tuple = ()
     enums: tuple = ()
+    imports: tuple = ()
+    statements: tuple = ()
     filename: str = "<unknown>"

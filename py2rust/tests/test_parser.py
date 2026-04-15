@@ -257,12 +257,12 @@ class Foo:
     assert m.classes[0].name == "Foo"
 
 
-def test_parse_import_rejected():
-    src = """
-import os
-"""
-    with pytest.raises(UnsupportedFeatureError):
-        parse(src)
+# def test_parse_import_rejected():
+#     src = """
+# import os
+# """
+#     with pytest.raises(UnsupportedFeatureError):
+#         parse(src)
 
 
 def test_parse_lambda():

@@ -15,6 +15,7 @@ from ..ir.ir_nodes import (
     IRSetType,
     IRFunctionType,
     IRClassType,
+    IRExternalPythonType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
@@ -80,6 +81,9 @@ from ..ir.ir_nodes import (
     IRTraitImpl,
     IRTypeParam,
     IRGenericType,
+    IRExpr,
+    IRType,
+    IRStmt,
 )
 
 
@@ -361,6 +365,7 @@ class RustCodegen:
         self._loop_depth = 0
         self._current_fn_return_type = "()"
         self._uses_try_result = False
+        self._uses_python_wrappers = False
 
     def _is_protocol(self, name: str) -> bool:
         """Check if a name corresponds to a defined Protocol/Trait."""
@@ -416,6 +421,9 @@ class RustCodegen:
             base = self._get_rust_type(t.base)
             params = ", ".join(self._get_rust_type(p) for p in t.params)
             return f"{base}<{params}>"
+        if isinstance(t, IRExternalPythonType):
+            self._uses_python_wrappers = True
+            return "ExternalObject"
         raise ValueError(f"Unknown type {type(t).__name__}")
 
     def _emit(self, line: str) -> None:
@@ -448,6 +456,7 @@ class RustCodegen:
         self._uses_file_handle = False
         self._uses_py_error = False
         self._uses_async = False
+        self._uses_python_wrappers = False
 
         # Pre-pass: Generate Traits
         trait_lines = []
@@ -480,6 +489,15 @@ class RustCodegen:
             if i < len(ir_mod.functions) - 1:
                 func_lines.append("")
 
+        # Generate global statements
+        stmt_lines = []
+        if hasattr(ir_mod, "statements"):
+            for stmt in ir_mod.statements:
+                self._gen_stmt(stmt)
+                stmt_lines.extend(self._lines)
+                self._lines = []
+                stmt_lines.append("")
+
         # Generate Enums
         enum_lines = []
         for enum_def in ir_mod.enums:
@@ -500,6 +518,9 @@ class RustCodegen:
         if self._uses_file_handle:
             imports.append("use std::fs::{File, OpenOptions};")
             imports.append("use std::io::{self, Read, Write, BufRead, BufReader, Seek, SeekFrom};")
+        if self._uses_python_wrappers:
+            imports.append("use pyo3::prelude::*;")
+            imports.append("use pyo3::types::{PyDict, PyList, PyTuple};")
         
         if imports:
             final_lines.extend(imports)
@@ -623,6 +644,12 @@ class RustCodegen:
         final_lines.extend(trait_impl_lines)
         final_lines.extend(enum_lines)
         final_lines.extend(func_lines)
+        final_lines.extend(stmt_lines)
+
+        if self._uses_python_wrappers:
+            self._emit_python_boilerplate()
+            final_lines.extend(self._lines)
+            self._lines = []
 
         return "\n".join(final_lines) + "\n"
 
@@ -1489,7 +1516,12 @@ class RustCodegen:
             )
             return f'"{escaped}".to_string()'
         elif isinstance(expr, IRName):
-            return expr.name
+            # Check if this name refers to an external python module/object
+            if isinstance(expr.result_type, IRExternalPythonType):
+                 # If it's a module level name, we might need to load it
+                 if expr.result_type.name is None:
+                     return f'ExternalObject::load_module("{expr.result_type.module}")?'
+            return _mangle(expr.name)
         elif isinstance(expr, IRBinOp):
             return f"({self._gen_binop(expr)})"
         elif isinstance(expr, IRUnaryOpExpr):
@@ -1655,6 +1687,13 @@ class RustCodegen:
                 return f"PyError::{expr.name}({arg_str})"
 
             args = ", ".join(self._gen_expr(a) for a in expr.args)
+            
+            # Use call() if it's an external function
+            if isinstance(expr.return_type, IRExternalPythonType):
+                func_name = self._gen_expr(IRName(name=expr.name, result_type=expr.return_type))
+                tuple_args = f"({args},)" if args else "()"
+                return f"{func_name}.call({tuple_args})?"
+
             res = f"{_mangle(expr.name)}({args})"
             if expr.is_fallible:
                 res = f"{res}?"
@@ -1688,10 +1727,21 @@ class RustCodegen:
             # Use :: for static enum variant access
             if isinstance(expr.result_type, IREnumType):
                 return f"{val}::{_mangle(expr.field)}"
+            
+            # External object attribute access
+            if isinstance(getattr(expr.value, "result_type", None), IRExternalPythonType):
+                return f'{val}.getattr("{expr.field}")?'
+
             return f"{val}.{_mangle(expr.field)}"
         elif isinstance(expr, IRMethodCall):
             val = self._gen_expr(expr.value)
             args = ", ".join(self._gen_expr(a) for a in expr.args)
+            
+            # External object method call
+            if isinstance(getattr(expr.value, "result_type", None), IRExternalPythonType):
+                tuple_args = f"({args},)" if args else "()"
+                return f'{val}.call_method("{expr.method}", {tuple_args})?'
+
             res = f"{val}.{_mangle(expr.method)}({args})"
             if getattr(expr, "is_fallible", True):
                 res += "?"
@@ -1926,6 +1976,72 @@ class RustCodegen:
             right = self._gen_expr(expr.right)
 
         return f"{left} {expr.op} {right}"
+
+    def _emit_python_boilerplate(self):
+        self._lines.append("")
+        self._lines.append("#[derive(Clone)]")
+        self._lines.append("pub struct ExternalObject {")
+        self._lines.append("    pub obj: PyObject,")
+        self._lines.append("}")
+        self._lines.append("")
+        self._lines.append("impl ExternalObject {")
+        self._lines.append("    pub fn new(obj: PyObject) -> Self {")
+        self._lines.append("        Self { obj }")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn load_module(module: &str) -> PyResult<Self> {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let m = py.import(module)?;")
+        self._lines.append("            Ok(Self::new(m.to_object(py)))")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn getattr(&self, name: &str) -> PyResult<Self> {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let attr = self.obj.getattr(py, name)?;")
+        self._lines.append("            Ok(Self::new(attr.to_object(py)))")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn call(&self, args: impl IntoPy<Py<PyTuple>>) -> PyResult<Self> {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let res = self.obj.call1(py, args)?;")
+        self._lines.append("            Ok(Self::new(res.to_object(py)))")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn call_method(&self, method: &str, args: impl IntoPy<Py<PyTuple>>) -> PyResult<Self> {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let res = self.obj.call_method1(py, method, args)?;")
+        self._lines.append("            Ok(Self::new(res.to_object(py)))")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("}")
+        self._lines.append("")
+        self._lines.append("impl std::fmt::Display for ExternalObject {")
+        self._lines.append("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let s = self.obj.extract::<String>(py).unwrap_or_else(|_| \"<external object>\".to_string());")
+        self._lines.append("            write!(f, \"{}\", s)")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("}")
+        self._lines.append("")
+        self._lines.append("impl std::fmt::Debug for ExternalObject {")
+        self._lines.append("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let r = self.obj.repr(py).map(|r| r.to_string()).unwrap_or_else(|_| \"<external object>\".to_string());")
+        self._lines.append("            write!(f, \"{:?}\", r)")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("}")
+        self._lines.append("")
+        self._lines.append("impl IntoPy<PyObject> for ExternalObject {")
+        self._lines.append("    fn into_py(self, _py: Python<'_>) -> PyObject {")
+        self._lines.append("        self.obj")
+        self._lines.append("    }")
+        self._lines.append("}")
+        self._lines.append("")
 
     def _gen_expr_as_float(self, expr) -> str:
         if isinstance(expr, IRIntLit):

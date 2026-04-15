@@ -54,7 +54,9 @@ class TraitInfo:
 
 
 class SymbolTable:
-    def __init__(self):
+    def __init__(self, config=None):
+        from ..config import CompilerConfig
+        self.config = config or CompilerConfig()
         self._global = Scope("global")
         self._current = self._global
         self._stack: list[Scope] = [self._global]
@@ -63,6 +65,11 @@ class SymbolTable:
         self._enums: dict = {}  # name -> EnumInfo
         self._traits: dict = {}  # name -> TraitInfo
         self._current_class: Optional[str] = None
+        
+        # Plugin Manager
+        from ..plugins import PluginManager
+        self.pm = PluginManager(self)
+        
         self._register_std_traits()
 
     def _register_std_traits(self):
@@ -130,6 +137,10 @@ class SymbolTable:
 
     def lookup_trait(self, name: str) -> Optional[TraitInfo]:
         return self._traits.get(name)
+
+    def register_external_name(self, name: str, type_: ExternalPythonType) -> None:
+        """Register a name that is satisfied by an external Python module."""
+        self._global.define(name, type_)
 
     def get_field_type(self, class_name: str, field: str):
         cls = self._classes.get(class_name)

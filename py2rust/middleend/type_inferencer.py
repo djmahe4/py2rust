@@ -14,6 +14,7 @@ from ..frontend.ast_nodes import (
     SetType,
     FunctionType,
     UnknownType,
+    ExternalPythonType,
     Name,
 )
 from .symbol_table import SymbolTable
@@ -263,6 +264,10 @@ class TypeInferencer:
         if sig:
             # sig: (params, return_type, is_async)
             return sig[1]
+        
+        if isinstance(curr_type, ExternalPythonType):
+            # Calling an external object returns another external object/module
+            return ExternalPythonType(module=curr_type.module, name=f"{curr_type.name}()" if curr_type.name else f"{expr.name}()")
 
         cls = self.st.lookup_class(expr.name)
         if cls:
@@ -281,6 +286,9 @@ class TypeInferencer:
             field_type = self.st.get_field_type(val_type.name, expr.attr)
             if field_type:
                 return field_type
+        if isinstance(val_type, ExternalPythonType):
+            # Getting attribute from an external Python module or object returns another external object/module
+            return ExternalPythonType(module=val_type.module, name=f"{val_type.name}.{expr.attr}" if val_type.name else expr.attr)
         return None
 
     def _infer_method_call(self, expr):
@@ -293,6 +301,9 @@ class TypeInferencer:
                 return method.return_type
         if isinstance(val_type, FileType):
             return self.infer_file_method(expr.method)
+        if isinstance(val_type, ExternalPythonType):
+            # Calling a method on an external Python object returns an external object
+            return ExternalPythonType(module=val_type.module, name=f"{val_type.name}.{expr.method}()" if val_type.name else f"{expr.method}()")
         return None
 
     def _infer_self(self, expr):

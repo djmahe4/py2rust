@@ -8,6 +8,7 @@ from .ast_nodes import (
     FunctionDef,
     ClassDef,
     Param,
+    Alias,
     VarDecl,
     Assign,
     AugAssign,
@@ -20,6 +21,10 @@ from .ast_nodes import (
     ForRange,
     ReturnStmt,
     PrintStmt,
+    EnumType,
+    EnumDef,
+    Import,
+    ImportFrom,
     IntLiteral,
     FloatLiteral,
     BoolLiteral,
@@ -156,54 +161,33 @@ class Parser:
         functions = []
         classes = []
         enums = []
+        imports = []
+        statements = []
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 functions.append(self._parse_funcdef(node))
             elif isinstance(node, ast.ClassDef):
-                res = self._parse_classdef(node)
-                if isinstance(res, ClassDef):
-                    classes.append(res)
-                else:
-                    enums.append(res)
-            elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                # Allow and ignore typing and enum imports
-                is_ignored = False
-                if isinstance(node, ast.Import):
-                    if any(alias.name in ("typing", "enum") for alias in node.names):
-                        is_ignored = True
-                elif isinstance(node, ast.ImportFrom):
-                    if node.module in ("typing", "enum"):
-                        is_ignored = True
-                
-                if not is_ignored:
-                    raise self._err(
-                        "Import statements are not supported", node, UnsupportedFeatureError
-                    )
-            elif isinstance(node, ast.Assign):
-                # Detect T = TypeVar('T')
-                if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                    target_name = node.targets[0].id
-                    if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
-                        if node.value.func.id == "TypeVar":
-                            self.type_vars.add(target_name)
-                            continue
-                
-                raise self._err(
-                    f"Top-level {type(node).__name__} is not supported except for TypeVar",
-                    node,
-                    UnsupportedFeatureError,
-                )
+                classes.append(self._parse_classdef(node))
+            elif isinstance(node, ast.Import):
+                imports.append(self._parse_import(node))
+            elif isinstance(node, ast.ImportFrom):
+                imports.append(self._parse_import_from(node))
             else:
-                raise self._err(
-                    f"Top-level {type(node).__name__} is not supported",
-                    node,
-                    UnsupportedFeatureError,
-                )
+                try:
+                    stmt = self._parse_stmt(node)
+                    if isinstance(stmt, VarDecl) and isinstance(stmt.value, FunctionCall) and stmt.value.name == "TypeVar":
+                        self.type_vars.add(stmt.name)
+                    statements.append(stmt)
+                except (ParseError, UnsupportedFeatureError):
+                    # Continue for now if we want to be relaxed, or raise
+                    raise
 
         return Module(
             functions=tuple(functions),
             classes=tuple(classes),
             enums=tuple(enums),
+            imports=tuple(imports),
+            statements=tuple(statements),
             filename=self.filename,
         )
 
@@ -283,18 +267,18 @@ class Parser:
             col=node.col_offset + 1,
         )
 
-    def _parse_classdef(self, node: ast.ClassDef) -> Union[ClassDef, EnumDef]:
+    def _parse_classdef(self, node: ast.ClassDef) -> ClassDef:
         bases = []
-        is_enum = False
         type_params = []
         for base_node in node.bases:
             if isinstance(base_node, ast.Name):
                 bases.append(base_node.id)
-                if base_node.id == "Enum":
-                    is_enum = True
             elif isinstance(base_node, ast.Subscript):
                 # Handle Generic[T] or Protocol[T]
-                if isinstance(base_node.value, ast.Name) and base_node.value.id in ("Generic", "Protocol"):
+                if isinstance(base_node.value, ast.Name) and base_node.value.id in (
+                    "Generic",
+                    "Protocol",
+                ):
                     bases.append(base_node.value.id)
                     if isinstance(base_node.slice, ast.Tuple):
                         for elt in base_node.slice.elts:
@@ -302,21 +286,6 @@ class Parser:
                                 type_params.append(elt.id)
                     elif isinstance(base_node.slice, ast.Name):
                         type_params.append(base_node.slice.id)
-
-        if is_enum:
-            variants = []
-            for s in node.body:
-                if isinstance(s, ast.Assign) and len(s.targets) == 1:
-                    target = s.targets[0]
-                    if isinstance(target, ast.Name):
-                        val = self._parse_expr(s.value)
-                        variants.append((target.id, val))
-            return EnumDef(
-                name=node.name,
-                variants=tuple(variants),
-                line=node.lineno,
-                col=node.col_offset + 1,
-            )
 
         body = self._parse_class_body(node.body)
 
@@ -351,6 +320,23 @@ class Parser:
                     VarDecl(
                         name=s.target.id,
                         type_annotation=ann,
+                        value=val,
+                        line=s.lineno,
+                        col=s.col_offset + 1,
+                    )
+                )
+            elif isinstance(s, ast.Assign):
+                if len(s.targets) != 1 or not isinstance(s.targets[0], ast.Name):
+                    raise self._err(
+                        "Only simple field assignments supported in class body",
+                        s,
+                        UnsupportedFeatureError,
+                    )
+                target = s.targets[0].id
+                val = self._parse_expr(s.value)
+                result.append(
+                    Assign(
+                        target=target,
                         value=val,
                         line=s.lineno,
                         col=s.col_offset + 1,
@@ -1182,6 +1168,22 @@ class Parser:
             return node.attr
         return "Unknown"
 
+    def _parse_alias(self, node: ast.alias):
+        return Alias(name=node.name, asname=node.asname)
+
+    def _parse_import(self, node: ast.Import):
+        names = tuple(self._parse_alias(alias) for alias in node.names)
+        return Import(names=names, line=node.lineno, col=node.col_offset + 1)
+
+    def _parse_import_from(self, node: ast.ImportFrom):
+        names = tuple(self._parse_alias(alias) for alias in node.names)
+        return ImportFrom(
+            module=node.module,
+            names=names,
+            level=node.level,
+            line=node.lineno,
+            col=node.col_offset + 1,
+        )
 
 def parse(source: str, filename: str = "<unknown>") -> Module:
     return Parser(source, filename).parse()
