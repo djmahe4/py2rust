@@ -58,5 +58,5 @@ class PythonWrapperPlugin(BasePlugin):
     def _is_local_or_plugin(self, module_name):
         if module_name in ("typing", "enum", "math", "sys", "os", "io"):
             return True
-        # Future improvement: cross-reference with existing source files in IR
+        # TODO: cross-reference with existing source files in IR
         return False
