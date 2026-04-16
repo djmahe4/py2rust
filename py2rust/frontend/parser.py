@@ -47,6 +47,11 @@ from .ast_nodes import (
     TryStmt,
     RaiseStmt,
     PassStmt,
+    WithStmt,
+    WithItem,
+    AssertStmt,
+    GlobalStmt,
+    NonlocalStmt,
     JoinedStr,
     FormattedValue,
     AwaitExpr,
@@ -350,15 +355,9 @@ class Parser:
                 if isinstance(s.value, ast.Call):
                     call = s.value
                     if isinstance(call.func, ast.Name) and call.func.id == "print":
-                        if len(call.args) != 1 or call.keywords:
-                            raise self._err(
-                                "print() must have exactly one argument",
-                                s,
-                                UnsupportedFeatureError,
-                            )
-                        val = self._parse_expr(call.args[0])
+                        vals = tuple(self._parse_expr(arg) for arg in call.args)
                         result.append(
-                            PrintStmt(value=val, line=s.lineno, col=s.col_offset + 1)
+                            PrintStmt(values=vals, line=s.lineno, col=s.col_offset + 1)
                         )
                     else:
                         raise self._err(
@@ -636,15 +635,16 @@ class Parser:
             if isinstance(node.value, ast.Call):
                 call = node.value
                 if isinstance(call.func, ast.Name) and call.func.id == "print":
-                    if len(call.args) != 1 or call.keywords:
-                        raise self._err(
-                            "print() must have exactly one argument",
-                            node,
-                            UnsupportedFeatureError,
-                        )
-                    val = self._parse_expr(call.args[0])
+                    vals = tuple(self._parse_expr(arg) for arg in call.args)
+                    sep = None
+                    end = None
+                    for kw in call.keywords:
+                        if kw.arg == "sep":
+                            sep = self._parse_expr(kw.value)
+                        elif kw.arg == "end":
+                            end = self._parse_expr(kw.value)
                     return PrintStmt(
-                        value=val, line=node.lineno, col=node.col_offset + 1
+                        values=vals, sep=sep, end=end, line=node.lineno, col=node.col_offset + 1
                     )
 
                 # Support general function calls as statements by treating them as assignment to discard
@@ -706,10 +706,17 @@ class Parser:
                 line=node.lineno,
                 col=node.col_offset + 1,
             )
-        if isinstance(node, ast.With):
-            raise self._err(
-                "with statements are not supported", node, UnsupportedFeatureError
-            )
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            return self._parse_with(node)
+
+        if isinstance(node, ast.Assert):
+            return self._parse_assert(node)
+
+        if isinstance(node, ast.Global):
+            return self._parse_global(node)
+
+        if isinstance(node, ast.Nonlocal):
+            return self._parse_nonlocal(node)
 
         raise self._err(
             f"Unsupported statement: {type(node).__name__}",
@@ -1160,6 +1167,39 @@ class Parser:
                 node,
                 UnsupportedFeatureError,
             )
+
+    def _parse_with(self, node: Union[ast.With, ast.AsyncWith]) -> WithStmt:
+        is_async = isinstance(node, ast.AsyncWith)
+        items = []
+        for item in node.items:
+            vars_ = self._parse_expr(item.optional_vars) if item.optional_vars else None
+            items.append(
+                WithItem(
+                    context_expr=self._parse_expr(item.context_expr),
+                    optional_vars=vars_,
+                    line=item.context_expr.lineno,
+                    col=item.context_expr.col_offset + 1,
+                )
+            )
+        body = tuple(self._parse_stmts(node.body))
+        return WithStmt(
+            items=tuple(items),
+            body=body,
+            is_async=is_async,
+            line=node.lineno,
+            col=node.col_offset + 1,
+        )
+
+    def _parse_assert(self, node: ast.Assert) -> AssertStmt:
+        test = self._parse_expr(node.test)
+        msg = self._parse_expr(node.msg) if node.msg else None
+        return AssertStmt(test=test, msg=msg, line=node.lineno, col=node.col_offset + 1)
+
+    def _parse_global(self, node: ast.Global) -> GlobalStmt:
+        return GlobalStmt(names=tuple(node.names), line=node.lineno, col=node.col_offset + 1)
+
+    def _parse_nonlocal(self, node: ast.Nonlocal) -> NonlocalStmt:
+        return NonlocalStmt(names=tuple(node.names), line=node.lineno, col=node.col_offset + 1)
 
     def _get_name(self, node: ast.AST) -> str:
         if isinstance(node, ast.Name):

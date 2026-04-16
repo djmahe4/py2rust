@@ -506,7 +506,9 @@ class ReturnStmt:
 
 @dataclass(frozen=True)
 class PrintStmt:
-    value: object
+    values: tuple
+    sep: Optional[object] = None # Expr
+    end: Optional[object] = None # Expr
     line: int = 0
     col: int = 0
 
@@ -608,6 +610,45 @@ class ImportFrom:
     col: int = 0
 
 
+@dataclass(frozen=True)
+class WithItem:
+    context_expr: object # Expr
+    optional_vars: Optional[object] = None # Name or Tuple/List of Name
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class WithStmt:
+    items: tuple # tuple of WithItem
+    body: tuple # tuple of Stmt
+    is_async: bool = False
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class AssertStmt:
+    test: object # Expr
+    msg: Optional[object] = None # Expr
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class GlobalStmt:
+    names: tuple # tuple of str
+    line: int = 0
+    col: int = 0
+
+
+@dataclass(frozen=True)
+class NonlocalStmt:
+    names: tuple # tuple of str
+    line: int = 0
+    col: int = 0
+
+
 Stmt = Union[
     VarDecl,
     Assign,
@@ -629,6 +670,10 @@ Stmt = Union[
     PassStmt,
     Import,
     ImportFrom,
+    WithStmt,
+    AssertStmt,
+    GlobalStmt,
+    NonlocalStmt,
 ]
 
 
@@ -660,6 +705,7 @@ class ClassDef:
     type_params: tuple = ()
     line: int = 0
     col: int = 0
+
 
 
 @dataclass(frozen=True)

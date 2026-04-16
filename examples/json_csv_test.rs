@@ -5,8 +5,14 @@
 // pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 //
 
+use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write, BufRead, BufReader, Seek, SeekFrom};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
+use serde_json;
+use pythonize;
+use csv;
 
 #[derive(Debug, Clone)]
 pub enum PyError {
@@ -49,34 +55,114 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn test_numpy() -> Result<(), PyError> {
-    println!("{}", "Testing NumPy...".to_string());
-    let arr: ExternalObject = ExternalObject::load_module("numpy")?.call_method("array", (vec![1, 2, 3],))?;
-    println!("{}", format!("Array: {}", ExternalObject::from_module(&"numpy".to_string(), &"array".to_string())));
-    println!("{}", format!("Mean: {}", ExternalObject::load_module("numpy")?.call_method("mean", (ExternalObject::from_module(&"numpy".to_string(), &"array".to_string()),))?));
+struct FileHandle {
+    file: File,
+}
+
+impl FileHandle {
+    fn open(path: &str, mode: &str) -> std::io::Result<Self> {
+        let file = match mode {
+            "r" => File::open(path)?,
+            "w" => File::create(path)?,
+            "a" => OpenOptions::new().append(true).open(path)?,
+            "rb" => File::open(path)?,
+            "wb" => File::create(path)?,
+            "ab" => OpenOptions::new().append(true).open(path)?,
+            _ => File::open(path)?,
+        };
+        Ok(FileHandle { file })
+    }
+
+    fn read(&mut self) -> std::io::Result<String> {
+        let mut contents = String::new();
+        self.file.read_to_string(&mut contents)?;
+        Ok(contents)
+    }
+
+    fn readline(&mut self) -> std::io::Result<String> {
+        let mut reader = BufReader::new(&self.file);
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        Ok(line)
+    }
+
+    fn write(&mut self, content: &str) -> std::io::Result<()> {
+        self.file.write_all(content.as_bytes())
+    }
+
+    fn close(self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn tell(&mut self) -> std::io::Result<u64> {
+        self.file.stream_position()
+    }
+
+    fn seek(&mut self, pos: u64) -> std::io::Result<u64> {
+        self.file.seek(SeekFrom::Start(pos))
+    }
+}
+
+fn test_json() -> Result<(), PyError> {
+    let mut k: i32 = 0;
+
+    println!("{}", "Testing JSON support...".to_string());
+    let data: ExternalObject = ExternalObject::new(Python::with_gil(|py| { let d = PyDict::new(py); d.set_item("a".to_string(), 1).unwrap(); d.set_item("b".to_string(), vec![1, 2, 3]).unwrap(); d.set_item("c".to_string(), HashMap::from([("d".to_string(), true)])).unwrap(); d.to_object(py) }));
+    let s: String = Python::with_gil(|py| { let val = pythonize::pythonize(data.obj.as_ref(py)).map_err(|e| PyError::ValueError(e.to_string()))?; let s = serde_json::to_string(&val).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(s) })?;
+    println!("{} {}", "Serialized:".to_string(), s);
+    let mut data2: ExternalObject = Python::with_gil(|py| { let v: serde_json::Value = serde_json::from_str(&s).map_err(|e| PyError::ValueError(e.to_string()))?; let obj = pythonize::depythonize(py, &v).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(ExternalObject::new(obj)) })?;
+    println!("{} {}", "Deserialized 'a':".to_string(), data2.getitem("a".to_string())?);
+    println!("{} {}", "Deserialized 'b':".to_string(), data2.getitem("b".to_string())?);
+    data2.setitem("a".to_string(), 42)?;
+    println!("{} {}", "Updated 'a':".to_string(), data2.getitem("a".to_string())?);
+    println!("{}", "Iterating over keys:".to_string());
+    {
+        '__loop_0: for __loop_val in data2.iter()? {
+            k = __loop_val.clone();
+            println!("{} {}", "Key:".to_string(), k);
+        }
+    }
     Ok(())
 }
 
-fn test_opencv() -> Result<(), PyError> {
-    println!("{}", "\nTesting OpenCV...".to_string());
-    println!("{}", format!("OpenCV Version: {}", ExternalObject::load_module("cv2")?.getattr("__version__")?));
-    let img: ExternalObject = ExternalObject::load_module("numpy")?.call_method("zeros", ((10, 10, 3),))?;
-    println!("{}", format!("Image shape: {}", ExternalObject::from_module(&"numpy".to_string(), &"zeros".to_string()).getattr("shape")?));
-    println!("{}", "Opening window (might fail on headless systems)...".to_string());
-    ExternalObject::load_module("cv2")?.call_method("imshow", ("Py2Rust OpenCV Test".to_string(), ExternalObject::from_module(&"numpy".to_string(), &"zeros".to_string()),))?;
-    ExternalObject::load_module("cv2")?.call_method("waitKey", (1,))?;
-    ExternalObject::load_module("cv2")?.call_method("destroyAllWindows", ())?;
-    println!("{}", "OpenCV test complete.".to_string());
-    Ok(())
-}
-fn main() -> Result<(), PyError> {
-    test_numpy()?;
-    
-    test_opencv()?;
-    
+fn test_csv() -> Result<(), PyError> {
+    let mut row: i32 = 0;
+
+    println!("{}", "\nTesting CSV support...".to_string());
+    let mut f1: FileHandle = FileHandle::open(&"test.csv".to_string(), &"w".to_string())?;
+    f1.write(&"name,age\nalice,30\nbob,25\n".to_string())?;
+    f1.close()?;
+    let mut f2: FileHandle = FileHandle::open(&"test.csv".to_string(), &"r".to_string())?;
+    let reader: ExternalObject = ExternalObject::new_csv_reader(f2)?;
+    {
+        '__loop_0: for __loop_val in reader.iter()? {
+            row = __loop_val.clone();
+            println!("{} {}", "Row:".to_string(), row);
+        }
+    }
+    f2.close()?;
     Ok(())
 }
 
+fn test_attr() -> Result<(), PyError> {
+    Ok(())
+}
+fn main() {
+    if let Err(e) = _main() {
+        eprintln!("Py2Rust Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn _main() -> Result<(), PyError> {
+    test_json()?;
+    
+    test_csv()?;
+    
+    test_attr()?;
+    
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct ExternalObject {

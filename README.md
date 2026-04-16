@@ -66,6 +66,13 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
 - Method overloading by argument count
 - Automatic structural matching for trait implementations
 
+#### Python Interoperability (Plugins)
+- Call external Python libraries (NumPy, OpenCV, PyTorch, etc.) via `ExternalObject` wrapper
+- Automatic generation of Rust bindings for Python objects
+- Support for calling Python methods, accessing attributes, and top-level functions
+- **Virtual Environment (venv) support** with runtime `sys.path` injection
+- Mocking system to enable type checking of external library calls
+
 ### ❌ Forbidden Features (raises `UnsupportedFeatureError`)
 
 #### Language Features
@@ -133,12 +140,25 @@ py2rust input.py --check-only
 # Verify generated Rust compiles with rustc
 py2rust input.py -o output.rs --verify
 
+# Mock external imports (skips undefined module errors)
+py2rust input.py --mock-mode
+
+# Specify custom plugin directory
+py2rust input.py --plugin-path ./my_plugins
+
 # Verbose output
 py2rust input.py -v
 
 # Disable rustfmt formatting
 py2rust input.py --no-format
 ```
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PY2RUST_VENV` | Path to the Python virtual environment for the generated Rust binary. |
+| `PYO3_USE_ABI3_FORWARD_COMPATIBILITY` | Set to `1` when building for Python 3.13+ using older `pyo3` versions. |
 
 ## Examples
 
@@ -301,6 +321,42 @@ def main() -> int:
     return 0
 ```
 
+### Python Interoperability (Numpy & OpenCV)
+
+`py2rust` can generate wrappers for external Python libraries using the `--mock-mode` flag.
+
+**Input (`examples/big_lib_test.py`):**
+```python
+import numpy as np
+import cv2
+
+def test_numpy() -> None:
+    arr = np.array([1, 2, 3])
+    print(f"Array: {arr}")
+    print(f"Mean: {np.mean(arr)}")
+
+def test_opencv() -> None:
+    print(f"OpenCV Version: {cv2.__version__}")
+    img = np.zeros((10, 10, 3))
+    cv2.imshow("Py2Rust OpenCV Test", img)
+    cv2.waitKey(1)
+    cv2.destroyAllWindows()
+
+def main() -> None:
+    test_numpy()
+    test_opencv()
+```
+
+**Compilation & Run:**
+```bash
+# 1. Compile with mock mode
+py2rust examples/big_lib_test.py -o main.rs --mock-mode
+
+# 2. Run with venv set
+export PY2RUST_VENV=/path/to/your/venv
+cargo run
+```
+
 ## Project Structure
 
 ```
@@ -323,6 +379,10 @@ py2rust/
 │   │
 │   ├── ir/
 │   │   └── ir_nodes.py      # Strongly-typed IR nodes (frozen dataclasses)
+│   │
+│   ├── plugins/
+│   │   ├── __init__.py
+│   │   └── python_wrapper_plugin.py # Interop logic for external libs
 │   │
 │   ├── backend/
 │   │   ├── rust_codegen.py  # IR → idiomatic Rust code

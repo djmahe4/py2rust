@@ -46,55 +46,29 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Color {
-    RED,
-    GREEN,
-    BLUE,
-}
-
-
-fn describe_color(c: Color) -> Result<(), PyError> {
-    match c {
-        Color::RED => {
-            println!("{}", "It is red".to_string());
-        },
-        Color::GREEN => {
-            println!("{}", "It is green".to_string());
-        },
-        Color::BLUE => {
-            println!("{}", "It is blue".to_string());
-        },
-        _ => {
-            println!("{}", "Unknown color".to_string());
-        },
-    }
+fn test_as() -> Result<(), PyError> {
+    println!("{}", "math as m test".to_string());
     Ok(())
 }
 
-fn check_value(x: i32) -> Result<(), PyError> {
-    match x {
-        1 => {
-            println!("{}", "One".to_string());
-        },
-        2 => {
-            println!("{}", "Two".to_string());
-        },
-        y => {
-            println!("{}", "Other value".to_string());
-        },
-    }
+fn test_global_local() -> Result<(), PyError> {
+    // WARNING: Python 'global' for [x] is not fully supported in Rust's ownership model.
+    // It usually indicates shared state which should be handled via Arc<Mutex<T>> or passed as arguments.
+    let x: i32 = 1;
+    println!("{}", x);
     Ok(())
 }
 
+fn __py_main() -> Result<(), PyError> {
+    test_as()?;
+    test_global_local()?;
+    Ok(())
+}
 fn main() -> Result<(), PyError> {
-    describe_color(Color::RED)?;
-    describe_color(Color::GREEN)?;
-    check_value(1)?;
-    check_value(2)?;
-    check_value(3)?;
+    __py_main()?;
     Ok(())
 }
+
 
 
 /*

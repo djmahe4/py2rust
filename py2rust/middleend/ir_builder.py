@@ -45,6 +45,11 @@ from ..frontend.ast_nodes import (
     SubscriptAssign,
     Assign,
     AugAssign,
+    WithStmt,
+    WithItem,
+    AssertStmt,
+    GlobalStmt,
+    NonlocalStmt,
     ExternalPythonType,
 )
 from ..ir.ir_nodes import (
@@ -63,6 +68,7 @@ from ..ir.ir_nodes import (
     IRFunctionType,
     IRFileType,
     IRClassType,
+    IRExternalPythonType,
     IRUnknownType,
     IRIntLit,
     IRFloatLit,
@@ -128,6 +134,11 @@ from ..ir.ir_nodes import (
     IRListComp,
     IRDictComp,
     IRSetComp,
+    IRWith,
+    IRWithItem,
+    IRAssert,
+    IRGlobal,
+    IRNonlocal,
     IRExternalPythonType,
 )
 from ..utils.errors import SemanticError
@@ -612,9 +623,35 @@ class IRBuilder:
         """Check if any statement in a list mutates a variable."""
         return any(self._stmt_mutates(s, var_name) for s in stmts)
 
+    def _is_main_check(self, expr) -> bool:
+        """Check if an expression is __name__ == '__main__'."""
+        if type(expr).__name__ == "Comparison":
+            if getattr(expr, "op", "") == "==":
+                left = getattr(expr, "left", None)
+                right = getattr(expr, "right", None)
+                
+                # Check for: __name__ == "__main__"
+                if type(left).__name__ == "Name" and getattr(left, "name", "") == "__name__":
+                    if type(right).__name__ == "StrLiteral" and getattr(right, "value", "") == "__main__":
+                        return True
+                # Also check: "__main__" == __name__
+                if type(right).__name__ == "Name" and getattr(right, "name", "") == "__name__":
+                    if type(left).__name__ == "StrLiteral" and getattr(left, "value", "") == "__main__":
+                        return True
+        return False
+
     def _build_stmts(self, stmts, return_type=None) -> list:
-        res = [self._build_stmt(s, return_type) for s in stmts]
-        return [r for r in res if r is not None]
+        from ..utils.logger import get_logger
+        logger = get_logger()
+        res = []
+        for s in stmts:
+            if type(s).__name__ == "IfStmt" and self._is_main_check(s.condition):
+                logger.warning(f"Ignoring 'if __name__ == \"__main__\":' and all subsequent lines at line {s.line}. Top-level code after this block will be ignored.")
+                break
+            ir_stmt = self._build_stmt(s, return_type)
+            if ir_stmt:
+                res.append(ir_stmt)
+        return res
 
     def _build_stmt(self, stmt, return_type=None):
         name = type(stmt).__name__
@@ -774,11 +811,18 @@ class IRBuilder:
             return IRReturn(value=val, result_type=_to_ir_type(return_type))
 
         elif name == "PrintStmt":
-            val = self._build_expr(stmt.value)
-            val_type = self.inferencer.infer(stmt.value)
-            if val_type is None:
-                val_type = IntType()
-            return IRPrint(value=val, value_type=_to_ir_type(val_type))
+            vals = []
+            v_types = []
+            for v in stmt.values:
+                val = self._build_expr(v)
+                vt = self.inferencer.infer(v)
+                if vt is None:
+                    vt = IntType()
+                vals.append(val)
+                v_types.append(_to_ir_type(vt))
+            sep = self._build_expr(stmt.sep) if stmt.sep else None
+            end = self._build_expr(stmt.end) if stmt.end else None
+            return IRPrint(values=tuple(vals), value_types=tuple(v_types), sep=sep, end=end)
 
         elif name == "TryStmt":
             body = tuple(self._build_stmt(s) for s in stmt.body)
@@ -796,6 +840,18 @@ class IRBuilder:
             val = self._build_expr(stmt.value) if stmt.value else None
             cause = self._build_expr(stmt.cause) if stmt.cause else None
             return IRRaise(value=val, cause=cause)
+
+        elif name == "WithStmt":
+            return self._build_with(stmt)
+
+        elif name == "AssertStmt":
+            return self._build_assert(stmt)
+
+        elif name == "GlobalStmt":
+            return self._build_global(stmt)
+
+        elif name == "NonlocalStmt":
+            return self._build_nonlocal(stmt)
 
         elif name == "BreakStmt":
             if not self._loop_stack:
@@ -1003,15 +1059,30 @@ class IRBuilder:
                     key_t = expected_type.key_type
                     val_t = expected_type.value_type
                 return IRDictLit(pairs=(), key_type=key_t, value_type=val_t)
-            first_key_t = self.inferencer.infer(expr.pairs[0][0])
-            first_val_t = self.inferencer.infer(expr.pairs[0][1])
-            ir_key_t = _to_ir_type(first_key_t) if first_key_t else IRIntType()
-            ir_val_t = _to_ir_type(first_val_t) if first_val_t else IRIntType()
+            # Improved type inference for mixed-type dicts
+            val_types = [self.inferencer.infer(v) for _, v in expr.pairs]
+            first_val_t = val_types[0]
+            mixed = False
+            for vt in val_types[1:]:
+                if vt != first_val_t:
+                    mixed = True
+                    break
+            
+            ir_key_t = _to_ir_type(self.inferencer.infer(expr.pairs[0][0])) if expr.pairs[0][0] else IRIntType()
+            
+            if mixed:
+                ir_val_t = IRExternalPythonType(module="builtins", name="object")
+            else:
+                ir_val_t = _to_ir_type(first_val_t) if first_val_t else IRIntType()
+                
             pairs = tuple(
                 (self._build_expr(k, ir_key_t), self._build_expr(v, ir_val_t))
                 for k, v in expr.pairs
             )
-            return IRDictLit(pairs=pairs, key_type=ir_key_t, value_type=ir_val_t)
+            res_t = IRDictType(key_type=ir_key_t, value_type=ir_val_t)
+            if mixed:
+                res_t = IRExternalPythonType(module="builtins", name="object")
+            return IRDictLit(pairs=pairs, key_type=ir_key_t, value_type=ir_val_t, result_type=res_t)
 
         elif name == "TupleLiteral":
             elements = tuple(self._build_expr(e) for e in expr.elements)
@@ -1365,6 +1436,36 @@ class IRBuilder:
         self.st.exit_scope()
         return IRSetComp(elt=elt, generators=tuple(generators), result_type=res_ir_t)
 
+    def _build_with(self, node: WithStmt) -> IRWith:
+        items = []
+        for item in node.items:
+            ctx = self._build_expr(item.context_expr)
+            vars_ = self._build_expr(item.optional_vars) if item.optional_vars else None
+            
+            # Simple type inference/binding for with vars
+            if item.optional_vars:
+                ctx_type = self.inferencer.infer(item.context_expr)
+                res_type = UnknownType()
+                if isinstance(ctx_type, FileType):
+                    res_type = FileType()
+                self._bind_target(item.optional_vars, res_type)
+            
+            items.append(IRWithItem(context_expr=ctx, optional_vars=vars_))
+        
+        body = tuple(self._build_stmts(node.body))
+        return IRWith(items=tuple(items), body=body, is_async=node.is_async)
+
+    def _build_assert(self, node: AssertStmt) -> IRAssert:
+        test = self._build_expr(node.test)
+        msg = self._build_expr(node.msg) if node.msg else None
+        return IRAssert(test=test, msg=msg)
+
+    def _build_global(self, node: GlobalStmt) -> IRGlobal:
+        return IRGlobal(names=node.names)
+
+    def _build_nonlocal(self, node: NonlocalStmt) -> IRNonlocal:
+        return IRNonlocal(names=node.names)
+
     def _build_comp_target(self, target):
         from ..frontend.ast_nodes import Name, TupleLiteral
         if isinstance(target, str):
@@ -1378,6 +1479,10 @@ class IRBuilder:
         return IRName(name="unknown")
 
 
-def build_ir(module, filename: str = "<unknown>", source_lines: list = None, config=None):
-    builder = IRBuilder(filename, source_lines, config=config)
+def build_ir(module, filename: str = "<unknown>", source_lines: list = None, config=None, dependency_manager=None):
+    builder = IRBuilder(filename, source_lines, config=config, symbol_table=None)
+    # If IRBuilder's __init__ didn't take dependency_manager, 
+    # we need to set it on the symbol table or update __init__.
+    # Let's update IRBuilder.__init__ as well.
+    builder.st.dependency_manager = dependency_manager
     return builder.build(module)

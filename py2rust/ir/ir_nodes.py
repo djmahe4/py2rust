@@ -225,6 +225,7 @@ class IRDictLit:
     pairs: tuple
     key_type: object
     value_type: object
+    result_type: Optional[object] = None
 
 
 @dataclass(frozen=True)
@@ -464,8 +465,10 @@ class IRReturn:
 
 @dataclass(frozen=True)
 class IRPrint:
-    value: object
-    value_type: object
+    values: tuple
+    value_types: tuple
+    sep: Optional[object] = None # IRExpr
+    end: Optional[object] = None # IRExpr
 
 
 @dataclass(frozen=True)
@@ -482,6 +485,35 @@ class IRContinue:
 class IRDictDelete:
     target: object
     key: object
+
+
+@dataclass(frozen=True)
+class IRWithItem:
+    context_expr: IRExpr
+    optional_vars: Optional[IRExpr] = None
+
+
+@dataclass(frozen=True)
+class IRWith:
+    items: tuple  # tuple of IRWithItem
+    body: tuple  # tuple of IRStmt
+    is_async: bool = False
+
+
+@dataclass(frozen=True)
+class IRAssert:
+    test: IRExpr
+    msg: Optional[IRExpr] = None
+
+
+@dataclass(frozen=True)
+class IRGlobal:
+    names: tuple  # tuple of str
+
+
+@dataclass(frozen=True)
+class IRNonlocal:
+    names: tuple  # tuple of str
 
 
 @dataclass(frozen=True)
@@ -639,4 +671,8 @@ IRStmt = Union[
     IREnumDef,
     IRTryExcept,
     IRRaise,
+    IRWith,
+    IRAssert,
+    IRGlobal,
+    IRNonlocal,
 ]

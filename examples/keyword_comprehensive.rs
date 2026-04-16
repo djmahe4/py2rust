@@ -5,6 +5,8 @@
 // pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 //
 
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write, BufRead, BufReader, Seek, SeekFrom};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 
@@ -49,34 +51,94 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn test_numpy() -> Result<(), PyError> {
-    println!("{}", "Testing NumPy...".to_string());
-    let arr: ExternalObject = ExternalObject::load_module("numpy")?.call_method("array", (vec![1, 2, 3],))?;
-    println!("{}", format!("Array: {}", ExternalObject::from_module(&"numpy".to_string(), &"array".to_string())));
-    println!("{}", format!("Mean: {}", ExternalObject::load_module("numpy")?.call_method("mean", (ExternalObject::from_module(&"numpy".to_string(), &"array".to_string()),))?));
+struct FileHandle {
+    file: File,
+}
+
+impl FileHandle {
+    fn open(path: &str, mode: &str) -> std::io::Result<Self> {
+        let file = match mode {
+            "r" => File::open(path)?,
+            "w" => File::create(path)?,
+            "a" => OpenOptions::new().append(true).open(path)?,
+            "rb" => File::open(path)?,
+            "wb" => File::create(path)?,
+            "ab" => OpenOptions::new().append(true).open(path)?,
+            _ => File::open(path)?,
+        };
+        Ok(FileHandle { file })
+    }
+
+    fn read(&mut self) -> std::io::Result<String> {
+        let mut contents = String::new();
+        self.file.read_to_string(&mut contents)?;
+        Ok(contents)
+    }
+
+    fn readline(&mut self) -> std::io::Result<String> {
+        let mut reader = BufReader::new(&self.file);
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        Ok(line)
+    }
+
+    fn write(&mut self, content: &str) -> std::io::Result<()> {
+        self.file.write_all(content.as_bytes())
+    }
+
+    fn close(self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn tell(&mut self) -> std::io::Result<u64> {
+        self.file.stream_position()
+    }
+
+    fn seek(&mut self, pos: u64) -> std::io::Result<u64> {
+        self.file.seek(SeekFrom::Start(pos))
+    }
+}
+
+fn test_print_variants() -> Result<(), PyError> {
+    let a: i32 = 1;
+    let b: f64 = 2.5;
+    let c: String = "hello".to_string();
+    println!("{} {} {}", a, b, c);
+    print!("{}", a);
+    print!("{}", "|".to_string());
+    print!("{}", b);
+    print!("{}", "!!!\n".to_string());
+    println!("");
     Ok(())
 }
 
-fn test_opencv() -> Result<(), PyError> {
-    println!("{}", "\nTesting OpenCV...".to_string());
-    println!("{}", format!("OpenCV Version: {}", ExternalObject::load_module("cv2")?.getattr("__version__")?));
-    let img: ExternalObject = ExternalObject::load_module("numpy")?.call_method("zeros", ((10, 10, 3),))?;
-    println!("{}", format!("Image shape: {}", ExternalObject::from_module(&"numpy".to_string(), &"zeros".to_string()).getattr("shape")?));
-    println!("{}", "Opening window (might fail on headless systems)...".to_string());
-    ExternalObject::load_module("cv2")?.call_method("imshow", ("Py2Rust OpenCV Test".to_string(), ExternalObject::from_module(&"numpy".to_string(), &"zeros".to_string()),))?;
-    ExternalObject::load_module("cv2")?.call_method("waitKey", (1,))?;
-    ExternalObject::load_module("cv2")?.call_method("destroyAllWindows", ())?;
-    println!("{}", "OpenCV test complete.".to_string());
-    Ok(())
-}
-fn main() -> Result<(), PyError> {
-    test_numpy()?;
-    
-    test_opencv()?;
-    
+fn test_import_alias() -> Result<(), PyError> {
+    let res: ExternalObject = ExternalObject::load_module("math")?.call_method("sqrt", (16,))?;
+    println!("{} {}", "sqrt(16) =".to_string(), res);
     Ok(())
 }
 
+fn test_keywords_combinations() -> Result<(), PyError> {
+    let mut content: String = String::new();
+
+    // WARNING: Python 'global' for [x] is not fully supported in Rust's ownership model.
+    // It usually indicates shared state which should be handled via Arc<Mutex<T>> or passed as arguments.
+    let x: i32 = 10;
+    assert!(x == 10, "{}", "x should be 10".to_string());
+    {
+        let mut f = FileHandle::open(&"test_keywords.txt".to_string(), &"w".to_string())?;
+        f.write(&"test".to_string())?;
+    }
+    {
+        let mut f1 = FileHandle::open(&"test_keywords.txt".to_string(), &"r".to_string())?;
+        {
+            let mut f2 = FileHandle::open(&"test_keywords_copy.txt".to_string(), &"w".to_string())?;
+            content = f1.read()?;
+            f2.write(&content)?;
+        }
+    }
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct ExternalObject {

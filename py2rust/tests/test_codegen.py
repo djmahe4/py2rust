@@ -15,7 +15,7 @@ def add(x: int, y: int) -> int:
 """
     code = _compile(src)
     assert "fn add(x: i32, y: i32) -> Result<i32, PyError> {" in code
-    assert "return Ok((x + y));" in code
+    assert "return Ok(x + y);" in code
 
 
 def test_codegen_main_function():

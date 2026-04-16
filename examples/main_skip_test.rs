@@ -46,53 +46,8 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Color {
-    RED,
-    GREEN,
-    BLUE,
-}
-
-
-fn describe_color(c: Color) -> Result<(), PyError> {
-    match c {
-        Color::RED => {
-            println!("{}", "It is red".to_string());
-        },
-        Color::GREEN => {
-            println!("{}", "It is green".to_string());
-        },
-        Color::BLUE => {
-            println!("{}", "It is blue".to_string());
-        },
-        _ => {
-            println!("{}", "Unknown color".to_string());
-        },
-    }
-    Ok(())
-}
-
-fn check_value(x: i32) -> Result<(), PyError> {
-    match x {
-        1 => {
-            println!("{}", "One".to_string());
-        },
-        2 => {
-            println!("{}", "Two".to_string());
-        },
-        y => {
-            println!("{}", "Other value".to_string());
-        },
-    }
-    Ok(())
-}
-
-fn main() -> Result<(), PyError> {
-    describe_color(Color::RED)?;
-    describe_color(Color::GREEN)?;
-    check_value(1)?;
-    check_value(2)?;
-    check_value(3)?;
+fn foo() -> Result<(), PyError> {
+    println!("{}", "foo".to_string());
     Ok(())
 }
 

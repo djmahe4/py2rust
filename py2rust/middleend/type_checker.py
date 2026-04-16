@@ -53,6 +53,12 @@ from ..frontend.ast_nodes import (
     Module,
     Import,
     ImportFrom,
+    WithStmt,
+    WithItem,
+    AssertStmt,
+    GlobalStmt,
+    NonlocalStmt,
+    FileType,
     ExternalPythonType,
 )
 from ..utils.errors import Py2RustTypeError, SemanticError
@@ -79,6 +85,8 @@ def _types_compatible(a, b, invariant=False) -> bool:
     if isinstance(a, FloatType) and isinstance(b, IntType):
         # f64 accepts i32, but Vec<f64> does NOT accept Vec<i32>
         return not invariant
+    if isinstance(a, ExternalPythonType) or isinstance(b, ExternalPythonType):
+        return True
     if isinstance(a, (EnumType, ClassType)) and isinstance(b, (EnumType, ClassType)):
         return getattr(a, "name", None) == getattr(b, "name", None)
     return False
@@ -124,24 +132,44 @@ class TypeChecker:
             source_lines=self.source_lines,
         )
 
-        # Pre-scan all classes (including nested ones)
-        self._collect_all_classes(module.classes)
-        self._collect_all_classes(module.functions)
-        
+    def _is_main_check(self, expr) -> bool:
+        """Checks if an expression is __name__ == "__main__" or vice-versa."""
+        if type(expr).__name__ == "Comparison":
+            if getattr(expr, "op", "") == "==":
+                left = getattr(expr, "left", None)
+                right = getattr(expr, "right", None)
+                
+                # Check for: __name__ == "__main__"
+                if type(left).__name__ == "Name" and getattr(left, "name", "") == "__name__":
+                    if type(right).__name__ == "StrLiteral" and getattr(right, "value", "") == "__main__":
+                        return True
+                # Also check: "__main__" == __name__
+                if type(right).__name__ == "Name" and getattr(right, "name", "") == "__name__":
+                    if type(left).__name__ == "StrLiteral" and getattr(left, "value", "") == "__main__":
+                        return True
+        return False
+
     def check_module(self, module: Module) -> Module:
         # Process Imports first to load plugins
         for imp in module.imports:
             plugin = None
             if isinstance(imp, Import):
                 for alias in imp.names:
-                    plugin = self.st.pm.load_plugin(alias.name)
                     if plugin is None and not getattr(self.st.config, "mock_mode", False):
                         raise self._sem_err(f"Unsupported import: '{alias.name}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
+                    
+                    # Register alias in symbol table
+                    alias_name = alias.asname if alias.asname else alias.name
+                    self.st.define(alias_name, ExternalPythonType(module=alias.name))
             elif isinstance(imp, ImportFrom):
                 if imp.module:
                     plugin = self.st.pm.load_plugin(imp.module)
                     if plugin is None and not getattr(self.st.config, "mock_mode", False):
                         raise self._sem_err(f"Unsupported import: '{imp.module}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
+                    
+                    for alias in imp.names:
+                        alias_name = alias.asname if alias.asname else alias.name
+                        self.st.define(alias_name, ExternalPythonType(module=imp.module, name=alias.name))
             # Call transform_ast to allow plugins to register aliases/members
             self.st.pm.transform_ast(imp, self)
 
@@ -177,6 +205,9 @@ class TypeChecker:
 
         new_stmts = []
         for stmt in module.statements:
+            if type(stmt).__name__ == "IfStmt" and self._is_main_check(stmt.condition):
+                # Stop type checking subsequent top-level code
+                break
             transformed = self.st.pm.transform_ast(stmt, self)
             if transformed is not None:
                 new_stmts.append(transformed)
@@ -770,6 +801,16 @@ class TypeChecker:
                 self.check_expr(stmt.value)
             if getattr(stmt, "cause", None):
                 self.check_expr(stmt.cause)
+        elif isinstance(stmt, WithStmt):
+            self.check_with(stmt)
+        elif isinstance(stmt, AssertStmt):
+            self.check_expr(stmt.test)
+            if stmt.msg:
+                self.check_expr(stmt.msg)
+        elif isinstance(stmt, GlobalStmt):
+            pass
+        elif isinstance(stmt, NonlocalStmt):
+            pass
         elif isinstance(stmt, WhileStmt):
             self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
@@ -809,8 +850,8 @@ class TypeChecker:
                             stmt.col,
                         )
         elif isinstance(stmt, PrintStmt):
-            self.check_expr(stmt.value)
-            inferred = self.inferencer.infer(stmt.value)
+            for v in stmt.values:
+                self.check_expr(v)
         elif isinstance(stmt, MatchStmt):
             self._check_match(stmt)
         elif isinstance(stmt, EnumDef):
@@ -860,7 +901,7 @@ class TypeChecker:
             for stmt in case.body:
                 self.check_stmt(stmt)
 
-    def _check_pattern(self, pattern: MatchPattern, subject_type: AnyType) -> None:
+    def _check_pattern(self, pattern: MatchPattern, subject_type: object) -> None:
         if isinstance(pattern, ValuePattern):
             val_type = self.inferencer.infer(pattern.value)
             if val_type and not _types_compatible(subject_type, val_type):
@@ -927,6 +968,21 @@ class TypeChecker:
             self.check_expr(expr.key)
             self.check_expr(expr.value)
             
+        self.st.exit_scope()
+
+    def check_with(self, node: WithStmt) -> None:
+        self.st.enter_scope("with")
+        for item in node.items:
+            self.check_expr(item.context_expr)
+            if item.optional_vars:
+                ctx_t = self.inferencer.infer(item.context_expr)
+                res_t = UnknownType()
+                # File handle special case
+                if isinstance(ctx_t, FileType):
+                    res_t = FileType()
+                self._bind_target(item.optional_vars, res_t)
+        for s in node.body:
+            self.check_stmt(s)
         self.st.exit_scope()
 
     def _bind_target(self, target, target_type):

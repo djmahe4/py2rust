@@ -1,5 +1,10 @@
-from __future__ import annotations
 from dataclasses import dataclass
+from enum import Enum
+
+
+class AsyncRuntime(Enum):
+    TOKIO = "tokio"
+    FUTURES = "futures"
 
 
 @dataclass
@@ -13,3 +18,4 @@ class CompilerConfig:
     verify: bool = False
     format_output: bool = True
     mock_mode: bool = False
+    async_runtime: AsyncRuntime = AsyncRuntime.TOKIO

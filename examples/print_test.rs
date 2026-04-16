@@ -46,53 +46,48 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Color {
-    RED,
-    GREEN,
-    BLUE,
-}
-
-
-fn describe_color(c: Color) -> Result<(), PyError> {
-    match c {
-        Color::RED => {
-            println!("{}", "It is red".to_string());
-        },
-        Color::GREEN => {
-            println!("{}", "It is green".to_string());
-        },
-        Color::BLUE => {
-            println!("{}", "It is blue".to_string());
-        },
-        _ => {
-            println!("{}", "Unknown color".to_string());
-        },
-    }
+fn __py_main() -> Result<(), PyError> {
+    println!("{} {}", "Hello".to_string(), "World".to_string());
+    print!("{}", "One".to_string());
+    print!("{}", "-".to_string());
+    print!("{}", "Two".to_string());
+    print!("{}", "-".to_string());
+    print!("{}", "Three".to_string());
+    println!("");
+    print!("{}", "No".to_string());
+    print!(" ");
+    print!("{}", "Newline".to_string());
+    print!("{}", " ".to_string());
+    println!("{}", "Continued".to_string());
+    print!("{}", "Custom".to_string());
+    print!("{}", "|".to_string());
+    print!("{}", "Sep".to_string());
+    print!("{}", "|".to_string());
+    print!("{}", "And".to_string());
+    print!("{}", "|".to_string());
+    print!("{}", "End".to_string());
+    print!("{}", "!!!\n".to_string());
+    print!("{}", "Multiple".to_string());
+    print!("{}", "; ".to_string());
+    print!("{}", "Prints".to_string());
+    println!("");
+    print!("{}", 1);
+    print!("{}", ", ".to_string());
+    print!("{}", 2);
+    print!("{}", ", ".to_string());
+    print!("{}", 3);
+    println!("");
     Ok(())
 }
-
-fn check_value(x: i32) -> Result<(), PyError> {
-    match x {
-        1 => {
-            println!("{}", "One".to_string());
-        },
-        2 => {
-            println!("{}", "Two".to_string());
-        },
-        y => {
-            println!("{}", "Other value".to_string());
-        },
+fn main() {
+    if let Err(e) = _main() {
+        eprintln!("Py2Rust Error: {}", e);
+        std::process::exit(1);
     }
-    Ok(())
 }
 
-fn main() -> Result<(), PyError> {
-    describe_color(Color::RED)?;
-    describe_color(Color::GREEN)?;
-    check_value(1)?;
-    check_value(2)?;
-    check_value(3)?;
+fn _main() -> Result<(), PyError> {
+    __py_main()?;
     Ok(())
 }
 

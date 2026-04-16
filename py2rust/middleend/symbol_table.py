@@ -54,9 +54,10 @@ class TraitInfo:
 
 
 class SymbolTable:
-    def __init__(self, config=None):
+    def __init__(self, config=None, dependency_manager=None):
         from ..config import CompilerConfig
         self.config = config or CompilerConfig()
+        self.dependency_manager = dependency_manager
         self._global = Scope("global")
         self._current = self._global
         self._stack: list[Scope] = [self._global]

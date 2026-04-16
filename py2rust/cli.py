@@ -1,7 +1,7 @@
 from __future__ import annotations
 import argparse
 import sys
-from .config import CompilerConfig
+from .config import CompilerConfig, AsyncRuntime
 from .main import compile_file
 
 
@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--verify", action="store_true", help="Run rustc on the output")
     parser.add_argument("--no-format", action="store_true", help="Disable rustfmt formatting")
     parser.add_argument("--mock-mode", "-M", action="store_true", help="Mock missing imports as ExternalPythonType")
+    parser.add_argument("--runtime", choices=["tokio", "futures"], default="tokio", help="Async runtime to use (default: tokio)")
 
     args = parser.parse_args()
 
@@ -32,6 +33,7 @@ def main():
         verify=args.verify,
         format_output=not args.no_format,
         mock_mode=args.mock_mode,
+        async_runtime=AsyncRuntime(args.runtime),
     )
 
     success = compile_file(config)

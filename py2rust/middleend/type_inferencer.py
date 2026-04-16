@@ -192,11 +192,25 @@ class TypeInferencer:
     def _infer_dict(self, expr):
         if not expr.pairs:
             return None
-        key_t = self.infer(expr.pairs[0][0])
-        val_t = self.infer(expr.pairs[0][1])
-        if key_t is None or val_t is None:
+        
+        key_types = [self.infer(k) for k, _ in expr.pairs]
+        val_types = [self.infer(v) for _, v in expr.pairs]
+        
+        if not key_types or not val_types:
             return None
-        return DictType(key_type=key_t, value_type=val_t)
+        if any(t is None for t in key_types) or any(t is None for t in val_types):
+            return None
+            
+        first_k = key_types[0]
+        first_v = val_types[0]
+        
+        mixed_k = any(type(t) is not type(first_k) for t in key_types)
+        mixed_v = any(type(t) is not type(first_v) for t in val_types)
+        
+        if mixed_k or mixed_v:
+            return ExternalPythonType(module="builtins", name="object")
+            
+        return DictType(key_type=first_k, value_type=first_v)
 
     def _infer_subscript(self, expr):
         t = self.infer(expr.value)
