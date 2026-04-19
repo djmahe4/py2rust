@@ -1,6 +1,6 @@
 from __future__ import annotations
 import ast
-from typing import Optional
+from typing import Optional, Union
 
 from ..utils.errors import ParseError, UnsupportedFeatureError
 from .ast_nodes import (
@@ -67,10 +67,13 @@ from .ast_nodes import (
     TypeVarType,
     GenericType,
     UnknownType,
+    OptionalType,
+    UnionType,
     ClassType,
     EnumType,
     MatchStmt,
     MatchCase,
+    MatchPattern,
     ValuePattern,
     NamePattern,
     ClassPattern,
@@ -83,6 +86,7 @@ from .ast_nodes import (
     ListComp,
     DictComp,
     SetComp,
+    Slice,
 )
 
 _BINOP_MAP = {
@@ -101,6 +105,8 @@ _CMP_MAP = {
     ast.LtE: "<=",
     ast.Gt: ">",
     ast.GtE: ">=",
+    ast.Is: "is",
+    ast.IsNot: "is not",
 }
 
 _AUGOP_MAP = {
@@ -427,7 +433,28 @@ class Parser:
             if isinstance(node.value, ast.Name) and node.value.id in ("set", "Set"):
                 elem_type = self._parse_type(node.slice)
                 return SetType(element_type=elem_type)
+            if isinstance(node.value, ast.Name) and node.value.id in ("Optional", "Union"):
+                if node.value.id == "Optional":
+                    inner = self._parse_type(node.slice)
+                    return OptionalType(inner_type=inner)
+                else: # Union
+                    if isinstance(node.slice, ast.Tuple):
+                        variants = tuple(self._parse_type(e) for e in node.slice.elts)
+                    else:
+                        variants = (self._parse_type(node.slice),)
+                    return UnionType(variants=variants)
             raise self._err("Unsupported generic type", node, UnsupportedFeatureError)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            left = self._parse_type(node.left)
+            right = self._parse_type(node.right)
+            # Flatten unions if possible
+            variants = []
+            for t in (left, right):
+                if isinstance(t, UnionType):
+                    variants.extend(t.variants)
+                else:
+                    variants.append(t)
+            return UnionType(variants=tuple(variants))
         elif isinstance(node, ast.Constant):
             if node.value is None:
                 return UnitType()
@@ -792,6 +819,8 @@ class Parser:
                 return StrLiteral(
                     value=node.value, line=node.lineno, col=node.col_offset + 1
                 )
+            if node.value is None:
+                return Name(name="None", line=node.lineno, col=node.col_offset + 1)
             raise self._err(
                 f"Unsupported constant type: {type(node.value)}",
                 node,
@@ -989,6 +1018,18 @@ class Parser:
 
         if isinstance(node, ast.FormattedValue):
             return self._parse_formatted_value(node)
+
+        if isinstance(node, ast.Slice):
+            lower = self._parse_expr(node.lower) if node.lower else None
+            upper = self._parse_expr(node.upper) if node.upper else None
+            step = self._parse_expr(node.step) if node.step else None
+            return Slice(
+                lower=lower,
+                upper=upper,
+                step=step,
+                line=node.lineno,
+                col=node.col_offset + 1,
+            )
 
         raise self._err(
             f"Unsupported expression: {type(node).__name__}",

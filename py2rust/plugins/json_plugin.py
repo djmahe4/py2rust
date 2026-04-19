@@ -27,7 +27,7 @@ class JSONPlugin(BasePlugin):
         if hasattr(st, "dependency_manager") and st.dependency_manager:
             st.dependency_manager.add_dependency("serde", version="1.0", features=["derive"])
             st.dependency_manager.add_dependency("serde_json", version="1.0")
-            st.dependency_manager.add_dependency("pythonize", version="0.19")
+            st.dependency_manager.add_dependency("pythonize", version="0.20")
 
     def transform_ast(self, node, checker):
         from ..frontend.ast_nodes import FunctionCall, MethodCall, Name, ExternalPythonType

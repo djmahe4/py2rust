@@ -13,9 +13,14 @@ from ..ir.ir_nodes import (
     IRTupleType,
     IRFileType,
     IRSetType,
+    IRDequeType,
+    IRHeapType,
     IRFunctionType,
     IRClassType,
     IRExternalPythonType,
+    IROptionType,
+    IRSumType,
+    IRUnknownType,
     IRIntLit,
     IRFloatLit,
     IRBoolLit,
@@ -29,6 +34,7 @@ from ..ir.ir_nodes import (
     IRListLit,
     IRDictLit,
     IRContains,
+    IRSlice,
     IRSubscript,
     IRSubscriptAssign,
     IRFunctionCall,
@@ -88,6 +94,10 @@ from ..ir.ir_nodes import (
     IRExpr,
     IRType,
     IRStmt,
+    IRSome,
+    IRSumWrap,
+    IRNoneLit,
+    IRIsInstance,
 )
 from ..config import CompilerConfig, AsyncRuntime
 
@@ -301,7 +311,7 @@ def _collect_mutated_vars(stmts) -> set:
     return mutated
 
 
-def _collect_decls(stmts) -> tuple[dict[str, object], set[str]]:
+def _collect_decls(stmts, uses_python_wrappers=False) -> tuple[dict[str, object], set[str]]:
     """Collect variable declarations for type tracking and pre-declaration."""
     decls: dict[str, object] = {}
     pre_declare: set[str] = set()
@@ -330,13 +340,17 @@ def _collect_decls(stmts) -> tuple[dict[str, object], set[str]]:
                         decls[name] = t
                         pre_declare.add(name)
                 else:
-                    target_type = IRIntType()  # Default
+                    target_type = IRExternalPythonType(module="", name="") if uses_python_wrappers else IRIntType()
                     if isinstance(it_t, IRListType):
                         target_type = it_t.element_type
                     elif isinstance(it_t, IRDictType):
                         target_type = it_t.key_type
                     elif isinstance(it_t, IRStrType):
                         target_type = IRStrType()
+                    elif isinstance(it_t, IRExternalPythonType):
+                        target_type = IRExternalPythonType(module="", name="")
+                    elif isinstance(it_t, IRUnknownType):
+                        target_type = IRExternalPythonType(module="", name="")
                     
                     for name in names:
                         decls[name] = target_type
@@ -352,8 +366,8 @@ def _collect_decls(stmts) -> tuple[dict[str, object], set[str]]:
                 # Context managers variables are declarations
                 for item in stmt.items:
                     for name in _get_names(item.optional_vars):
-                        # We don't have the type here easily, but we can record the name
-                        decls[name] = None
+                        # Use ExternalObject in mock mode for context managers (like open())
+                        decls[name] = IRExternalPythonType(module="", name="") if uses_python_wrappers else None
                 _recurse(stmt.body, depth + 1)
             elif isinstance(stmt, IRAssert):
                 pass
@@ -399,9 +413,10 @@ class RustCodegen:
         self._loop_depth = 0
         self._current_fn_return_type = "()"
         self._uses_try_result = False
-        self._uses_python_wrappers = False
+        self._uses_python_wrappers = (config or CompilerConfig()).mock_mode
         self.dependency_manager = dependency_manager
         self.config = config or CompilerConfig()
+        self._sum_types: dict[tuple, str] = {} # variants tuple -> enum name
 
     def _is_protocol(self, name: str) -> bool:
         """Check if a name corresponds to a defined Protocol/Trait."""
@@ -434,6 +449,8 @@ class RustCodegen:
             self._uses_hashmap = True
             return f"HashMap<{self._get_rust_type(t.key_type)}, {self._get_rust_type(t.value_type)}>"
         if isinstance(t, IRFileType):
+            if self._uses_python_wrappers:
+                return "ExternalObject"
             self._uses_file_handle = True
             return "FileHandle"
         if isinstance(t, IRClassType):
@@ -446,11 +463,24 @@ class RustCodegen:
         if isinstance(t, IRTupleType):
             types = ", ".join(self._get_rust_type(et) for et in t.element_types)
             return f"({types})"
+        if isinstance(t, IROptionType):
+            return f"Option<{self._get_rust_type(t.inner_type)}>"
+        if isinstance(t, IRSumType):
+            return self._get_sum_type_name(t)
         if isinstance(t, IRSetType):
             self._uses_hashset = True
             return f"HashSet<{self._get_rust_type(t.element_type)}>"
+        if isinstance(t, IRDequeType):
+            self._uses_deque = True
+            return f"VecDeque<{self._get_rust_type(t.element_type)}>"
+        if isinstance(t, IRHeapType):
+            self._uses_heap = True
+            # We use Reverse to match Python's min-heap behavior
+            return f"BinaryHeap<Reverse<{self._get_rust_type(t.element_type)}>>"
         if isinstance(t, IRFunctionType):
             return "_"  # Let Rust infer closure types
+        if isinstance(t, IRUnknownType):
+            return "_"  # Fallback for polymorphic None or untyped nodes
         if isinstance(t, IRTypeParam):
             return t.name
         if isinstance(t, IRGenericType):
@@ -461,6 +491,50 @@ class RustCodegen:
             self._uses_python_wrappers = True
             return "ExternalObject"
         raise ValueError(f"Unknown type {type(t).__name__}")
+
+    def _get_sum_type_name(self, t: IRSumType) -> str:
+        if t.name:
+            return t.name
+        
+        # Consistent variants: Tuple of rust type strings (sorted)
+        variants = tuple(sorted(self._get_rust_type(v) for v in t.variants))
+        if variants in self._sum_types:
+            return self._sum_types[variants]
+        
+        # Helper to make valid Rust identifier
+        def to_ident(s: str) -> str:
+            return s.replace("<", "Of").replace(">", "").replace(" ", "").replace(",", "And").replace("(", "Tuple").replace(")", "").replace("::", "Of").replace("&", "Ref")
+        
+        # Generate a name: IntOrFloatOrStr etc.
+        name_parts = []
+        for v in variants:
+            p = v.replace("i32", "Int").replace("f64", "Float").replace("String", "Str").replace("bool", "Bool")
+            name_parts.append(to_ident(p))
+        
+        name = "Or".join(name_parts) + "Union"
+        self._sum_types[variants] = name
+        return name
+
+    def _get_variant_name(self, v: str) -> str:
+        """Generate a valid Rust enum variant name from a Rust type string."""
+        v_name = v.replace("i32", "Int").replace("f64", "Float").replace("String", "Str").replace("bool", "Bool")
+        v_name = v_name.replace("Vec<Int>", "IntList").replace("Vec<Float>", "FloatList").replace("Vec<Str>", "StrList")
+        v_name = v_name.replace("<", "Of").replace(">", "").replace(" ", "").replace(",", "And").replace("(", "Tuple").replace(")", "").replace("::", "Of").replace("&", "Ref")
+        return v_name
+
+    def _generate_sum_type_definitions(self) -> list[str]:
+        lines = []
+        # Sort by name for deterministic output
+        for variants, name in sorted(self._sum_types.items(), key=lambda x: x[1]):
+            lines.append(f"#[derive(Debug, Clone, PartialEq)]")
+            lines.append(f"pub enum {name} {{")
+            for v in variants:
+                # Variant name should be descriptive
+                v_name = self._get_variant_name(v)
+                lines.append(f"    {v_name}({v}),")
+            lines.append("}")
+            lines.append("")
+        return lines
 
     def _emit(self, line: str) -> None:
         self._lines.append("    " * self._indent + line)
@@ -492,10 +566,12 @@ class RustCodegen:
         self._uses_file_handle = False
         self._uses_py_error = False
         self._uses_async = False
-        self._uses_python_wrappers = False
+        self._uses_python_wrappers = self.config.mock_mode
         self._uses_serde_json = False
         self._uses_pythonize = False
         self._uses_csv = False
+        self._uses_deque = False
+        self._uses_heap = False
         self._decl_types = {}
 
         # Pre-pass: Generate Traits
@@ -545,7 +621,13 @@ class RustCodegen:
             enum_lines.extend(self._lines)
             self._lines = []
             enum_lines.append("")
-
+            
+        # Generate Sum Type Enums (populated during previous passes)
+        sum_type_lines = self._generate_sum_type_definitions()
+        enum_lines.extend(sum_type_lines)
+        if enum_lines and enum_lines[-1] != "":
+            enum_lines.append("")
+            
         # Second pass: Emit header and boilerplate based on detected usage
         final_lines = ["// Generated by py2rust"]
         
@@ -564,6 +646,11 @@ class RustCodegen:
             imports.append("use std::collections::HashMap;")
         if self._uses_hashset:
             imports.append("use std::collections::HashSet;")
+        if self._uses_deque:
+            imports.append("use std::collections::VecDeque;")
+        if self._uses_heap:
+            imports.append("use std::collections::BinaryHeap;")
+            imports.append("use std::cmp::Reverse;")
         if self._uses_file_handle:
             imports.append("use std::fs::{File, OpenOptions};")
             imports.append("use std::io::{self, Read, Write, BufRead, BufReader, Seek, SeekFrom};")
@@ -579,7 +666,9 @@ class RustCodegen:
         
         if imports:
             final_lines.extend(imports)
-            final_lines.append("")
+            # Only add extra padding if there are more sections coming up
+            if self._uses_py_error or ir_mod.functions or ir_mod.classes or ir_mod.enums:
+                final_lines.append("")
 
         # Async handling
         if self._uses_async:
@@ -627,6 +716,19 @@ class RustCodegen:
             final_lines.append("impl From<std::num::ParseFloatError> for PyError {")
             final_lines.append("    fn from(err: std::num::ParseFloatError) -> Self {")
             final_lines.append("        PyError::ValueError(err.to_string())")
+            final_lines.append("    }")
+            final_lines.append("}")
+            final_lines.append("")
+            final_lines.append("impl From<PyError> for pyo3::PyErr {")
+            final_lines.append("    fn from(err: PyError) -> Self {")
+            final_lines.append("        match err {")
+            final_lines.append("            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),")
+            final_lines.append("            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),")
+            final_lines.append("            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),")
+            final_lines.append("            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),")
+            final_lines.append("            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),")
+            final_lines.append("            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),")
+            final_lines.append("        }")
             final_lines.append("    }")
             final_lines.append("}")
             final_lines.append("")
@@ -729,8 +831,10 @@ class RustCodegen:
                 final_lines.append(f"{indent}{line}")
             
             if main_ir_name:
-                call_kw = ".await" if self._uses_async else ""
-                final_lines.append(f"{indent}{main_ir_name}(){call_kw}?;")
+                already_called = any(f"{main_ir_name}()" in line for line in stmt_lines)
+                if not already_called:
+                    call_kw = ".await" if self._uses_async else ""
+                    final_lines.append(f"{indent}{main_ir_name}(){call_kw}?;")
 
             final_lines.append(f"{indent}Ok(())")
             
@@ -790,7 +894,10 @@ class RustCodegen:
             tp_list = ", ".join(str(tp) for tp in cls.type_params)
             type_params_str = f"<{tp_list}>"
 
-        self._emit(f"#[derive(Clone, Debug)]")
+        if self._uses_serde_json:
+            self._emit(f"#[derive(Clone, Debug, Serialize, Deserialize)]")
+        else:
+            self._emit(f"#[derive(Clone, Debug)]")
         self._emit(f"struct {cls.name}{type_params_str} {{")
         self._indent += 1
         for field_name, field_type in cls.fields:
@@ -940,7 +1047,7 @@ class RustCodegen:
     def _gen_method(self, func: IRFunction, is_init: bool = False) -> None:
         self._uses_py_error = True
         self._mutated_vars = _collect_mutated_vars(func.body)
-        decls, pre_declare = _collect_decls(func.body)
+        decls, pre_declare = _collect_decls(func.body, self._uses_python_wrappers)
 
         if is_init:
             param_strs = []
@@ -1026,7 +1133,7 @@ class RustCodegen:
     def _gen_function(self, func: IRFunction) -> None:
         self._uses_py_error = True
         self._mutated_vars = _collect_mutated_vars(func.body)
-        decls, pre_declare = _collect_decls(func.body)
+        decls, pre_declare = _collect_decls(func.body, self._uses_python_wrappers)
 
         param_strs = []
         for p in func.params:
@@ -1121,7 +1228,11 @@ class RustCodegen:
                 return ""
             return f"{rust_type}::new()"
         if isinstance(ir_type, IRFileType):
+            if self._uses_python_wrappers:
+                return "ExternalObject::default()"
             return 'FileHandle::open("", "r").unwrap()'
+        if isinstance(ir_type, IRExternalPythonType):
+            return "ExternalObject::default()"
         return "0"
 
     def _gen_stmt(self, stmt) -> None:
@@ -1132,10 +1243,12 @@ class RustCodegen:
                 val = self._gen_expr(stmt.value, stmt.type_)
                 self._emit(f"{_mangle(stmt.name)} = {val};")
                 return
-            val = self._strip_parens(self._gen_expr(stmt.value, stmt.type_))
+            expr_val = self._gen_expr(stmt.value, stmt.type_)
+            val = expr_val if isinstance(stmt.value, IRTupleLit) else self._strip_parens(expr_val)
+            is_collection = isinstance(stmt.type_, (IRDequeType, IRHeapType))
             if stmt.name == "_":
                 self._emit(f"{val};")
-            elif stmt.name in self._mutated_vars:
+            elif stmt.name in self._mutated_vars or is_collection:
                 if val:
                     self._emit(f"let mut {_mangle(stmt.name)}: {self._get_rust_type(stmt.type_)} = {val};")
                 else:
@@ -1151,11 +1264,14 @@ class RustCodegen:
             if isinstance(target_type, IRFloatType):
                 val = self._gen_expr_as_float(stmt.value)
             else:
-                val = self._strip_parens(self._gen_expr(stmt.value))
+                val = self._gen_expr(stmt.value)
+                if not isinstance(stmt.value, IRTupleLit):
+                    val = self._strip_parens(val)
             self._emit(f"{_mangle(stmt.target)} = {val};")
 
         elif isinstance(stmt, IRFieldAssign):
-            val = self._strip_parens(self._gen_expr(stmt.value))
+            e = self._gen_expr(stmt.value)
+            val = e if isinstance(stmt.value, IRTupleLit) else self._strip_parens(e)
             obj_name = "self" if stmt.obj == "self" else _mangle(stmt.obj)
             
             # Check if object is ExternalObject
@@ -1172,11 +1288,13 @@ class RustCodegen:
                 self._emit(f"{obj_name}.{_mangle(stmt.field)} = {val};")
 
         elif isinstance(stmt, IRAugAssign):
-            val = self._strip_parens(self._gen_expr(stmt.value))
+            val = self._gen_expr(stmt.value)
+            if not isinstance(stmt.value, IRTupleLit):
+                val = self._strip_parens(val)
             self._emit(f"{_mangle(stmt.target)} {stmt.op} {val};")
 
         elif isinstance(stmt, IRIf):
-            cond = self._strip_parens(self._gen_expr(stmt.condition))
+            cond = self._strip_parens(self._gen_condition(stmt.condition))
             self._emit(f"if {cond} {{")
             self._indent += 1
             old_top_level = self._at_top_level
@@ -1186,7 +1304,7 @@ class RustCodegen:
             self._at_top_level = old_top_level
             self._indent -= 1
             for elif_cond, elif_body in stmt.elif_clauses:
-                ec = self._strip_parens(self._gen_expr(elif_cond))
+                ec = self._strip_parens(self._gen_condition(elif_cond))
                 self._emit(f"}} else if {ec} {{")
                 self._indent += 1
                 self._at_top_level = False
@@ -1206,7 +1324,7 @@ class RustCodegen:
 
         elif isinstance(stmt, IRWhile):
             self._loop_depth += 1
-            cond = self._strip_parens(self._gen_expr(stmt.condition))
+            cond = self._strip_parens(self._gen_condition(stmt.condition))
             label = getattr(stmt, "label", "") or f"__loop_{id(stmt)}"
             self._emit(f"'{label}: while {cond} {{")
             self._indent += 1
@@ -1353,7 +1471,8 @@ class RustCodegen:
             val_str = ""
             if self._in_main:
                 if stmt.value is not None:
-                    val = self._strip_parens(self._gen_expr(stmt.value))
+                    e = self._gen_expr(stmt.value)
+                    val = e if isinstance(stmt.value, IRTupleLit) else self._strip_parens(e)
                     val_str = f"{{ {val}; () }}"
                 else:
                     val_str = "()"
@@ -1363,10 +1482,11 @@ class RustCodegen:
                 if isinstance(stmt.result_type, IRFloatType):
                     val_str = self._gen_expr_as_float(stmt.value)
                 else:
-                    val_str = self._strip_parens(self._gen_expr(stmt.value))
+                    e = self._gen_expr(stmt.value)
+                    val_str = e if isinstance(stmt.value, IRTupleLit) else self._strip_parens(e)
             
             if self._inside_try > 0:
-                self._emit(f"return Ok(TryResult::Return({val_str}));")
+                self._emit(f"return Ok(TryResult::Return(({val_str})));")
             else:
                 self._emit(f"return Ok({val_str});")
 
@@ -1724,49 +1844,80 @@ class RustCodegen:
         elif isinstance(expr, IRName):
             # Check if this name refers to an external python module/object
             if isinstance(expr.result_type, IRExternalPythonType):
+                 # If it's a local variable, field, or parameter, use the name directly
+                 if expr.name in self._decl_types or expr.name == "self":
+                     return _mangle(expr.name)
+                     
                  if expr.result_type.name is None:
                      return f'ExternalObject::load_module("{expr.result_type.module}")?'
                  else:
                      clean_name = expr.result_type.name
                      if clean_name.endswith("()"):
                          clean_name = clean_name[:-2]
-                     return f'ExternalObject::from_module(&"{expr.result_type.module}".to_string(), &"{clean_name}".to_string())'
+                     return f'ExternalObject::from_module("{expr.result_type.module}", "{clean_name}")'
             return _mangle(expr.name)
         elif isinstance(expr, IRBinOp):
             return f"({self._gen_binop(expr)})"
         elif isinstance(expr, IRUnaryOpExpr):
             operand = self._gen_expr(expr.operand)
             if expr.op == "not":
+                if isinstance(expr.operand.result_type, IROptionType):
+                    return f"{operand}.is_none()"
                 return f"(!({operand}))"
             if expr.op == "-":
                 return f"(-({operand}))"
             return operand
+        elif isinstance(expr, IRSome):
+            val = self._gen_expr(expr.value)
+            return f"Some({val})"
+        elif isinstance(expr, IRSumWrap):
+            enum_name = self._get_sum_type_name(expr.result_type)
+            variant_rust_info = self._get_rust_type(expr.inner_type)
+            variant_name = self._get_variant_name(variant_rust_info)
+            val = self._gen_expr(expr.value)
+            return f"{enum_name}::{variant_name}({val})"
+        elif isinstance(expr, IRNoneLit):
+            return "None"
+        elif isinstance(expr, IRIsInstance):
+            return self._gen_isinstance(expr)
         elif isinstance(expr, IRContains):
             item = self._gen_expr(expr.item)
             container = self._gen_expr(expr.container)
             if isinstance(expr.container_type, IRDictType):
                 return f"{container}.contains_key(&{item})"
+            elif isinstance(expr.container_type, IRStrType):
+                # For strings, use .contains() which works with &str
+                return f"{container}.contains({item}.as_str())"
             else:
                 return f"{container}.contains(&{item})"
         elif isinstance(expr, IRCompare):
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
             
+            # Special case for Optional: is None / is not None
+            if isinstance(expr.left.result_type, IROptionType):
+                if right == "None":
+                    if expr.op in ("is", "=="):
+                        return f"{left}.is_none()"
+                    elif expr.op in ("is not", "!="):
+                        return f"{left}.is_some()"
+            elif isinstance(expr.right.result_type, IROptionType):
+                if left == "None":
+                    if expr.op in ("is", "=="):
+                        return f"{right}.is_none()"
+                    elif expr.op in ("is not", "!="):
+                        return f"{right}.is_some()"
+
             # Map Python comparisons to Rust traits if applicable
-            op_to_trait = {
-                "<": "PartialOrd",
-                "<=": "PartialOrd",
-                ">": "PartialOrd",
-                ">=": "PartialOrd",
-                "==": "PartialEq",
-                "!=": "PartialEq",
-            }
+            op = expr.op
+            if op == "is": op = "=="
+            if op == "is not": op = "!="
             
             if isinstance(expr.left.result_type, IRClassType):
                 left = f"{left}.clone()"
                 right = f"{right}.clone()"
                 
-            return f"{left} {expr.op} {right}"
+            return f"{left} {op} {right}"
         elif isinstance(expr, IRBoolOp):
             parts = [self._gen_expr(v) for v in expr.values]
             return f"({(f' {expr.op} ').join(parts)})"
@@ -1774,12 +1925,25 @@ class RustCodegen:
             is_proto = isinstance(expr.element_type, IRClassType) and self._is_protocol(expr.element_type.name)
             elem_t_str = self._get_rust_type(expr.element_type)
             
+            if expr.result_type and isinstance(expr.result_type, IRDequeType):
+                self._uses_vec_deque = True
+                if not expr.elements:
+                    return f"VecDeque::new()"
+                elems = ", ".join(self._gen_expr(e) for e in expr.elements)
+                return f"VecDeque::from(vec![{elems}])"
+            elif expr.result_type and isinstance(expr.result_type, IRHeapType):
+                self._uses_heap = True
+                if not expr.elements:
+                    return f"BinaryHeap::new()"
+                elems = ", ".join(self._gen_expr(e) for e in expr.elements)
+                return f"BinaryHeap::from(vec![{elems}].into_iter().map(Reverse).collect::<Vec<_>>())"
+
             if not expr.elements:
                 res_t = f"Vec::<Box<dyn {expr.element_type.name}>>" if is_proto else f"Vec::<{elem_t_str}>"
                 return f"{res_t}::new()"
             
             if is_proto:
-                elems = ", ".join(f"Box::new({self._gen_expr(e)})" for e in expr.elements)
+                elems = ", ".join(f"Box::new({self._gen_expr(e)}) as Box<dyn {expr.element_type.name}>" for e in expr.elements)
             else:
                 elems = ", ".join(self._gen_expr(e) for e in expr.elements)
             return f"vec![{elems}]"
@@ -1803,12 +1967,14 @@ class RustCodegen:
         elif isinstance(expr, IRTupleLit):
             elems = ", ".join(self._gen_expr(e) for e in expr.elements)
             return f"({elems})"
-        elif isinstance(expr, IRContains):
-            val = self._gen_expr(expr.value)
-            container = self._gen_expr(expr.container)
-            if isinstance(expr.container_type, IRDictType):
-                return f"{container}.contains_key(&{val})"
-            return f"{container}.contains(&{val})"
+
+        elif isinstance(expr, IRSlice):
+            # standalone slice object, rare in our codegen but let's handle it
+            lower = self._gen_expr(expr.lower) if expr.lower else "None"
+            upper = self._gen_expr(expr.upper) if expr.upper else "None"
+            step = self._gen_expr(expr.step) if expr.step else "None"
+            return f"py2rust::Slice::new({lower}, {upper}, {step})"
+
         elif isinstance(expr, IRSubscript):
             val = self._gen_expr(expr.value)
             idx = self._gen_expr(expr.index)
@@ -1831,10 +1997,45 @@ class RustCodegen:
             if is_ext:
                 return f"{val}.getitem({idx})?"
 
+            # Handle slicing
+            if isinstance(expr.index, IRSlice):
+                slc = expr.index
+                lower = self._strip_parens(self._gen_expr(slc.lower)) if slc.lower else "0"
+                upper = self._strip_parens(self._gen_expr(slc.upper)) if slc.upper else (f"{val}.len() as i32" if not isinstance(expr.value_type, IRStrType) else f"{val}.chars().count() as i32")
+                
+                # Slicing creates a NEW collection usually in Python
+                if isinstance(expr.value_type, IRListType):
+                    # List slicing: l[start:stop] -> l[start as usize .. stop as usize].to_vec()
+                    # We need to handle negative indices
+                    return (
+                        f"{{ let __coll = &({val}); let __len = __coll.len() as i32; "
+                        f"let __start = if {lower} < 0 {{ {lower} + __len }} else {{ {lower} }};"
+                        f"let __stop = if {upper} < 0 {{ {upper} + __len }} else {{ {upper} }};"
+                        f"let __start = __start.clamp(0, __len) as usize; "
+                        f"let __stop = __stop.clamp(__start as i32, __len) as usize; "
+                        f"__coll[__start..__stop].to_vec() }}"
+                    )
+                elif isinstance(expr.value_type, IRStrType):
+                    # String slicing: s[start:stop] -> s.chars().skip(start).take(stop-start).collect()
+                    return (
+                        f"{{ let __coll = &({val}); let __len = __coll.chars().count() as i32; "
+                        f"let __start = if {lower} < 0 {{ {lower} + __len }} else {{ {lower} }};"
+                        f"let __stop = if {upper} < 0 {{ {upper} + __len }} else {{ {upper} }};"
+                        f"let __start = __start.clamp(0, __len) as usize; "
+                        f"let __stop = __stop.clamp(__start as i32, __len) as usize; "
+                        f"__coll.chars().skip(__start).take(__stop - __start).collect::<String>() }}"
+                    )
+
             # Robust Python indexing: bind collection to a temp reference
             if isinstance(expr.value_type, IRStrType):
                 len_expr = "__coll.chars().count() as i32"
                 inner_expr = f"__coll.chars().nth(actual_idx).unwrap().to_string()"
+            elif isinstance(expr.value_type, IRHeapType):
+                # Heap only supports heap[0] reliably as peek()
+                if idx == "0":
+                    return f"{val}.peek().map(|r| r.0.clone()).ok_or(PyError::IndexError(\"heap index out of range\".to_string()))?"
+                len_expr = "__coll.len() as i32"
+                inner_expr = f"__coll.peek().map(|r| r.0.clone()).ok_or(PyError::IndexError(\"heap index out of range\".to_string()))?"
             else:
                 len_expr = "__coll.len() as i32"
                 inner_expr = f"__coll[actual_idx]"
@@ -1851,6 +2052,36 @@ class RustCodegen:
             )
 
         elif isinstance(expr, IRFunctionCall):
+            if expr.name == "isinstance":
+                obj = self._gen_expr(expr.args[0])
+                obj_type = getattr(expr.args[0], "result_type", None)
+                type_node = expr.args[1]
+                
+                if isinstance(obj_type, IRSumType):
+                    enum_name = self._get_rust_type(obj_type)
+                    # For simplicity, handle single type name. 
+                    # If it's a tuple of types, we would need a more complex match or multiple matches!.
+                    variant = "Unknown"
+                    from ..frontend.ast_nodes import Name
+                    if isinstance(type_node, Name):
+                        typ_name = type_node.name
+                        if typ_name == "int": variant = "Int"
+                        elif typ_name == "float": variant = "Float"
+                        elif typ_name == "str": variant = "Str"
+                        elif typ_name == "bool": variant = "Bool"
+                        else: variant = typ_name # Assume class name
+                    
+                    return f"matches!(&{obj}, {enum_name}::{variant}(_))"
+                
+                if isinstance(obj_type, IROptionType):
+                    from ..frontend.ast_nodes import Name
+                    if isinstance(type_node, Name) and type_node.name == "type(None)":
+                         return f"{obj}.is_none()"
+                    return f"{obj}.is_some()"
+                
+                # Fallback for normal objects/classes
+                return f"true /* isinstance fallback for {obj} */"
+
             if expr.name == "len":
                 arg = self._gen_expr(expr.args[0])
                 return f"{arg}.len() as i32"
@@ -1920,14 +2151,46 @@ class RustCodegen:
                 self._uses_serde_json = True
                 self._uses_pythonize = True
                 arg = self._gen_expr(expr.args[0])
-                return f"Python::with_gil(|py| {{ let v: serde_json::Value = serde_json::from_str(&{arg}).map_err(|e| PyError::ValueError(e.to_string()))?; let obj = pythonize::depythonize(py, &v).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(ExternalObject::new(obj)) }})?"
+                return f"Python::with_gil(|py| -> Result<ExternalObject, PyError> {{ let v: serde_json::Value = serde_json::from_str(&{arg}).map_err(|e| PyError::ValueError(e.to_string()))?; let obj = pythonize::pythonize(py, &v).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(ExternalObject::new(obj)) }})?"
             
             if expr.name == "__py2rust_native_json_dumps":
                 self._uses_python_wrappers = True
                 self._uses_serde_json = True
                 self._uses_pythonize = True
                 arg = self._gen_expr(expr.args[0])
-                return f"Python::with_gil(|py| {{ let val = pythonize::pythonize({arg}.obj.as_ref(py)).map_err(|e| PyError::ValueError(e.to_string()))?; let s = serde_json::to_string(&val).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(s) }})?"
+                arg_t = getattr(expr.args[0], "result_type", None)
+                is_ext = isinstance(arg_t, IRExternalPythonType) or (isinstance(arg_t, IRClassType) and arg_t.name == "ExternalObject")
+                if is_ext:
+                    # Use Python's json.dumps for maximum compatibility with external objects
+                    return f"Python::with_gil(|py| -> Result<String, PyError> {{ let json = py.import(\"json\")?; let res = json.getattr(\"dumps\")?.call1(({arg}.obj.as_ref(py),))?; Ok(res.extract()?) }})?"
+                else:
+                    return f"serde_json::to_string(&{arg}).map_err(|e| PyError::ValueError(e.to_string()))?"
+
+            if expr.name in ("deque", "collections.deque"):
+                self._uses_deque = True
+                if not expr.args:
+                    return "VecDeque::new()"
+                arg = self._gen_expr(expr.args[0])
+                # Match test expectation: VecDeque::from(vec![...])
+                if ".to_vec()" in arg or "vec![" in arg:
+                    return f"VecDeque::from({arg})"
+                return f"VecDeque::from_iter({arg})"
+
+            if expr.name in ("heappush", "heapq.heappush"):
+                self._uses_heap = True
+                heap = self._gen_expr(expr.args[0])
+                item = self._gen_expr(expr.args[1])
+                return f"{heap}.push(Reverse({item}))"
+            
+            if expr.name in ("heappop", "heapq.heappop"):
+                self._uses_heap = True
+                heap = self._gen_expr(expr.args[0])
+                return f"{heap}.pop().ok_or(PyError::IndexError(\"index out of range\".to_string()))?.0"
+            
+            if expr.name in ("heapify", "heapq.heapify"):
+                self._uses_heap = True
+                lst = self._gen_expr(expr.args[0])
+                return f"BinaryHeap::from({lst}.into_iter().map(Reverse).collect::<Vec<_>>())"
 
             # Native CSV support
             if expr.name == "__py2rust_native_csv_reader":
@@ -1936,18 +2199,21 @@ class RustCodegen:
                 # csv.reader(f) -> returns an iterator of rows
                 arg = self._gen_expr(expr.args[0])
                 # This is a bit complex as it needs to return something that behaves like an iterator of ExternalObjects
-                return f"ExternalObject::new_csv_reader({arg})?"
+                return f"ExternalObject::new_csv_reader(&{arg})?"
 
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             
             # Use call() if it's an external function
             if isinstance(expr.return_type, IRExternalPythonType):
                 func_name = self._gen_expr(IRName(name=expr.name, result_type=expr.return_type))
-                tuple_args = f"({args},)" if args else "()"
+                if not args:
+                    tuple_args = "()"
+                else:
+                    tuple_args = f"({args},)"
                 return f"{func_name}.call({tuple_args})?"
 
             fn_name = _mangle(expr.name)
-            if expr.name == "main" and self._uses_async:
+            if expr.name == "main":
                 # Call the renamed user main
                 fn_name = "__py_main"
 
@@ -1956,9 +2222,12 @@ class RustCodegen:
                 res = f"{res}?"
             return res
         elif isinstance(expr, IRFileOpen):
-            self._uses_file_handle = True  # Ensure this is set
             path = self._gen_expr(expr.path)
             mode = self._gen_expr(expr.mode) if expr.mode else '"r".to_string()'
+            if self._uses_python_wrappers:
+                # In mock mode, use Python's open() for interoperability with other mock-mode libraries
+                return f"ExternalObject::call_builtin(\"open\", ({path}, {mode}))?"
+            self._uses_file_handle = True
             return f"FileHandle::open(&{path}, &{mode})?"
         elif isinstance(expr, IRFileMethod):
             file_val = self._gen_expr(expr.file)
@@ -1994,10 +2263,46 @@ class RustCodegen:
             val = self._gen_expr(expr.value)
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             
-            # External object method call
+            # External object method call (could be heapq module call)
             if isinstance(getattr(expr.value, "result_type", None), IRExternalPythonType):
-                tuple_args = f"({args},)" if args else "()"
+                val_type = expr.value.result_type
+                if val_type.module == "heapq":
+                    if expr.method == "heappush":
+                        self._uses_heap = True
+                        heap = self._gen_expr(expr.args[0])
+                        item = self._gen_expr(expr.args[1])
+                        return f"{heap}.push(Reverse({item}))"
+                    if expr.method == "heappop":
+                        self._uses_heap = True
+                        heap = self._gen_expr(expr.args[0])
+                        return f"{heap}.pop().ok_or(PyError::IndexError(\"index out of range\".to_string()))?.0"
+                    if expr.method == "heapify":
+                        self._uses_heap = True
+                        lst = self._gen_expr(expr.args[0])
+                        return f"BinaryHeap::from({lst}.into_iter().map(Reverse).collect::<Vec<_>>())"
+
+                if not args:
+                    tuple_args = "()"
+                else:
+                    tuple_args = f"({args},)"
                 return f'{val}.call_method("{expr.method}", {tuple_args})?'
+
+            # Deque species methods
+            if isinstance(getattr(expr, "value_type", getattr(expr.value, "result_type", None)), IRDequeType):
+                self._uses_deque = True
+                if expr.method == "append":
+                    return f"{val}.push_back({args})"
+                if expr.method == "appendleft":
+                    return f"{val}.push_front({args})"
+                if expr.method == "pop":
+                    return f"{val}.pop_back().ok_or(PyError::IndexError(\"pop from an empty deque\".to_string()))?"
+                if expr.method == "popleft":
+                    return f"{val}.pop_front().ok_or(PyError::IndexError(\"pop from an empty deque\".to_string()))?"
+                if expr.method == "extend":
+                    return f"{val}.extend({args})"
+                if expr.method == "extendleft":
+                    # Python's extendleft reverses the iterable
+                    return f"for __item in {args} {{ {val}.push_front(__item); }}"
 
             res = f"{val}.{_mangle(expr.method)}({args})"
             if getattr(expr, "is_fallible", True):
@@ -2044,8 +2349,18 @@ class RustCodegen:
                     elif spec:
                         spec = f":{spec}"
                     
+                    val_expr = self._gen_expr(v.value)
+                    # For Optional types, we need a way to display them. 
+                    # If it's an Option, we can't directly use {} in format! unless we wrap it.
+                    if isinstance(getattr(v.value, "result_type", None), IROptionType):
+                        val_expr = f"{val_expr}.as_ref().map(|v| format!(\"{{}}\", v)).unwrap_or(\"None\".to_string())"
+                    elif isinstance(getattr(v.value, "result_type", None), IRSumType):
+                         # For sum types, we probably want debug format if no special display
+                         if ":" not in spec:
+                             spec = f":?{spec}"
+                             
                     fmt_parts.append(f"{{{spec}}}")
-                    args.append(self._gen_expr(v.value))
+                    args.append(val_expr)
             
             fmt_str = "".join(fmt_parts)
             if not args:
@@ -2054,6 +2369,35 @@ class RustCodegen:
             return f'format!("{fmt_str}", {args_str})'
 
         return f"/* unknown expr {type(expr).__name__} */"
+
+    def _gen_condition(self, expr: IRExpr) -> str:
+        """Generate a boolean expression suitable for if/while conditions in Rust."""
+        expr_str = self._gen_expr(expr)
+        
+        # Already boolean?
+        if isinstance(expr.result_type, IRBoolType):
+            return expr_str
+            
+        # Optional?
+        if isinstance(expr.result_type, IROptionType):
+            # Special case for 'not x' where x is Optional
+            if isinstance(expr, IRUnaryOpExpr) and expr.op == "not":
+                return expr_str # Already handled in _gen_expr for Optional
+            return f"{expr_str}.is_some()"
+            
+        # List/Set/Dict/String? (Truthiness based on empty)
+        if isinstance(expr.result_type, (IRListType, IRSetType, IRDictType, IRStrType)):
+            return f"!{expr_str}.is_empty()"
+            
+        # Int? (Truthiness != 0)
+        if isinstance(expr.result_type, IRIntType):
+            return f"{expr_str} != 0"
+            
+        # Float? (Truthiness != 0.0)
+        if isinstance(expr.result_type, IRFloatType):
+            return f"{expr_str} != 0.0"
+            
+        return expr_str
 
     def _gen_lambda(self, expr: IRLambda) -> str:
         params = ", ".join(f"{p.name}" for p in expr.params)
@@ -2214,10 +2558,23 @@ class RustCodegen:
         self._lines.append("        PyError::Exception(err.to_string())")
         self._lines.append("    }")
         self._lines.append("}")
+        self._lines.append("impl Default for ExternalObject {")
+        self._lines.append("    fn default() -> Self {")
+        self._lines.append("        Python::with_gil(|py| Self::new(py.None()))")
+        self._lines.append("    }")
+        self._lines.append("}")
         self._lines.append("")
         self._lines.append("impl ExternalObject {")
         self._lines.append("    pub fn new(obj: PyObject) -> Self {")
         self._lines.append("        Self { obj }")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn from_module(module: &str, name: &str) -> Self {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let m = py.import(module).expect(\"Failed to import module\");")
+        self._lines.append("            let attr = m.getattr(name).expect(\"Failed to get attribute from module\");")
+        self._lines.append("            Self::new(attr.to_object(py))")
+        self._lines.append("        })")
         self._lines.append("    }")
         self._lines.append("")
         self._lines.append("    pub fn load_module(module: &str) -> PyResult<Self> {")
@@ -2287,6 +2644,7 @@ class RustCodegen:
         self._lines.append("")
         self._lines.append("    pub fn setattr(&self, name: &str, value: impl IntoPy<PyObject>) -> PyResult<()> {")
         self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let value = value.into_py(py);")
         self._lines.append("            self.obj.as_ref(py).setattr(name, value)?;")
         self._lines.append("            Ok(())")
         self._lines.append("        })")
@@ -2294,6 +2652,8 @@ class RustCodegen:
         self._lines.append("")
         self._lines.append("    pub fn setitem(&self, key: impl IntoPy<PyObject>, value: impl IntoPy<PyObject>) -> PyResult<()> {")
         self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let key = key.into_py(py);")
+        self._lines.append("            let value = value.into_py(py);")
         self._lines.append("            self.obj.as_ref(py).set_item(key, value)?;")
         self._lines.append("            Ok(())")
         self._lines.append("        })")
@@ -2301,8 +2661,39 @@ class RustCodegen:
         self._lines.append("")
         self._lines.append("    pub fn getitem(&self, key: impl IntoPy<PyObject>) -> PyResult<Self> {")
         self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let key = key.into_py(py);")
         self._lines.append("            let item = self.obj.as_ref(py).get_item(key)?;")
         self._lines.append("            Ok(Self::new(item.to_object(py)))")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn call_builtin(name: &str, args: impl IntoPy<Py<PyTuple>>) -> PyResult<Self> {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let builtins = py.import(\"builtins\")?;")
+        self._lines.append("            let func = builtins.getattr(name)?;")
+        self._lines.append("            let res = func.call1(args)?;")
+        self._lines.append("            Ok(Self::new(res.to_object(py)))")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn read(&self) -> PyResult<String> {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            let res = self.obj.call_method0(py, \"read\")?;")
+        self._lines.append("            res.extract(py)")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn write(&self, data: &str) -> PyResult<()> {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            self.obj.call_method1(py, \"write\", (data,))?;")
+        self._lines.append("            Ok(())")
+        self._lines.append("        })")
+        self._lines.append("    }")
+        self._lines.append("")
+        self._lines.append("    pub fn close(&self) -> PyResult<()> {")
+        self._lines.append("        Python::with_gil(|py| {")
+        self._lines.append("            self.obj.call_method0(py, \"close\")?;")
+        self._lines.append("            Ok(())")
         self._lines.append("        })")
         self._lines.append("    }")
         self._lines.append("")
@@ -2323,20 +2714,11 @@ class RustCodegen:
         self._lines.append("        })")
         self._lines.append("    }")
         self._lines.append("")
-        self._lines.append("    pub fn new_csv_reader(file_obj: Self) -> PyResult<Self> {")
+        self._lines.append("    pub fn new_csv_reader(file_obj: &Self) -> PyResult<Self> {")
         self._lines.append("        Python::with_gil(|py| {")
-        self._lines.append("            let read_method = file_obj.obj.getattr(py, \"read\")?;")
-        self._lines.append("            let content: String = read_method.call0(py)?.extract(py)?;")
-        self._lines.append("            let mut reader = csv::ReaderBuilder::new()")
-        self._lines.append("                .has_headers(false)")
-        self._lines.append("                .from_reader(content.as_bytes());")
-        self._lines.append("            let mut rows = Vec::new();")
-        self._lines.append("            for result in reader.records() {")
-        self._lines.append("                let record = result.map_err(|e| PyError::ValueError(e.to_string()))?;")
-        self._lines.append("                let row: Vec<String> = record.iter().map(|s| s.to_string()).collect();")
-        self._lines.append("                rows.push(row.to_object(py));")
-        self._lines.append("            }")
-        self._lines.append("            Ok(Self::new(rows.to_object(py)))")
+        self._lines.append("            let csv = py.import(\"csv\")?;")
+        self._lines.append("            let reader = csv.getattr(\"reader\")?.call1((file_obj.obj.as_ref(py),))?;")
+        self._lines.append("            Ok(Self::new(reader.to_object(py)))")
         self._lines.append("        })")
         self._lines.append("    }")
         self._lines.append("}")
@@ -2377,6 +2759,53 @@ class RustCodegen:
         if isinstance(expr, IRBinOp) and isinstance(expr.result_type, IRFloatType):
             return inner
         return f"({inner}) as f64"
+
+    def _gen_isinstance(self, expr: IRIsInstance) -> str:
+        obj_expr = self._gen_expr(expr.obj)
+        obj_type = expr.obj.result_type
+        check_type = expr.check_type
+
+        # Handle None check (type(None) or known UnitType)
+        if isinstance(check_type, IRUnitType):
+            if isinstance(obj_type, IROptionType):
+                return f"{obj_expr}.is_none()"
+            return f"({obj_expr} == ())"
+
+        # Handle SumType (Union) checks
+        if isinstance(obj_type, IRSumType):
+            enum_name = self._get_sum_type_name(obj_type)
+            # Find the variant that matches check_type
+            variant_rust_type = self._get_rust_type(check_type)
+            variant_name = self._get_variant_name(variant_rust_type)
+            return f"matches!({obj_expr}, {enum_name}::{variant_name}(_))"
+
+        # Handle Option checks
+        if isinstance(obj_type, IROptionType):
+            # isinstance(x, Optional[T]) - always true if it matches checking T or being None
+            if isinstance(check_type, IROptionType):
+                return "true"
+            # isinstance(x, T) where x is Optional[T]
+            if self._get_rust_type(obj_type.inner_type) == self._get_rust_type(check_type):
+                return f"{obj_expr}.is_some()"
+            return "false"
+
+        # Handle List/Dict/Set checks
+        if isinstance(check_type, (IRListType, IRDictType, IRSetType)):
+            if type(obj_type) == type(check_type):
+                return "true"
+            return "false"
+
+        # Handle Class checks
+        if isinstance(check_type, IRClassType):
+            if isinstance(obj_type, IRClassType) and obj_type.name == check_type.name:
+                return "true"
+            return "false"
+
+        # Default: if types match exactly in Rust
+        if self._get_rust_type(obj_type) == self._get_rust_type(check_type):
+            return "true"
+        
+        return "false"
 
 
 def generate_rust(module: IRModule, dependency_manager=None, config: CompilerConfig = None) -> str:

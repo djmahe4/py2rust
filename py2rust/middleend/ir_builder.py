@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Optional
 from ..frontend.ast_nodes import (
     IntType,
     FloatType,
@@ -19,11 +20,12 @@ from ..frontend.ast_nodes import (
     SelfExpr,
     NewExpr,
     AwaitExpr,
-    EnumType,
     SetType,
     FunctionType,
     UnknownType,
+    ExternalPythonType,
     EnumDef,
+    EnumType,
     MatchStmt,
     MatchCase,
     MatchPattern,
@@ -51,6 +53,12 @@ from ..frontend.ast_nodes import (
     GlobalStmt,
     NonlocalStmt,
     ExternalPythonType,
+    OptionalType,
+    UnionType,
+    Slice,
+    SliceType,
+    DequeType,
+    HeapType,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -67,6 +75,7 @@ from ..ir.ir_nodes import (
     IRSetType,
     IRFunctionType,
     IRFileType,
+    IROptionType,
     IRClassType,
     IRExternalPythonType,
     IRUnknownType,
@@ -77,13 +86,22 @@ from ..ir.ir_nodes import (
     IRFormattedValue,
     IRJoinedStr,
     IRName,
+    IRSome,
+    IRSumWrap,
+    IRSumType,
+    IRNoneLit,
     IRBinOp,
     IRUnaryOpExpr,
+    IRIsInstance,
     IRCompare,
     IRBoolOp,
     IRListLit,
     IRDictLit,
     IRContains,
+    IRSlice,
+    IRSliceType,
+    IRDequeType,
+    IRHeapType,
     IRSubscript,
     IRSubscriptAssign,
     IRFunctionCall,
@@ -140,6 +158,9 @@ from ..ir.ir_nodes import (
     IRGlobal,
     IRNonlocal,
     IRExternalPythonType,
+    IROptionType,
+    IRSumType,
+    IRType,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -153,7 +174,7 @@ def _to_ir_type(t):
     if t is None:
         return IRUnitType()
     # If already an IR type, return as is
-    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType, IRExternalPythonType)):
+    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType, IRExternalPythonType, IROptionType, IRSumType)):
         return t
         
     if isinstance(t, IntType):
@@ -168,6 +189,10 @@ def _to_ir_type(t):
         return IRUnitType()
     if isinstance(t, ListType):
         return IRListType(element_type=_to_ir_type(t.element_type))
+    elif isinstance(t, DequeType):
+        return IRDequeType(element_type=_to_ir_type(t.element_type))
+    elif isinstance(t, HeapType):
+        return IRHeapType(element_type=_to_ir_type(t.element_type))
     if isinstance(t, DictType):
         return IRDictType(
             key_type=_to_ir_type(t.key_type),
@@ -187,7 +212,7 @@ def _to_ir_type(t):
             return_type=_to_ir_type(t.return_type),
         )
     if isinstance(t, UnknownType):
-        return IRIntType()  # Default to i32 for unknown types
+        return IRIntType() # Default to int instead of ExternalObject for non-mock unknown types
     if isinstance(t, TupleType):
         return IRTupleType(element_types=tuple(_to_ir_type(et) for et in t.element_types))
     if isinstance(t, TypeVarType):
@@ -196,6 +221,13 @@ def _to_ir_type(t):
         return IRGenericType(base=_to_ir_type(t.base), params=tuple(_to_ir_type(p) for p in t.params))
     if isinstance(t, ExternalPythonType):
         return IRExternalPythonType(module=t.module, name=t.name)
+    if isinstance(t, OptionalType):
+        return IROptionType(inner_type=_to_ir_type(t.inner_type))
+    if isinstance(t, UnionType):
+        return IRSumType(variants=tuple(_to_ir_type(v) for v in t.variants))
+    if isinstance(t, SliceType):
+        return IRSliceType()
+    
     raise SemanticError(f"Unknown type: {t}")
 
 
@@ -204,13 +236,6 @@ class IRBuilder:
         self.filename = filename
         self.source_lines = source_lines or []
         self.st = symbol_table or SymbolTable(config=config)
-        if symbol_table is None:
-            # Add basic exception types if we created a new symbol table
-            for exc in ["Exception", "ValueError", "TypeError", "KeyError", "IndexError"]:
-                self.st.define_class(exc, (), {}, {}, {})
-                # Also define as functions
-                self.st.define_function(exc, [StrType()], ClassType(exc))
-        
         self.inferencer = TypeInferencer(self.st)
         self._loop_stack: list = []
         self._mutating_methods: set = set()  # (class_name, method_name, arity)
@@ -244,11 +269,7 @@ class IRBuilder:
         for func in module.functions:
             ir_funcs.append(self._build_function(func))
         
-        ir_stmts = []
-        for stmt in module.statements:
-            ir_stmt = self._build_stmt(stmt)
-            if ir_stmt is not None:
-                ir_stmts.append(ir_stmt)
+        ir_stmts = self._build_stmts(module.statements)
 
         return IRModule(
             functions=tuple(ir_funcs),
@@ -511,13 +532,18 @@ class IRBuilder:
         return False
 
     def _build_method(self, class_name: str, func, defining_class: Optional[str] = None) -> IRFunction:
-        self.st.enter_scope(f"{class_name}.{func.name}")
+        scope = getattr(func, "scope", None)
+        self.st.enter_scope(f"{class_name}.{func.name}", scope_to_reuse=scope)
         self.st.define("self", ClassType(name=class_name))
+        if hasattr(self.st.current_scope, "_declared_in_ir"):
+            self.st.current_scope._declared_in_ir.add("self")
 
         params = []
         for p in func.params:
             ir_t = _to_ir_type(p.type_annotation)
             self.st.define(p.name, p.type_annotation)
+            if hasattr(self.st.current_scope, "_declared_in_ir"):
+                self.st.current_scope._declared_in_ir.add(p.name)
             params.append(IRParam(name=p.name, type_=ir_t))
 
         ret_type = _to_ir_type(func.return_type)
@@ -543,13 +569,16 @@ class IRBuilder:
         )
 
     def _build_function(self, func) -> IRFunction:
-        self.st.enter_scope(func.name)
+        scope = getattr(func, "scope", None)
+        self.st.enter_scope(func.name, scope_to_reuse=scope)
 
         params = []
         param_names = []
         for p in func.params:
             ir_t = _to_ir_type(p.type_annotation)
             self.st.define(p.name, p.type_annotation)
+            if hasattr(self.st.current_scope, "_declared_in_ir"):
+                self.st.current_scope._declared_in_ir.add(p.name)
             params.append(IRParam(name=p.name, type_=ir_t))
             param_names.append(p.name)
 
@@ -646,8 +675,9 @@ class IRBuilder:
         res = []
         for s in stmts:
             if type(s).__name__ == "IfStmt" and self._is_main_check(s.condition):
-                logger.warning(f"Ignoring 'if __name__ == \"__main__\":' and all subsequent lines at line {s.line}. Top-level code after this block will be ignored.")
-                break
+                # Extract the body of the if __name__ == "__main__" block
+                res.extend(self._build_stmts(s.then_body, return_type))
+                continue
             ir_stmt = self._build_stmt(s, return_type)
             if ir_stmt:
                 res.append(ir_stmt)
@@ -694,22 +724,34 @@ class IRBuilder:
             if stmt.target == "_":
                 ir_val = self._build_expr(stmt.value)
                 return IRVarDecl(name="_", type_=IRIntType(), value=ir_val)
+            # Check if this name has been declared in the CURRENT IR scope yet.
+            # Re-entering scopes means the st might already have the symbol,
+            # but we still need to generate the IRVarDecl once in this pass.
+            is_declared = False
+            if hasattr(self.st.current_scope, "_declared_in_ir"):
+                is_declared = stmt.target in self.st.current_scope._declared_in_ir
+
             existing = self.st.lookup(stmt.target)
             inferred = self.inferencer.infer(stmt.value)
+            type_to_use = existing or inferred
 
-            if existing is None:
-                if inferred is None:
+            if not is_declared:
+                if type_to_use is None:
                     raise self._err(
                         f"Cannot determine type for '{stmt.target}'",
                         stmt.line,
                         stmt.col,
                     )
-                self.st.define(stmt.target, inferred)
-                ir_type = _to_ir_type(inferred)
+                
+                self.st.define(stmt.target, type_to_use)
+                if hasattr(self.st.current_scope, "_declared_in_ir"):
+                    self.st.current_scope._declared_in_ir.add(stmt.target)
+                
+                ir_type = _to_ir_type(type_to_use)
                 ir_val = self._build_expr(stmt.value, expected_type=ir_type)
                 return IRVarDecl(name=stmt.target, type_=ir_type, value=ir_val)
 
-            ir_type = _to_ir_type(existing)
+            ir_type = _to_ir_type(existing or inferred)
             ir_val = self._build_expr(stmt.value, expected_type=ir_type)
             return IRAssign(target=stmt.target, value=ir_val)
 
@@ -790,6 +832,8 @@ class IRBuilder:
                 elem_type = iterable_type.key_type
             elif isinstance(iterable_type, StrType):
                 elem_type = StrType()
+            elif isinstance(iterable_type, (ExternalPythonType, UnknownType)):
+                elem_type = UnknownType()
             
             self._bind_target(stmt.target, elem_type)
             
@@ -940,26 +984,57 @@ class IRBuilder:
             raise self._err(f"Unsupported pattern type: {type(pattern).__name__}")
 
     def _build_expr(self, expr, expected_type=None):
+        ir_node = self._build_expr_internal(expr, expected_type)
+        
+        # Implicit Optional wrapping
+        if expected_type and isinstance(expected_type, IROptionType):
+            # If the IR node is IRNoneLit, it's already an Option
+            # If the IR node's result_type is already an IROptionType, don't double wrap
+            if not isinstance(ir_node, IRNoneLit) and not isinstance(ir_node.result_type, IROptionType):
+                return IRSome(value=ir_node, inner_type=ir_node.result_type, result_type=expected_type)
+        
+        # Implicit SumWrap wrapping
+        if expected_type and isinstance(expected_type, IRSumType):
+            # If the IR node's result_type is already an IRSumType, don't double wrap
+            if not isinstance(ir_node.result_type, IRSumType):
+                # Check if it's one of the variants (using rust type equality for simplicity here, 
+                # or we could use _types_compatible but we are in IRBuilder which is IR based)
+                # Actually, if TypeChecker allowed it, we should wrap it.
+                return IRSumWrap(value=ir_node, inner_type=ir_node.result_type, result_type=expected_type)
+        
+        return ir_node
+
+    def _build_expr_internal(self, expr, expected_type=None):
         name = type(expr).__name__
 
         if name == "IntLiteral":
             if isinstance(expected_type, IRFloatType):
-                return IRFloatLit(value=float(expr.value))
-            return IRIntLit(value=expr.value)
+                return IRFloatLit(value=float(expr.value), result_type=IRFloatType())
+            return IRIntLit(value=expr.value, result_type=IRIntType())
 
         elif name == "FloatLiteral":
-            return IRFloatLit(value=expr.value)
+            return IRFloatLit(value=expr.value, result_type=IRFloatType())
+
+        elif name == "NoneLit":
+            res_t = expected_type if isinstance(expected_type, IROptionType) else IROptionType(IRUnknownType())
+            return IRNoneLit(result_type=res_t)
 
         elif name == "BoolLiteral":
-            return IRBoolLit(value=expr.value)
+            return IRBoolLit(value=expr.value, result_type=IRBoolType())
 
         elif name == "StrLiteral":
-            return IRStrLit(value=expr.value)
+            return IRStrLit(value=expr.value, result_type=IRStrType())
 
         elif name == "Name":
+            if expr.name == "None":
+                return IRNoneLit(result_type=expected_type or IROptionType(IRIntType()))
             if expr.name == "self":
                 return IRSelf()
-            expr_type = self.st.lookup(expr.name)
+            
+            # Prioritize inferred_type from TypeChecker
+            expr_type = getattr(expr, "inferred_type", None)
+            if expr_type is None:
+                expr_type = self.st.lookup(expr.name)
             ir_type = _to_ir_type(expr_type) if expr_type else None
             return IRName(name=expr.name, result_type=ir_type)
 
@@ -1035,21 +1110,34 @@ class IRBuilder:
             return IRBoolOp(op=op_map[expr.op], values=values)
 
         elif name == "ListLiteral":
+            # Prioritize inferred_type from TypeChecker
+            it = getattr(expr, "inferred_type", None)
+            res_t = _to_ir_type(it) if it else None
+            
+            if res_t is None and isinstance(expected_type, (IRDequeType, IRHeapType, IRListType)):
+                res_t = expected_type
+            elif isinstance(expected_type, (IRHeapType, IRDequeType)):
+                # Even if inferred as list, if we expect a heap/deque (e.g. from declaration or upgrade), use it
+                res_t = expected_type
+
             if not expr.elements:
                 elem_type = IRIntType()
-                if isinstance(expected_type, IRListType):
-                    elem_type = expected_type.element_type
-                return IRListLit(elements=(), element_type=elem_type)
+                if isinstance(res_t, (IRListType, IRDequeType, IRHeapType)):
+                    elem_type = res_t.element_type
+                return IRListLit(elements=(), element_type=elem_type, result_type=res_t)
             
-            inferred_list_t = self.inferencer.infer(expr)
-            if isinstance(inferred_list_t, ListType):
-                elem_t = inferred_list_t.element_type
+            # fallback to inference if no direct type available
+            if not it:
+                it = self.inferencer.infer(expr)
+            
+            if isinstance(it, ListType):
+                elem_t = it.element_type
             else:
                 elem_t = self.inferencer.infer(expr.elements[0]) or IntType()
             
             ir_elem_t = _to_ir_type(elem_t)
             elems = tuple(self._build_expr(e, ir_elem_t) for e in expr.elements)
-            return IRListLit(elements=elems, element_type=ir_elem_t)
+            return IRListLit(elements=elems, element_type=ir_elem_t, result_type=res_t)
 
         elif name == "DictLiteral":
             if not expr.pairs:
@@ -1089,7 +1177,8 @@ class IRBuilder:
             types = tuple(
                 _to_ir_type(self.inferencer.infer(e)) for e in expr.elements
             )
-            return IRTupleLit(elements=elements, element_types=types)
+            res_t = IRTupleType(element_types=types)
+            return IRTupleLit(elements=elements, element_types=types, result_type=res_t)
 
         elif name == "Subscript":
             val = self._build_expr(expr.value)
@@ -1098,6 +1187,10 @@ class IRBuilder:
             ir_val_type = _to_ir_type(val_type) if val_type else IRIntType()
             trait_info = None
             if isinstance(val_type, ListType):
+                result_type = _to_ir_type(val_type.element_type)
+            elif isinstance(val_type, DequeType):
+                result_type = _to_ir_type(val_type.element_type)
+            elif isinstance(val_type, HeapType):
                 result_type = _to_ir_type(val_type.element_type)
             elif isinstance(val_type, StrType):
                 result_type = IRStrType()
@@ -1111,6 +1204,11 @@ class IRBuilder:
                     result_type = _to_ir_type(sig[1])
                 else:
                     result_type = IRIntType()
+            elif isinstance(idx, IRSlice):
+                if isinstance(val_type, (ListType, StrType)):
+                    result_type = ir_val_type
+                else:
+                    result_type = IRUnknownType()
             else:
                 result_type = IRIntType()
             
@@ -1118,6 +1216,12 @@ class IRBuilder:
                 value=val, index=idx, value_type=ir_val_type, result_type=result_type,
                 trait_info=trait_info
             )
+
+        elif name == "Slice":
+            lower = self._build_expr(expr.lower) if expr.lower else None
+            upper = self._build_expr(expr.upper) if expr.upper else None
+            step = self._build_expr(expr.step) if expr.step else None
+            return IRSlice(lower=lower, upper=upper, step=step, result_type=IRSliceType())
 
         elif name == "FunctionCall":
             if expr.name == "len":
@@ -1134,11 +1238,22 @@ class IRBuilder:
                 }[expr.name]
                 return IRFunctionCall(name=expr.name, args=(arg,), return_type=ret_t, is_fallible=True)
 
-            if expr.name in ("zip", "enumerate", "map", "reversed"):
+            if expr.name == "isinstance":
+                obj = self._build_expr(expr.args[0])
+                # args[1] is the type we are checking against.
+                type_arg = self._build_type_expr(expr.args[1])
+                return IRIsInstance(obj=obj, check_type=type_arg, result_type=IRBoolType())
+
+            if expr.name in (
+                "zip", "enumerate", "map", "reversed",
+                "heappush", "heappop", "heapify",
+                "heapq.heappush", "heapq.heappop", "heapq.heapify"
+            ):
                 args = [self._build_expr(a) for a in expr.args]
                 inferred = self.inferencer._infer_call(expr)
                 ir_ret_t = _to_ir_type(inferred) if inferred else IRUnknownType()
-                return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret_t, is_fallible=False)
+                is_fallible = "pop" in expr.name
+                return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret_t, is_fallible=is_fallible)
 
             if expr.name == "open":
                 path = self._build_expr(expr.args[0])
@@ -1240,6 +1355,29 @@ class IRBuilder:
                         is_fallible=is_fallible,
                         mutates_self=mutates_self,
                     )
+            if isinstance(val_type, DequeType):
+                ir_args = [self._build_expr(a) for a in expr.args]
+                ir_ret = _to_ir_type(self.inferencer.infer(expr))
+                is_fallible = expr.method in ("pop", "popleft")
+                return IRMethodCall(
+                    value=val,
+                    method=expr.method,
+                    args=tuple(ir_args),
+                    result_type=ir_ret,
+                    is_fallible=is_fallible,
+                    mutates_self=True
+                )
+            if isinstance(val_type, SetType):
+                ir_args = [self._build_expr(a) for a in expr.args]
+                ir_ret = _to_ir_type(self.inferencer.infer(expr))
+                return IRMethodCall(
+                    value=val,
+                    method=expr.method,
+                    args=tuple(ir_args),
+                    result_type=ir_ret,
+                    is_fallible=False,
+                    mutates_self=True
+                )
             if isinstance(val_type, FileType):
                 file_val = self._build_expr(expr.value)
                 ir_args = [self._build_expr(a) for a in expr.args]
@@ -1281,6 +1419,7 @@ class IRBuilder:
 
         elif name == "LambdaExpr":
             return self._build_lambda(expr)
+
 
         elif name == "ListComp":
             return self._build_list_comp(expr)
@@ -1460,6 +1599,43 @@ class IRBuilder:
         msg = self._build_expr(node.msg) if node.msg else None
         return IRAssert(test=test, msg=msg)
 
+
+    def _build_type_expr(self, expr) -> IRType:
+        """Helper to build IR types from AST expressions (e.g. in isinstance)."""
+        name = expr.__class__.__name__
+        if isinstance(expr, Name):
+            if expr.name == "None":
+                return IROptionType(inner_type=IRIntType()) # Best effort
+            t = self.st.lookup(expr.name)
+            if t:
+                return _to_ir_type(t)
+            # Built-ins
+            known = {
+                "int": IRIntType(),
+                "float": IRFloatType(),
+                "bool": IRBoolType(),
+                "str": IRStrType(),
+                "list": IRListType(element_type=IRIntType()),
+                "dict": IRDictType(key_type=IRIntType(), value_type=IRIntType()),
+            }
+            return known.get(expr.name, IRUnknownType())
+        elif name == "FunctionCall":
+            if expr.name == "type" and len(expr.args) == 1:
+                # Check for type(None)
+                if isinstance(expr.args[0], Name) and expr.args[0].name == "None":
+                    # This is type(None). We map it to IRUnitType to trigger None checks in codegen.
+                    return IRUnitType()
+        elif hasattr(expr, "value") and hasattr(expr, "index"): # Subscript in AST
+            base_name = None
+            if isinstance(expr.value, Name):
+                base_name = expr.value.name
+            
+            if base_name == "Optional":
+                return IROptionType(inner_type=self._build_type_expr(expr.index))
+            elif base_name == "list":
+                return IRListType(element_type=self._build_type_expr(expr.index))
+        return IRUnknownType()
+
     def _build_global(self, node: GlobalStmt) -> IRGlobal:
         return IRGlobal(names=node.names)
 
@@ -1480,9 +1656,21 @@ class IRBuilder:
 
 
 def build_ir(module, filename: str = "<unknown>", source_lines: list = None, config=None, dependency_manager=None):
-    builder = IRBuilder(filename, source_lines, config=config, symbol_table=None)
-    # If IRBuilder's __init__ didn't take dependency_manager, 
-    # we need to set it on the symbol table or update __init__.
-    # Let's update IRBuilder.__init__ as well.
-    builder.st.dependency_manager = dependency_manager
+    from .type_checker import TypeChecker
+    from .symbol_table import SymbolTable
+    from ..plugins.heapq_plugin import HeapqPlugin
+    from ..plugins.collections_plugin import CollectionsPlugin
+    from ..plugins.typing_plugin import TypingPlugin
+    
+    st = SymbolTable(config=config, dependency_manager=dependency_manager)
+    st.pm.add_plugin(HeapqPlugin())
+    st.pm.add_plugin(CollectionsPlugin())
+    st.pm.add_plugin(TypingPlugin())
+    
+    # Run TypeChecker pass first
+    checker = TypeChecker(st)
+    checker.check_module(module)
+    
+    # Run IRBuilder pass
+    builder = IRBuilder(filename, source_lines, config=config, symbol_table=st)
     return builder.build(module)

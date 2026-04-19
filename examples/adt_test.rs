@@ -63,44 +63,40 @@ impl From<PyError> for pyo3::PyErr {
     }
 }
 
-pub trait CounterTrait {
-    fn increment(&mut self) -> Result<(), PyError>;
-    fn get_count(&self) -> Result<i32, PyError>;
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrOrIntUnion {
+    Str(String),
+    Int(i32),
 }
 
-#[derive(Clone, Debug)]
-struct Counter {
-    count: i32,
-}
-
-impl Counter {
-    fn new() -> Result<Self, PyError> {
-        Ok(Self { count: 0 })
+fn describe_number(x: Option<i32>) -> Result<String, PyError> {
+    if x.is_none() {
+        return Ok("Nothing".to_string());
+    } else {
+        return Ok(format!("Number: {}", x.as_ref().map(|v| format!("{}", v)).unwrap_or("None".to_string())));
     }
+    Ok(String::new())
 }
 
-impl CounterTrait for Counter {
-    fn increment(&mut self) -> Result<(), PyError> {
-        self.count = self.count + 1;
-        Ok(())
+fn combine(x: StrOrIntUnion) -> Result<String, PyError> {
+    if matches!(x, StrOrIntUnion::Int(_)) {
+        return Ok(format!("Int: {:?}", x));
+    } else if matches!(x, StrOrIntUnion::Str(_)) {
+        return Ok(format!("Str: {:?}", x));
     }
-    fn get_count(&self) -> Result<i32, PyError> {
-        return Ok(self.count);
-    }
+    return Ok("Unknown".to_string());
 }
-
 
 fn __py_main() -> Result<(), PyError> {
-    let mut c: Counter = Counter::new()?;
-    c.increment()?;
-    c.increment()?;
-    c.increment()?;
-    let result: i32 = c.get_count()?;
-    println!("{}", result);
-    return Ok({ 0; () });
+    println!("{}", describe_number(Some(10))?);
+    println!("{}", describe_number(None)?);
+    println!("{}", combine(StrOrIntUnion::Int(42))?);
+    println!("{}", combine(StrOrIntUnion::Str("hello".to_string()))?);
+    Ok(())
 }
 fn main() -> Result<(), PyError> {
     __py_main()?;
+    
     Ok(())
 }
 

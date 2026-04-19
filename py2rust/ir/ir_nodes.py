@@ -57,8 +57,31 @@ class IRTupleType:
 
 
 @dataclass(frozen=True)
+class IRSliceType:
+    def __str__(self):
+        return "slice"
+
+
+@dataclass(frozen=True)
+class IRDequeType:
+    element_type: object
+
+    def __str__(self):
+        return f"deque[{self.element_type}]"
+
+
+@dataclass(frozen=True)
+class IRHeapType:
+    element_type: object
+
+    def __str__(self):
+        return f"heap[{self.element_type}]"
+
+
+@dataclass(frozen=True)
 class IRSetType:
     element_type: object
+
 
 @dataclass(frozen=True)
 class IRUnknownType:
@@ -131,6 +154,23 @@ class IRGenericType:
         return f"{self.base}<{params}>"
 
 
+@dataclass(frozen=True)
+class IROptionType:
+    inner_type: object
+
+    def __str__(self):
+        return f"Option<{self.inner_type}>"
+
+
+@dataclass(frozen=True)
+class IRSumType:
+    variants: tuple
+    name: Optional[str] = None
+
+    def __str__(self):
+        return self.name or f"SumType({self.variants})"
+
+
 IRType = Union[
     IRTypeParam,
     IRGenericType,
@@ -145,29 +185,38 @@ IRType = Union[
     IRFileType,
     IRClassType,
     IRFunctionType,
+    IRSliceType,
+    IRDequeType,
+    IRHeapType,
     IREnumType,
     IRUnknownType,
+    IROptionType,
+    IRSumType,
 ]
 
 
 @dataclass(frozen=True)
 class IRIntLit:
     value: int
+    result_type: object = IRIntType()
 
 
 @dataclass(frozen=True)
 class IRFloatLit:
     value: float
+    result_type: object = IRFloatType()
 
 
 @dataclass(frozen=True)
 class IRBoolLit:
     value: bool
+    result_type: object = IRBoolType()
 
 
 @dataclass(frozen=True)
 class IRStrLit:
     value: str
+    result_type: object = IRStrType()
 
 
 @dataclass(frozen=True)
@@ -198,12 +247,21 @@ class IRCompare:
     op: str
     left: object
     right: object
+    result_type: object = IRBoolType()
+
+
+@dataclass(frozen=True)
+class IRIsInstance:
+    obj: object
+    check_type: IRType
+    result_type: object = IRBoolType()
 
 
 @dataclass(frozen=True)
 class IRBoolOp:
     op: str
     values: tuple
+    result_type: object = IRBoolType()
 
 
 @dataclass(frozen=True)
@@ -212,12 +270,14 @@ class IRContains:
     container: object
     container_type: object
     element_type: object
+    result_type: object = IRBoolType()
 
 
 @dataclass(frozen=True)
 class IRListLit:
     elements: tuple
     element_type: object
+    result_type: Optional[object] = None
 
 
 @dataclass(frozen=True)
@@ -229,9 +289,30 @@ class IRDictLit:
 
 
 @dataclass(frozen=True)
+class IRSome:
+    value: object
+    inner_type: object
+    result_type: object # Should be IROptionType(inner_type)
+
+
+@dataclass(frozen=True)
+class IRSumWrap:
+    value: object
+    inner_type: object
+    result_type: object # Should be IRSumType
+
+
+@dataclass(frozen=True)
+class IRNoneLit:
+    result_type: object # Should be IROptionType(UnknownType) or specific Option type
+
+
+
+@dataclass(frozen=True)
 class IRTupleLit:
     elements: tuple
     element_types: tuple
+    result_type: Optional[object] = None
 
 
 @dataclass(frozen=True)
@@ -242,6 +323,14 @@ class IRSubscript:
     result_type: object
     # (trait_name, method_name) if it maps to a Rust trait (e.g., ("Index", "index"))
     trait_info: Optional[tuple[str, str]] = None
+
+
+@dataclass(frozen=True)
+class IRSlice:
+    lower: Optional[object] = None
+    upper: Optional[object] = None
+    step: Optional[object] = None
+    result_type: object = IRUnknownType()
 
 
 @dataclass(frozen=True)

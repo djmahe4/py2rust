@@ -2,7 +2,11 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
+// csv = { version = "1.1" }
 // pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
+// pythonize = { version = "0.20" }
+// serde = { version = "1.0", features = ["derive"] }
+// serde_json = { version = "1.0" }
 //
 
 use pyo3::prelude::*;
@@ -49,11 +53,24 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
+impl From<PyError> for pyo3::PyErr {
+    fn from(err: PyError) -> Self {
+        match err {
+            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
+            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
+            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
+            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
+            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
+            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
+        }
+    }
+}
+
 fn test_numpy() -> Result<(), PyError> {
     println!("{}", "Testing NumPy...".to_string());
     let arr: ExternalObject = ExternalObject::load_module("numpy")?.call_method("array", (vec![1, 2, 3],))?;
-    println!("{}", format!("Array: {}", ExternalObject::from_module(&"numpy".to_string(), &"array".to_string())));
-    println!("{}", format!("Mean: {}", ExternalObject::load_module("numpy")?.call_method("mean", (ExternalObject::from_module(&"numpy".to_string(), &"array".to_string()),))?));
+    println!("{}", format!("Array: {}", arr));
+    println!("{}", format!("Mean: {}", ExternalObject::load_module("numpy")?.call_method("mean", (arr,))?));
     Ok(())
 }
 
@@ -61,9 +78,9 @@ fn test_opencv() -> Result<(), PyError> {
     println!("{}", "\nTesting OpenCV...".to_string());
     println!("{}", format!("OpenCV Version: {}", ExternalObject::load_module("cv2")?.getattr("__version__")?));
     let img: ExternalObject = ExternalObject::load_module("numpy")?.call_method("zeros", ((10, 10, 3),))?;
-    println!("{}", format!("Image shape: {}", ExternalObject::from_module(&"numpy".to_string(), &"zeros".to_string()).getattr("shape")?));
+    println!("{}", format!("Image shape: {}", img.getattr("shape")?));
     println!("{}", "Opening window (might fail on headless systems)...".to_string());
-    ExternalObject::load_module("cv2")?.call_method("imshow", ("Py2Rust OpenCV Test".to_string(), ExternalObject::from_module(&"numpy".to_string(), &"zeros".to_string()),))?;
+    ExternalObject::load_module("cv2")?.call_method("imshow", ("Py2Rust OpenCV Test".to_string(), img,))?;
     ExternalObject::load_module("cv2")?.call_method("waitKey", (1,))?;
     ExternalObject::load_module("cv2")?.call_method("destroyAllWindows", ())?;
     println!("{}", "OpenCV test complete.".to_string());
@@ -88,10 +105,23 @@ impl From<PyErr> for PyError {
         PyError::Exception(err.to_string())
     }
 }
+impl Default for ExternalObject {
+    fn default() -> Self {
+        Python::with_gil(|py| Self::new(py.None()))
+    }
+}
 
 impl ExternalObject {
     pub fn new(obj: PyObject) -> Self {
         Self { obj }
+    }
+
+    pub fn from_module(module: &str, name: &str) -> Self {
+        Python::with_gil(|py| {
+            let m = py.import(module).expect("Failed to import module");
+            let attr = m.getattr(name).expect("Failed to get attribute from module");
+            Self::new(attr.to_object(py))
+        })
     }
 
     pub fn load_module(module: &str) -> PyResult<Self> {
@@ -161,6 +191,7 @@ impl ExternalObject {
 
     pub fn setattr(&self, name: &str, value: impl IntoPy<PyObject>) -> PyResult<()> {
         Python::with_gil(|py| {
+            let value = value.into_py(py);
             self.obj.as_ref(py).setattr(name, value)?;
             Ok(())
         })
@@ -168,6 +199,8 @@ impl ExternalObject {
 
     pub fn setitem(&self, key: impl IntoPy<PyObject>, value: impl IntoPy<PyObject>) -> PyResult<()> {
         Python::with_gil(|py| {
+            let key = key.into_py(py);
+            let value = value.into_py(py);
             self.obj.as_ref(py).set_item(key, value)?;
             Ok(())
         })
@@ -175,8 +208,39 @@ impl ExternalObject {
 
     pub fn getitem(&self, key: impl IntoPy<PyObject>) -> PyResult<Self> {
         Python::with_gil(|py| {
+            let key = key.into_py(py);
             let item = self.obj.as_ref(py).get_item(key)?;
             Ok(Self::new(item.to_object(py)))
+        })
+    }
+
+    pub fn call_builtin(name: &str, args: impl IntoPy<Py<PyTuple>>) -> PyResult<Self> {
+        Python::with_gil(|py| {
+            let builtins = py.import("builtins")?;
+            let func = builtins.getattr(name)?;
+            let res = func.call1(args)?;
+            Ok(Self::new(res.to_object(py)))
+        })
+    }
+
+    pub fn read(&self) -> PyResult<String> {
+        Python::with_gil(|py| {
+            let res = self.obj.call_method0(py, "read")?;
+            res.extract(py)
+        })
+    }
+
+    pub fn write(&self, data: &str) -> PyResult<()> {
+        Python::with_gil(|py| {
+            self.obj.call_method1(py, "write", (data,))?;
+            Ok(())
+        })
+    }
+
+    pub fn close(&self) -> PyResult<()> {
+        Python::with_gil(|py| {
+            self.obj.call_method0(py, "close")?;
+            Ok(())
         })
     }
 
@@ -197,20 +261,11 @@ impl ExternalObject {
         })
     }
 
-    pub fn new_csv_reader(file_obj: Self) -> PyResult<Self> {
+    pub fn new_csv_reader(file_obj: &Self) -> PyResult<Self> {
         Python::with_gil(|py| {
-            let read_method = file_obj.obj.getattr(py, "read")?;
-            let content: String = read_method.call0(py)?.extract(py)?;
-            let mut reader = csv::ReaderBuilder::new()
-                .has_headers(false)
-                .from_reader(content.as_bytes());
-            let mut rows = Vec::new();
-            for result in reader.records() {
-                let record = result.map_err(|e| PyError::ValueError(e.to_string()))?;
-                let row: Vec<String> = record.iter().map(|s| s.to_string()).collect();
-                rows.push(row.to_object(py));
-            }
-            Ok(Self::new(rows.to_object(py)))
+            let csv = py.import("csv")?;
+            let reader = csv.getattr("reader")?.call1((file_obj.obj.as_ref(py),))?;
+            Ok(Self::new(reader.to_object(py)))
         })
     }
 }
@@ -243,5 +298,9 @@ impl IntoPy<PyObject> for ExternalObject {
 
 /*
 [dependencies]
+csv = { version = "1.1" }
 pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
+pythonize = { version = "0.20" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
 */

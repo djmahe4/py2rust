@@ -27,7 +27,7 @@ def f() -> float:
 """
     code = _compile(src, mock_mode=True)
     # s is sqrt from math.
-    assert 'ExternalObject::from_module(&"math".to_string(), &"sqrt".to_string()).call((16.0,))?' in code
+    assert 'ExternalObject::from_module("math", "sqrt").call((16.0,))?' in code
 
 def test_print_multi_args():
     src = """
@@ -105,6 +105,6 @@ def f() -> None:
 """
     code = _compile(src, mock_mode=True)
     assert 'ExternalObject::load_module("math")?' in code
-    assert 'ExternalObject::from_module(&"collections".to_string(), &"deque".to_string())' in code
+    assert 'ExternalObject::from_module("collections", "deque")' in code
     assert 'ExternalObject::load_module("os.path")?' in code
     assert 'call_method("join", ("a".to_string(), "b".to_string(),))' in code

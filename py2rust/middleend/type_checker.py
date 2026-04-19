@@ -10,6 +10,10 @@ from ..frontend.ast_nodes import (
     ClassType,
     TupleType,
     EnumType,
+    OptionalType,
+    UnionType,
+    SliceType,
+    UnitType,
     EnumDef,
     MatchStmt,
     MatchCase,
@@ -71,6 +75,27 @@ def _types_compatible(a, b, invariant=False) -> bool:
         return True
     if isinstance(a, TypeVarType) or isinstance(b, TypeVarType):
         return True
+
+    # Handle OptionalType
+    if isinstance(a, UnionType):
+        # b matches Union[...] if b matches any variant
+        return any(_types_compatible(v, b, invariant=invariant) for v in a.variants)
+    if isinstance(b, UnionType):
+        # a matches Union[...] if a matches any variant
+        return any(_types_compatible(a, v, invariant=invariant) for v in b.variants)
+
+    if isinstance(a, OptionalType):
+        if isinstance(b, OptionalType):
+            return _types_compatible(a.inner_type, b.inner_type, invariant=invariant)
+        if isinstance(b, UnitType): # None matches Optional[T]
+            return True
+        return _types_compatible(a.inner_type, b, invariant=invariant)
+    if isinstance(b, OptionalType):
+        if isinstance(a, UnitType): # None matches Optional[T]
+            return True
+        # In general, T matches Optional[T] even for non-invariant contexts
+        return _types_compatible(a, b.inner_type, invariant=invariant)
+
     if type(a) is type(b):
         if isinstance(a, ListType) and isinstance(b, ListType):
             # Collections are invariant in Rust (Vec<T>)
@@ -155,6 +180,7 @@ class TypeChecker:
             plugin = None
             if isinstance(imp, Import):
                 for alias in imp.names:
+                    plugin = self.st.pm.load_plugin(alias.name)
                     if plugin is None and not getattr(self.st.config, "mock_mode", False):
                         raise self._sem_err(f"Unsupported import: '{alias.name}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
                     
@@ -179,6 +205,10 @@ class TypeChecker:
         # Pre-scan all classes (including nested ones)
         self._collect_all_classes(module.classes)
         self._collect_all_classes(module.functions)
+        
+        # Pre-scan all protocols
+        self._collect_all_protocols(module.classes)
+        self._collect_all_protocols(module.functions)
 
         # Register top-level classes in global scope
         for cls in module.classes:
@@ -205,9 +235,6 @@ class TypeChecker:
 
         new_stmts = []
         for stmt in module.statements:
-            if type(stmt).__name__ == "IfStmt" and self._is_main_check(stmt.condition):
-                # Stop type checking subsequent top-level code
-                break
             transformed = self.st.pm.transform_ast(stmt, self)
             if transformed is not None:
                 new_stmts.append(transformed)
@@ -260,6 +287,23 @@ class TypeChecker:
                 variants = {v[0]: v[1] for v in item.variants}
                 self.st.define_enum(full_name, variants)
                 self.st.define(full_name, EnumType(name=full_name))
+
+    def _collect_all_protocols(self, items, prefix="") -> None:
+        for item in items:
+            if isinstance(item, ClassDef) and any(b == "Protocol" for b in item.bases):
+                full_name = f"{prefix}{item.name}"
+                methods = {}
+                for sub_item in item.body:
+                    if isinstance(sub_item, FunctionDef):
+                        arity = len(sub_item.params)
+                        arg_types = [p.type_annotation for p in sub_item.params]
+                        methods[sub_item.name] = {arity: (sub_item, (arg_types, sub_item.return_type))}
+                self.st.define_trait(full_name, item.bases, methods)
+                
+                # Recurse for nested items
+                self._collect_all_protocols(item.body, prefix=f"{full_name}_")
+            elif hasattr(item, "body") and isinstance(item.body, (list, tuple)):
+                self._collect_all_protocols(item.body, prefix=prefix)
             
             elif isinstance(item, FunctionDef):
                 # Recurse into function body for nested classes
@@ -321,20 +365,27 @@ class TypeChecker:
         old_async = self._within_async
         self._within_async = func.is_async
 
+        # Register local class fields/methods so attribute access resolves correctly.
+        # Use a mangled prefix matching what check_class uses for nested classes.
+        scope_name = self.st.current_scope.name
+        local_classes = [item for item in func.body if isinstance(item, ClassDef)]
+        if local_classes:
+            self._collect_all_classes(local_classes, prefix=f"{scope_name}_")
+
         # Define local classes in this function scope
         for item in func.body:
             if isinstance(item, ClassDef):
-                self.st.define(item.name, ClassType(name=f"{self.st.current_scope.name}_{item.name}"))
+                self.st.define(item.name, ClassType(name=f"{scope_name}_{item.name}"))
 
         for param in func.params:
             self.st.define(param.name, param.type_annotation)
 
-        for stmt in func.body:
-            self.check_stmt(stmt)
-
+        func.body = self._check_body(func.body)
+        func.scope = self.st.current_scope
         self.st.exit_scope()
         self._current_return_type = old_ret
         self._within_async = old_async
+
 
     def check_expr(self, expr) -> None:
         from ..frontend.ast_nodes import (
@@ -364,13 +415,15 @@ class TypeChecker:
         )
 
         if isinstance(expr, Name):
-            if self.st.lookup(expr.name) is None:
+            t = self.st.lookup(expr.name)
+            if t is None:
                 raise self._err(
                     f"Undefined variable: '{expr.name}'",
                     expr.line,
                     expr.col,
                     cls=SemanticError,
                 )
+            expr.inferred_type = t
         elif isinstance(expr, AwaitExpr):
             if not self._within_async:
                 raise self._err(
@@ -512,8 +565,9 @@ class TypeChecker:
             for val in expr.values:
                 self.check_expr(val)
         elif isinstance(expr, ListLiteral):
-            for elem in expr.elements:
-                self.check_expr(elem)
+            expr.inferred_type = self.inferencer.infer(expr)
+            for e in expr.elements:
+                self.check_expr(e)
         elif isinstance(expr, DictLiteral):
             for k, v in expr.pairs:
                 self.check_expr(k)
@@ -527,9 +581,9 @@ class TypeChecker:
             vt = self.inferencer.infer(expr.value)
             if isinstance(vt, ListType) or isinstance(vt, StrType):
                 it = self.inferencer.infer(expr.index)
-                if not isinstance(it, IntType):
+                if not isinstance(it, (IntType, SliceType)):
                     raise self._err(
-                        f"Subscript index must be int, got {it}", expr.line, expr.col
+                        f"Subscript index must be int or slice, got {it}", expr.line, expr.col
                     )
         elif isinstance(expr, FunctionCall):
             if expr.name == "open":
@@ -556,6 +610,14 @@ class TypeChecker:
                             expr.line,
                             expr.col,
                         )
+            elif expr.name == "isinstance":
+                if len(expr.args) != 2:
+                    raise self._err(
+                        f"isinstance() expected 2 arguments, got {len(expr.args)}",
+                        expr.line,
+                        expr.col,
+                    )
+                self.check_expr(expr.args[0])
             elif expr.name == "len":
                 if len(expr.args) != 1:
                     raise self._err(
@@ -650,6 +712,16 @@ class TypeChecker:
         elif isinstance(expr, FormattedValue):
             self.check_expr(expr.value)
 
+    def _check_body(self, body):
+        if not body:
+            return body
+        new_body = list(body)
+        for i, stmt in enumerate(new_body):
+            transformed = self.st.pm.transform_ast(stmt, self)
+            new_body[i] = transformed
+            self.check_stmt(transformed)
+        return tuple(new_body) if isinstance(body, tuple) else new_body
+
     def check_stmt(self, stmt) -> None:
         from ..frontend.ast_nodes import (
             VarDecl,
@@ -669,10 +741,20 @@ class TypeChecker:
             RaiseStmt,
             ClassDef,
             FunctionDef,
+            WithStmt,
+            AssertStmt,
+            GlobalStmt,
+            NonlocalStmt,
+            MatchStmt,
+            EnumDef,
+            PassStmt,
         )
 
-        node_name = type(stmt).__name__
-        if node_name == "ReturnStmt":
+        # Plugins can also transform nested statements
+        # But we must be careful not to recurse infinitely if the plugin doesn't change anything
+        # The PluginManager should handle idempotency or specifically targeted nodes.
+
+        if isinstance(stmt, ReturnStmt):
             if stmt.value:
                 self.check_expr(stmt.value)
                 val_type = self.inferencer.infer(stmt.value)
@@ -682,11 +764,11 @@ class TypeChecker:
                         stmt.line,
                         stmt.col,
                     )
-        elif node_name == "ClassDef":
+        elif isinstance(stmt, ClassDef):
             prefix = f"{self.st.current_scope.name}_"
             self.check_class(stmt, prefix=prefix)
 
-        if isinstance(stmt, VarDecl):
+        elif isinstance(stmt, VarDecl):
             self.check_expr(stmt.value)
             inferred = self.inferencer.infer(stmt.value)
             ann = stmt.type_annotation
@@ -755,8 +837,8 @@ class TypeChecker:
                 raise self._err(
                     f"'if' condition must be bool, got {cond_type}", stmt.line, stmt.col
                 )
-            for s in stmt.then_body:
-                self.check_stmt(s)
+            stmt.then_body = self._check_body(stmt.then_body)
+            new_elif = []
             for cond, body in stmt.elif_clauses:
                 self.check_expr(cond)
                 elif_cond_type = self.inferencer.infer(cond)
@@ -766,51 +848,10 @@ class TypeChecker:
                         stmt.line,
                         stmt.col,
                     )
-                for s in body:
-                    self.check_stmt(s)
+                new_elif.append((cond, self._check_body(body)))
+            stmt.elif_clauses = tuple(new_elif)
             if stmt.else_body:
-                for s in stmt.else_body:
-                    self.check_stmt(s)
-        elif isinstance(stmt, ForIter):
-            self.check_expr(stmt.iterable)
-            it_t = self.inferencer.infer(stmt.iterable)
-            elem_t = IntType()
-            if isinstance(it_t, ListType):
-                elem_t = it_t.element_type
-            elif isinstance(it_t, StrType):
-                elem_t = StrType()
-            elif isinstance(it_t, DictType):
-                elem_t = it_t.key_type
-            
-            if isinstance(stmt.target, str):
-                self.st.define(stmt.target, elem_t)
-            else:
-                self._bind_target(stmt.target, elem_t)
-            for s in stmt.body:
-                self.check_stmt(s)
-        elif isinstance(stmt, TryStmt):
-            for s in stmt.body:
-                self.check_stmt(s)
-            for _, h_name, h_body in stmt.handlers:
-                if h_name:
-                    self.st.define(h_name, StrType())
-                for s in h_body:
-                    self.check_stmt(s)
-        elif isinstance(stmt, RaiseStmt):
-            if stmt.value:
-                self.check_expr(stmt.value)
-            if getattr(stmt, "cause", None):
-                self.check_expr(stmt.cause)
-        elif isinstance(stmt, WithStmt):
-            self.check_with(stmt)
-        elif isinstance(stmt, AssertStmt):
-            self.check_expr(stmt.test)
-            if stmt.msg:
-                self.check_expr(stmt.msg)
-        elif isinstance(stmt, GlobalStmt):
-            pass
-        elif isinstance(stmt, NonlocalStmt):
-            pass
+                stmt.else_body = self._check_body(stmt.else_body)
         elif isinstance(stmt, WhileStmt):
             self.check_expr(stmt.condition)
             cond_type = self.inferencer.infer(stmt.condition)
@@ -818,8 +859,7 @@ class TypeChecker:
                 raise self._err(
                     "Cannot infer type for 'while' condition", stmt.line, stmt.col
                 )
-            for s in stmt.body:
-                self.check_stmt(s)
+            stmt.body = self._check_body(stmt.body)
         elif isinstance(stmt, ForRange):
             self.check_expr(stmt.start)
             self.check_expr(stmt.stop)
@@ -836,19 +876,33 @@ class TypeChecker:
             if existing is not None and not isinstance(existing, IntType):
                  raise self._err(f"Cannot use '{target_name}' as loop target: already defined as {existing}", stmt.line, stmt.col)
             self.st.define(target_name, IntType())
-            for s in stmt.body:
-                self.check_stmt(s)
-        elif isinstance(stmt, ReturnStmt):
-            if stmt.value is not None:
-                self.check_expr(stmt.value)
-                ret_type = self.inferencer.infer(stmt.value)
-                if ret_type is not None and self._current_return_type is not None:
-                    if not _types_compatible(self._current_return_type, ret_type):
-                        raise self._err(
-                            f"Return type mismatch: expected {self._current_return_type}, got {ret_type}",
-                            stmt.line,
-                            stmt.col,
-                        )
+            stmt.body = self._check_body(stmt.body)
+        elif isinstance(stmt, ForIter):
+            self.check_expr(stmt.iterable)
+            it_t = self.inferencer.infer(stmt.iterable)
+            elem_t = IntType()
+            if isinstance(it_t, ListType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, StrType):
+                elem_t = StrType()
+            elif isinstance(it_t, DictType):
+                elem_t = it_t.key_type
+            
+            if isinstance(stmt.target, str):
+                self.st.define(stmt.target, elem_t)
+            else:
+                self._bind_target(stmt.target, elem_t)
+            stmt.body = self._check_body(stmt.body)
+        elif isinstance(stmt, TryStmt):
+            stmt.body = self._check_body(stmt.body)
+            new_handlers = []
+            for h_type, h_name, h_body in stmt.handlers:
+                if h_name:
+                    self.st.define(h_name, StrType())
+                new_handlers.append((h_type, h_name, self._check_body(h_body)))
+            stmt.handlers = tuple(new_handlers)
+            if hasattr(stmt, "finally_body") and stmt.finally_body:
+                stmt.finally_body = self._check_body(stmt.finally_body)
         elif isinstance(stmt, PrintStmt):
             for v in stmt.values:
                 self.check_expr(v)
@@ -862,11 +916,25 @@ class TypeChecker:
             self.check_expr(stmt.value)
         elif isinstance(stmt, DelStmt):
             self.check_expr(stmt.target)
-            self.check_expr(stmt.key)
-        elif isinstance(stmt, (BreakStmt, ContinueStmt)):
+            if stmt.key:
+                self.check_expr(stmt.key)
+        elif isinstance(stmt, (BreakStmt, ContinueStmt, PassStmt, GlobalStmt, NonlocalStmt)):
             pass
-        elif isinstance(stmt, (ClassDef, FunctionDef, ReturnStmt, PassStmt)):
-            pass
+        elif isinstance(stmt, RaiseStmt):
+            if stmt.value:
+                self.check_expr(stmt.value)
+            if getattr(stmt, "cause", None):
+                self.check_expr(stmt.cause)
+        elif isinstance(stmt, WithStmt):
+            self.check_with(stmt)
+        elif isinstance(stmt, AssertStmt):
+            self.check_expr(stmt.test)
+            if stmt.msg:
+                self.check_expr(stmt.msg)
+        elif isinstance(stmt, FunctionDef):
+            # Already handled by top level module pass but if we encounter it inside check_stmt
+            # (e.g. nested functions), handle it.
+            self.check_func_def(stmt)
         else:
             raise self._err(
                 f"Unsupported statement type: {type(stmt).__name__}",
@@ -898,8 +966,7 @@ class TypeChecker:
                 guard_type = self.inferencer.infer(case.guard)
                 if not isinstance(guard_type, BoolType):
                     raise self._err("Match guard must be a boolean expression", case.guard.line, case.guard.col, Py2RustTypeError)
-            for stmt in case.body:
-                self.check_stmt(stmt)
+            case.body = self._check_body(case.body)
 
     def _check_pattern(self, pattern: MatchPattern, subject_type: object) -> None:
         if isinstance(pattern, ValuePattern):
@@ -981,8 +1048,8 @@ class TypeChecker:
                 if isinstance(ctx_t, FileType):
                     res_t = FileType()
                 self._bind_target(item.optional_vars, res_t)
-        for s in node.body:
-            self.check_stmt(s)
+        node.body = self._check_body(node.body)
+        node.scope = self.st.current_scope
         self.st.exit_scope()
 
     def _bind_target(self, target, target_type):

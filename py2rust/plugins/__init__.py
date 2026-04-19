@@ -28,6 +28,8 @@ class PluginManager(NodeTransformer):
         self.load_plugin("typing")
         self.load_plugin("json")
         self.load_plugin("csv")
+        self.load_plugin("collections")
+        self.load_plugin("heapq")
 
     def load_plugin(self, module_name: str) -> Optional[BasePlugin]:
         if module_name in self.plugins:
@@ -59,6 +61,11 @@ class PluginManager(NodeTransformer):
                 except ImportError:
                     pass
         return None
+
+    def add_plugin(self, plugin: BasePlugin) -> None:
+        """Manually add a plugin instance."""
+        self.plugins[plugin.module_name] = plugin
+        plugin.register(self.st)
 
     def visit(self, node):
         """Run all plugins on the current node, then recurse."""

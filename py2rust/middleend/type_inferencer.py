@@ -7,6 +7,7 @@ from ..frontend.ast_nodes import (
     StrType,
     ListType,
     DictType,
+    HeapType,
     FileType,
     ClassType,
     TupleType,
@@ -15,7 +16,13 @@ from ..frontend.ast_nodes import (
     FunctionType,
     UnknownType,
     ExternalPythonType,
+    OptionalType,
+    UnionType,
+    DequeType,
+    UnitType,
     Name,
+    Slice,
+    SliceType,
 )
 from .symbol_table import SymbolTable
 
@@ -36,6 +43,8 @@ class TypeInferencer:
             return self._literal_map[node_name]()
         match node_name:
             case "Name":
+                if expr.name == "None":
+                    return UnitType()
                 return self.st.lookup(expr.name)
             case "BinOp":
                 return self._infer_binop(expr)
@@ -77,6 +86,8 @@ class TypeInferencer:
                 return StrType()
             case "FormattedValue":
                 return StrType()
+            case "Slice":
+                return SliceType()
         return None
 
     def _infer_lambda(self, expr):
@@ -154,7 +165,7 @@ class TypeInferencer:
 
     def _infer_list(self, expr):
         if not expr.elements:
-            return None
+            return ListType(element_type=UnknownType())
         
         element_types = [self.infer(e) for e in expr.elements]
         if not element_types or any(t is None for t in element_types):
@@ -214,7 +225,18 @@ class TypeInferencer:
 
     def _infer_subscript(self, expr):
         t = self.infer(expr.value)
+        idx_t = self.infer(expr.index)
+        
+        if isinstance(idx_t, SliceType):
+            if isinstance(t, (ListType, StrType)):
+                return t
+            return UnknownType()
+            
         if isinstance(t, ListType):
+            return t.element_type
+        if isinstance(t, DequeType):
+            return t.element_type
+        if isinstance(t, HeapType):
             return t.element_type
         if isinstance(t, StrType):
             return StrType()
@@ -234,6 +256,8 @@ class TypeInferencer:
                 return IntType()
         if expr.name == "open":
             return FileType()
+        if expr.name == "isinstance":
+            return BoolType()
         if expr.name == "zip":
             # zip(a, b) -> list[tuple[type_a, type_b]]
             types = []
@@ -254,7 +278,7 @@ class TypeInferencer:
             return FloatType()
         if expr.name == "bool":
             return BoolType()
-        if expr.name == "enumerate":
+        if expr.name == "enumerate" and len(expr.args) >= 1:
             # enumerate(a) -> list[tuple[int, type_a]]
             it_t = self.infer(expr.args[0])
             elem_t = UnknownType()
@@ -263,12 +287,35 @@ class TypeInferencer:
             elif isinstance(it_t, StrType):
                 elem_t = StrType()
             return ListType(element_type=TupleType(element_types=(IntType(), elem_t)))
+
+        if expr.name in ("deque", "collections.deque"):
+            if expr.args:
+                arg_t = self.infer(expr.args[0])
+                if isinstance(arg_t, ListType):
+                    return DequeType(element_type=arg_t.element_type)
+                elif isinstance(arg_t, StrType):
+                    return DequeType(element_type=StrType())
+            return DequeType(element_type=UnknownType())
+
+        if expr.name == "range":
+            return ListType(element_type=IntType())
         if expr.name == "map":
             # map(f, a) -> list[return_type_f]
             # Simple heuristic for now
             return ListType(element_type=UnknownType())
         if expr.name == "reversed":
             return self.infer(expr.args[0])
+
+        if expr.name in ("heappush", "heapq.heappush"):
+            return None
+        if expr.name in ("heappop", "heapq.heappop"):
+            if expr.args:
+                h_t = self.infer(expr.args[0])
+                if isinstance(h_t, (HeapType, ListType)):
+                    return h_t.element_type
+            return UnknownType()
+        if expr.name in ("heapify", "heapq.heapify"):
+            return None
         # Check scope first (for nested/mangled classes)
         curr_type = self.st.lookup(expr.name)
         if isinstance(curr_type, ClassType):
@@ -313,6 +360,10 @@ class TypeInferencer:
             if method_info:
                 method, _ = method_info
                 return method.return_type
+        if isinstance(val_type, DequeType):
+            if expr.method in ("pop", "popleft"):
+                return val_type.element_type
+            return None
         if isinstance(val_type, FileType):
             return self.infer_file_method(expr.method)
         if isinstance(val_type, ExternalPythonType):

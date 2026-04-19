@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 from ..utils.errors import SemanticError
+from ..frontend.ast_nodes import ExternalPythonType, StrType, ClassType
 
 
 class Scope:
@@ -8,6 +9,7 @@ class Scope:
         self.name = name
         self.parent = parent
         self._symbols: dict = {}
+        self._declared_in_ir: set[str] = set()
 
     def define(self, name: str, type_) -> None:
         self._symbols[name] = type_
@@ -72,6 +74,17 @@ class SymbolTable:
         self.pm = PluginManager(self)
         
         self._register_std_traits()
+        
+        # Register built-in constants
+        from ..frontend.ast_nodes import UnitType, StrType
+        self._global.define("None", UnitType())
+        self._global.define("__name__", StrType())
+        self._global.define("__file__", StrType())
+        
+        # Register built-in exceptions
+        for exc in ["Exception", "ValueError", "TypeError", "KeyError", "IndexError", "IOError", "ArithmeticError", "AssertionError", "ZeroDivisionError"]:
+            self.define_class(exc, (), {}, {}, {})
+            self.define_function(exc, [StrType()], ClassType(exc))
 
     def _register_std_traits(self):
         # Arithmetic
@@ -95,8 +108,12 @@ class SymbolTable:
     def current_scope(self) -> Scope:
         return self._current
 
-    def enter_scope(self, name: str) -> None:
-        new_scope = Scope(name, parent=self._current)
+    def enter_scope(self, name: str, scope_to_reuse: Optional[Scope] = None) -> None:
+        if scope_to_reuse:
+            new_scope = scope_to_reuse
+            new_scope.parent = self._current
+        else:
+            new_scope = Scope(name, parent=self._current)
         self._stack.append(new_scope)
         self._current = new_scope
 

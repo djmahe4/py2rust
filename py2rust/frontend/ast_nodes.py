@@ -3,37 +3,37 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 
-@dataclass(frozen=True)
+@dataclass
 class IntType:
     def __str__(self):
         return "int"
 
 
-@dataclass(frozen=True)
+@dataclass
 class FloatType:
     def __str__(self):
         return "float"
 
 
-@dataclass(frozen=True)
+@dataclass
 class BoolType:
     def __str__(self):
         return "bool"
 
 
-@dataclass(frozen=True)
+@dataclass
 class StrType:
     def __str__(self):
         return "str"
 
 
-@dataclass(frozen=True)
+@dataclass
 class UnitType:
     def __str__(self):
         return "None"
 
 
-@dataclass(frozen=True)
+@dataclass
 class ListType:
     element_type: object
 
@@ -41,7 +41,23 @@ class ListType:
         return f"list[{self.element_type}]"
 
 
-@dataclass(frozen=True)
+@dataclass
+class DequeType:
+    element_type: object
+
+    def __str__(self):
+        return f"deque[{self.element_type}]"
+
+
+@dataclass
+class HeapType:
+    element_type: object
+
+    def __str__(self):
+        return f"heap[{self.element_type}]"
+
+
+@dataclass
 class DictType:
     key_type: object
     value_type: object
@@ -50,7 +66,7 @@ class DictType:
         return f"dict[{self.key_type}, {self.value_type}]"
 
 
-@dataclass(frozen=True)
+@dataclass
 class TupleType:
     element_types: tuple
 
@@ -59,13 +75,19 @@ class TupleType:
         return f"tuple[{types}]"
 
 
-@dataclass(frozen=True)
+@dataclass
+class SliceType:
+    def __str__(self):
+        return "slice"
+
+
+@dataclass
 class FileType:
     def __str__(self):
         return "FileHandle"
 
 
-@dataclass(frozen=True)
+@dataclass
 class ClassType:
     name: str
     base: Optional[str] = None
@@ -76,7 +98,7 @@ class ClassType:
         return self.name
 
 
-@dataclass(frozen=True)
+@dataclass
 class EnumType:
     name: str
 
@@ -84,7 +106,7 @@ class EnumType:
         return f"Enum({self.name})"
 
 
-@dataclass(frozen=True)
+@dataclass
 class SetType:
     element_type: object
 
@@ -92,7 +114,24 @@ class SetType:
         return f"set[{self.element_type}]"
 
 
-@dataclass(frozen=True)
+@dataclass
+class OptionalType:
+    inner_type: object
+
+    def __str__(self):
+        return f"Optional[{self.inner_type}]"
+
+
+@dataclass
+class UnionType:
+    variants: tuple
+
+    def __str__(self):
+        variants = ", ".join(str(v) for v in self.variants)
+        return f"Union[{variants}]"
+
+
+@dataclass
 class FunctionType:
     param_types: tuple
     return_type: object
@@ -101,7 +140,7 @@ class FunctionType:
         params = ", ".join(str(t) for t in self.param_types)
         return f"({params}) -> {self.return_type}"
 
-@dataclass(frozen=True)
+@dataclass
 class TypeVarType:
     name: str
     bound: Optional[object] = None
@@ -110,7 +149,7 @@ class TypeVarType:
         return self.name
 
 
-@dataclass(frozen=True)
+@dataclass
 class GenericType:
     base: object
     params: tuple
@@ -119,13 +158,13 @@ class GenericType:
         params = ", ".join(str(p) for p in self.params)
         return f"{self.base}[{params}]"
 
-@dataclass(frozen=True)
+@dataclass
 class UnknownType:
     def __str__(self):
         return "Unknown"
 
 
-@dataclass(frozen=True)
+@dataclass
 class ExternalPythonType:
     module: str
     name: Optional[str] = None
@@ -151,45 +190,51 @@ AnyType = Union[
     UnknownType,
     FunctionType,
     ExternalPythonType,
+    OptionalType,
+    UnionType,
+    SliceType,
+    DequeType,
+    HeapType,
 ]
 
 
-@dataclass(frozen=True)
+@dataclass
 class IntLiteral:
     value: int
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class FloatLiteral:
     value: float
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class BoolLiteral:
     value: bool
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class StrLiteral:
     value: str
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Name:
     name: str
+    inferred_type: Optional[AnyType] = None
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class BinOp:
     op: str
     left: object
@@ -198,7 +243,7 @@ class BinOp:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class UnaryOp:
     op: str
     operand: object
@@ -206,7 +251,7 @@ class UnaryOp:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Comparison:
     op: str
     left: object
@@ -215,7 +260,7 @@ class Comparison:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class BoolOp:
     op: str
     values: tuple
@@ -223,28 +268,29 @@ class BoolOp:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ListLiteral:
-    elements: tuple
+    elements: tuple  # tuple of Expr
+    inferred_type: Optional[AnyType] = None
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class TupleLiteral:
     elements: tuple
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class DictLiteral:
     pairs: tuple
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Subscript:
     value: object
     index: object
@@ -252,7 +298,16 @@ class Subscript:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
+class Slice:
+    lower: Optional[object] = None
+    upper: Optional[object] = None
+    step: Optional[object] = None
+    line: int = 0
+    col: int = 0
+
+
+@dataclass
 class FunctionCall:
     name: str
     args: tuple
@@ -260,7 +315,7 @@ class FunctionCall:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class AttributeExpr:
     value: object
     attr: str
@@ -268,7 +323,7 @@ class AttributeExpr:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class MethodCall:
     value: object
     method: str
@@ -277,7 +332,7 @@ class MethodCall:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class NewExpr:
     class_name: str
     args: tuple
@@ -285,19 +340,19 @@ class NewExpr:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class SelfExpr:
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class AwaitExpr:
     value:object
     line: int = 0
     col: int = 0
 
-@dataclass(frozen=True)
+@dataclass
 class LambdaExpr:
     params: tuple  # tuple of Param
     body: Expr
@@ -305,7 +360,7 @@ class LambdaExpr:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Comprehension:
     target: object  # Name or TupleLiteral
     iterable: Expr
@@ -315,7 +370,7 @@ class Comprehension:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ListComp:
     elt: Expr
     generators: tuple  # tuple of Comprehension
@@ -323,7 +378,7 @@ class ListComp:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class DictComp:
     key: Expr
     value: Expr
@@ -332,7 +387,7 @@ class DictComp:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class SetComp:
     elt: Expr
     generators: tuple
@@ -340,7 +395,7 @@ class SetComp:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class FormattedValue:
     value: Expr
     conversion: int = -1
@@ -349,7 +404,7 @@ class FormattedValue:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class JoinedStr:
     values: tuple  # tuple of FormattedValue or StrLiteral
     line: int = 0
@@ -369,6 +424,7 @@ Expr = Union[
     ListLiteral,
     DictLiteral,
     Subscript,
+    Slice,
     FunctionCall,
     AttributeExpr,
     MethodCall,
@@ -385,26 +441,26 @@ Expr = Union[
 ]
 
 
-@dataclass(frozen=True)
+@dataclass
 class MatchPattern:
     pass
 
 
-@dataclass(frozen=True)
+@dataclass
 class ValuePattern(MatchPattern):
     value: Expr
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class NamePattern(MatchPattern):
     name: str
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ClassPattern(MatchPattern):
     class_name: str
     patterns: tuple  # tuple of MatchPattern
@@ -412,20 +468,20 @@ class ClassPattern(MatchPattern):
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class WildcardPattern(MatchPattern):
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class OrPattern(MatchPattern):
     patterns: tuple
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class AsPattern(MatchPattern):
     pattern: MatchPattern
     name: str
@@ -433,7 +489,7 @@ class AsPattern(MatchPattern):
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class VarDecl:
     name: str
     type_annotation: object
@@ -442,7 +498,7 @@ class VarDecl:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Assign:
     target: Union[str, tuple]
     value: object
@@ -450,7 +506,7 @@ class Assign:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class AugAssign:
     target: str
     op: str
@@ -459,7 +515,7 @@ class AugAssign:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class IfStmt:
     condition: object
     then_body: tuple
@@ -469,7 +525,7 @@ class IfStmt:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class WhileStmt:
     condition: object
     body: tuple
@@ -477,7 +533,7 @@ class WhileStmt:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ForRange:
     target: str
     start: object
@@ -488,7 +544,7 @@ class ForRange:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ForIter:
     target: str
     iterable: object
@@ -497,14 +553,14 @@ class ForIter:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ReturnStmt:
     value: object
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class PrintStmt:
     values: tuple
     sep: Optional[object] = None # Expr
@@ -513,7 +569,7 @@ class PrintStmt:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class SubscriptAssign:
     target: object
     index: object
@@ -522,25 +578,25 @@ class SubscriptAssign:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class BreakStmt:
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class PassStmt:
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ContinueStmt:
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class DelStmt:
     target: object
     key: object
@@ -548,7 +604,7 @@ class DelStmt:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class TryStmt:
     body: tuple
     handlers: tuple  # tuple of (type, name, body)
@@ -556,14 +612,14 @@ class TryStmt:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class RaiseStmt:
     value: object
     cause: object = None
     line: int = 0
     col: int = 0
 
-@dataclass(frozen=True)
+@dataclass
 class MatchStmt:
     subject: Expr
     cases: tuple  # tuple of MatchCase
@@ -571,7 +627,7 @@ class MatchStmt:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class MatchCase:
     pattern: MatchPattern
     guard: Optional[Expr]
@@ -580,7 +636,7 @@ class MatchCase:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class EnumDef:
     name: str
     variants: tuple  # tuple of (name, value)
@@ -588,20 +644,20 @@ class EnumDef:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class Alias:
     name: str
     asname: Optional[str] = None
 
 
-@dataclass(frozen=True)
+@dataclass
 class Import:
     names: tuple  # tuple of Alias
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ImportFrom:
     module: Optional[str]
     names: tuple  # tuple of Alias
@@ -610,7 +666,7 @@ class ImportFrom:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class WithItem:
     context_expr: object # Expr
     optional_vars: Optional[object] = None # Name or Tuple/List of Name
@@ -618,7 +674,7 @@ class WithItem:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class WithStmt:
     items: tuple # tuple of WithItem
     body: tuple # tuple of Stmt
@@ -627,7 +683,7 @@ class WithStmt:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class AssertStmt:
     test: object # Expr
     msg: Optional[object] = None # Expr
@@ -635,14 +691,14 @@ class AssertStmt:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class GlobalStmt:
     names: tuple # tuple of str
     line: int = 0
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class NonlocalStmt:
     names: tuple # tuple of str
     line: int = 0
@@ -677,7 +733,7 @@ Stmt = Union[
 ]
 
 
-@dataclass(frozen=True)
+@dataclass
 class Param:
     name: str
     type_annotation: object
@@ -685,7 +741,7 @@ class Param:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class FunctionDef:
     name: str
     params: tuple
@@ -697,7 +753,7 @@ class FunctionDef:
     col: int = 0
 
 
-@dataclass(frozen=True)
+@dataclass
 class ClassDef:
     name: str
     bases: tuple = ()
@@ -708,7 +764,7 @@ class ClassDef:
 
 
 
-@dataclass(frozen=True)
+@dataclass
 class Module:
     functions: tuple
     classes: tuple = ()

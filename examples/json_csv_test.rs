@@ -2,12 +2,14 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
+// csv = { version = "1.1" }
 // pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
+// pythonize = { version = "0.20" }
+// serde = { version = "1.0", features = ["derive"] }
+// serde_json = { version = "1.0" }
 //
 
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, BufRead, BufReader, Seek, SeekFrom};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json;
@@ -55,62 +57,27 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-struct FileHandle {
-    file: File,
-}
-
-impl FileHandle {
-    fn open(path: &str, mode: &str) -> std::io::Result<Self> {
-        let file = match mode {
-            "r" => File::open(path)?,
-            "w" => File::create(path)?,
-            "a" => OpenOptions::new().append(true).open(path)?,
-            "rb" => File::open(path)?,
-            "wb" => File::create(path)?,
-            "ab" => OpenOptions::new().append(true).open(path)?,
-            _ => File::open(path)?,
-        };
-        Ok(FileHandle { file })
-    }
-
-    fn read(&mut self) -> std::io::Result<String> {
-        let mut contents = String::new();
-        self.file.read_to_string(&mut contents)?;
-        Ok(contents)
-    }
-
-    fn readline(&mut self) -> std::io::Result<String> {
-        let mut reader = BufReader::new(&self.file);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        Ok(line)
-    }
-
-    fn write(&mut self, content: &str) -> std::io::Result<()> {
-        self.file.write_all(content.as_bytes())
-    }
-
-    fn close(self) -> std::io::Result<()> {
-        Ok(())
-    }
-
-    fn tell(&mut self) -> std::io::Result<u64> {
-        self.file.stream_position()
-    }
-
-    fn seek(&mut self, pos: u64) -> std::io::Result<u64> {
-        self.file.seek(SeekFrom::Start(pos))
+impl From<PyError> for pyo3::PyErr {
+    fn from(err: PyError) -> Self {
+        match err {
+            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
+            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
+            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
+            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
+            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
+            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
+        }
     }
 }
 
 fn test_json() -> Result<(), PyError> {
-    let mut k: i32 = 0;
+    let mut k: ExternalObject = ExternalObject::default();
 
     println!("{}", "Testing JSON support...".to_string());
     let data: ExternalObject = ExternalObject::new(Python::with_gil(|py| { let d = PyDict::new(py); d.set_item("a".to_string(), 1).unwrap(); d.set_item("b".to_string(), vec![1, 2, 3]).unwrap(); d.set_item("c".to_string(), HashMap::from([("d".to_string(), true)])).unwrap(); d.to_object(py) }));
-    let s: String = Python::with_gil(|py| { let val = pythonize::pythonize(data.obj.as_ref(py)).map_err(|e| PyError::ValueError(e.to_string()))?; let s = serde_json::to_string(&val).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(s) })?;
+    let s: String = Python::with_gil(|py| -> Result<String, PyError> { let json = py.import("json")?; let res = json.getattr("dumps")?.call1((data.obj.as_ref(py),))?; Ok(res.extract()?) })?;
     println!("{} {}", "Serialized:".to_string(), s);
-    let mut data2: ExternalObject = Python::with_gil(|py| { let v: serde_json::Value = serde_json::from_str(&s).map_err(|e| PyError::ValueError(e.to_string()))?; let obj = pythonize::depythonize(py, &v).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(ExternalObject::new(obj)) })?;
+    let mut data2: ExternalObject = Python::with_gil(|py| -> Result<ExternalObject, PyError> { let v: serde_json::Value = serde_json::from_str(&s).map_err(|e| PyError::ValueError(e.to_string()))?; let obj = pythonize::pythonize(py, &v).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(ExternalObject::new(obj)) })?;
     println!("{} {}", "Deserialized 'a':".to_string(), data2.getitem("a".to_string())?);
     println!("{} {}", "Deserialized 'b':".to_string(), data2.getitem("b".to_string())?);
     data2.setitem("a".to_string(), 42)?;
@@ -126,14 +93,14 @@ fn test_json() -> Result<(), PyError> {
 }
 
 fn test_csv() -> Result<(), PyError> {
-    let mut row: i32 = 0;
+    let mut row: ExternalObject = ExternalObject::default();
 
     println!("{}", "\nTesting CSV support...".to_string());
-    let mut f1: FileHandle = FileHandle::open(&"test.csv".to_string(), &"w".to_string())?;
+    let mut f1: ExternalObject = ExternalObject::call_builtin("open", ("test.csv".to_string(), "w".to_string()))?;
     f1.write(&"name,age\nalice,30\nbob,25\n".to_string())?;
     f1.close()?;
-    let mut f2: FileHandle = FileHandle::open(&"test.csv".to_string(), &"r".to_string())?;
-    let reader: ExternalObject = ExternalObject::new_csv_reader(f2)?;
+    let mut f2: ExternalObject = ExternalObject::call_builtin("open", ("test.csv".to_string(), "r".to_string()))?;
+    let reader: ExternalObject = ExternalObject::new_csv_reader(&f2)?;
     {
         '__loop_0: for __loop_val in reader.iter()? {
             row = __loop_val.clone();
@@ -147,14 +114,7 @@ fn test_csv() -> Result<(), PyError> {
 fn test_attr() -> Result<(), PyError> {
     Ok(())
 }
-fn main() {
-    if let Err(e) = _main() {
-        eprintln!("Py2Rust Error: {}", e);
-        std::process::exit(1);
-    }
-}
-
-fn _main() -> Result<(), PyError> {
+fn main() -> Result<(), PyError> {
     test_json()?;
     
     test_csv()?;
@@ -163,6 +123,7 @@ fn _main() -> Result<(), PyError> {
     
     Ok(())
 }
+
 
 #[derive(Clone)]
 pub struct ExternalObject {
@@ -174,10 +135,23 @@ impl From<PyErr> for PyError {
         PyError::Exception(err.to_string())
     }
 }
+impl Default for ExternalObject {
+    fn default() -> Self {
+        Python::with_gil(|py| Self::new(py.None()))
+    }
+}
 
 impl ExternalObject {
     pub fn new(obj: PyObject) -> Self {
         Self { obj }
+    }
+
+    pub fn from_module(module: &str, name: &str) -> Self {
+        Python::with_gil(|py| {
+            let m = py.import(module).expect("Failed to import module");
+            let attr = m.getattr(name).expect("Failed to get attribute from module");
+            Self::new(attr.to_object(py))
+        })
     }
 
     pub fn load_module(module: &str) -> PyResult<Self> {
@@ -247,6 +221,7 @@ impl ExternalObject {
 
     pub fn setattr(&self, name: &str, value: impl IntoPy<PyObject>) -> PyResult<()> {
         Python::with_gil(|py| {
+            let value = value.into_py(py);
             self.obj.as_ref(py).setattr(name, value)?;
             Ok(())
         })
@@ -254,6 +229,8 @@ impl ExternalObject {
 
     pub fn setitem(&self, key: impl IntoPy<PyObject>, value: impl IntoPy<PyObject>) -> PyResult<()> {
         Python::with_gil(|py| {
+            let key = key.into_py(py);
+            let value = value.into_py(py);
             self.obj.as_ref(py).set_item(key, value)?;
             Ok(())
         })
@@ -261,8 +238,39 @@ impl ExternalObject {
 
     pub fn getitem(&self, key: impl IntoPy<PyObject>) -> PyResult<Self> {
         Python::with_gil(|py| {
+            let key = key.into_py(py);
             let item = self.obj.as_ref(py).get_item(key)?;
             Ok(Self::new(item.to_object(py)))
+        })
+    }
+
+    pub fn call_builtin(name: &str, args: impl IntoPy<Py<PyTuple>>) -> PyResult<Self> {
+        Python::with_gil(|py| {
+            let builtins = py.import("builtins")?;
+            let func = builtins.getattr(name)?;
+            let res = func.call1(args)?;
+            Ok(Self::new(res.to_object(py)))
+        })
+    }
+
+    pub fn read(&self) -> PyResult<String> {
+        Python::with_gil(|py| {
+            let res = self.obj.call_method0(py, "read")?;
+            res.extract(py)
+        })
+    }
+
+    pub fn write(&self, data: &str) -> PyResult<()> {
+        Python::with_gil(|py| {
+            self.obj.call_method1(py, "write", (data,))?;
+            Ok(())
+        })
+    }
+
+    pub fn close(&self) -> PyResult<()> {
+        Python::with_gil(|py| {
+            self.obj.call_method0(py, "close")?;
+            Ok(())
         })
     }
 
@@ -283,20 +291,11 @@ impl ExternalObject {
         })
     }
 
-    pub fn new_csv_reader(file_obj: Self) -> PyResult<Self> {
+    pub fn new_csv_reader(file_obj: &Self) -> PyResult<Self> {
         Python::with_gil(|py| {
-            let read_method = file_obj.obj.getattr(py, "read")?;
-            let content: String = read_method.call0(py)?.extract(py)?;
-            let mut reader = csv::ReaderBuilder::new()
-                .has_headers(false)
-                .from_reader(content.as_bytes());
-            let mut rows = Vec::new();
-            for result in reader.records() {
-                let record = result.map_err(|e| PyError::ValueError(e.to_string()))?;
-                let row: Vec<String> = record.iter().map(|s| s.to_string()).collect();
-                rows.push(row.to_object(py));
-            }
-            Ok(Self::new(rows.to_object(py)))
+            let csv = py.import("csv")?;
+            let reader = csv.getattr("reader")?.call1((file_obj.obj.as_ref(py),))?;
+            Ok(Self::new(reader.to_object(py)))
         })
     }
 }
@@ -329,5 +328,9 @@ impl IntoPy<PyObject> for ExternalObject {
 
 /*
 [dependencies]
+csv = { version = "1.1" }
 pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
+pythonize = { version = "0.20" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
 */
