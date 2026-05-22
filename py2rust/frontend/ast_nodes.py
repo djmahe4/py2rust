@@ -168,6 +168,7 @@ class UnknownType:
 class ExternalPythonType:
     module: str
     name: Optional[str] = None
+    is_local: bool = False
 
     def __str__(self):
         if self.name:

@@ -128,6 +128,7 @@ class IRFunctionType:
 class IRExternalPythonType:
     module: str
     name: Optional[str] = None
+    is_local: bool = False
 
     def __str__(self):
         return f"PyObject({self.module}.{self.name if self.name else ''})"

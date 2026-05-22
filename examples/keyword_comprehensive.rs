@@ -93,22 +93,13 @@ fn test_keywords_combinations() -> Result<(), PyError> {
     let x: i32 = 10;
     assert!(x == 10, "{}", "x should be 10".to_string());
     {
-        let mut f = ExternalObject::call_builtin(
-            "open",
-            ("test_keywords.txt".to_string(), "w".to_string()),
-        )?;
+        let mut f = ExternalObject::call_builtin("open", ("test_keywords.txt".to_string(), "w".to_string()))?;
         f.write(&"test".to_string())?;
     }
     {
-        let mut f1 = ExternalObject::call_builtin(
-            "open",
-            ("test_keywords.txt".to_string(), "r".to_string()),
-        )?;
+        let mut f1 = ExternalObject::call_builtin("open", ("test_keywords.txt".to_string(), "r".to_string()))?;
         {
-            let mut f2 = ExternalObject::call_builtin(
-                "open",
-                ("test_keywords_copy.txt".to_string(), "w".to_string()),
-            )?;
+            let mut f2 = ExternalObject::call_builtin("open", ("test_keywords_copy.txt".to_string(), "w".to_string()))?;
             content = f1.read()?;
             f2.write(&content)?;
         }
@@ -124,6 +115,7 @@ fn main() -> Result<(), PyError> {
 
     Ok(())
 }
+
 
 #[derive(Clone)]
 pub struct ExternalObject {
@@ -149,9 +141,7 @@ impl ExternalObject {
     pub fn from_module(module: &str, name: &str) -> Self {
         Python::with_gil(|py| {
             let m = py.import(module).expect("Failed to import module");
-            let attr = m
-                .getattr(name)
-                .expect("Failed to get attribute from module");
+            let attr = m.getattr(name).expect("Failed to get attribute from module");
             Self::new(attr.to_object(py))
         })
     }
@@ -185,12 +175,7 @@ impl ExternalObject {
                 if let Ok(entries) = std::fs::read_dir(lib_dir) {
                     for entry in entries.flatten() {
                         let p = entry.path();
-                        if p.is_dir()
-                            && p.file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .starts_with("python")
-                        {
+                        if p.is_dir() && p.file_name().unwrap_or_default().to_string_lossy().starts_with("python") {
                             let site_packages = p.join("site-packages");
                             if site_packages.exists() {
                                 let sp_str = site_packages.to_string_lossy().to_string();
@@ -234,11 +219,7 @@ impl ExternalObject {
         })
     }
 
-    pub fn setitem(
-        &self,
-        key: impl IntoPy<PyObject>,
-        value: impl IntoPy<PyObject>,
-    ) -> PyResult<()> {
+    pub fn setitem(&self, key: impl IntoPy<PyObject>, value: impl IntoPy<PyObject>) -> PyResult<()> {
         Python::with_gil(|py| {
             let key = key.into_py(py);
             let value = value.into_py(py);
@@ -286,7 +267,9 @@ impl ExternalObject {
     }
 
     pub fn len(&self) -> usize {
-        Python::with_gil(|py| self.obj.as_ref(py).len().unwrap_or(0))
+        Python::with_gil(|py| {
+            self.obj.as_ref(py).len().unwrap_or(0)
+        })
     }
 
     pub fn iter(&self) -> PyResult<Vec<Self>> {
@@ -312,12 +295,7 @@ impl ExternalObject {
 impl std::fmt::Display for ExternalObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::with_gil(|py| {
-            let s = self
-                .obj
-                .as_ref(py)
-                .str()
-                .and_then(|s| s.extract::<String>())
-                .unwrap_or_else(|_| "<external object>".to_string());
+            let s = self.obj.as_ref(py).str().and_then(|s| s.extract::<String>()).unwrap_or_else(|_| "<external object>".to_string());
             write!(f, "{}", s)
         })
     }
@@ -326,12 +304,7 @@ impl std::fmt::Display for ExternalObject {
 impl std::fmt::Debug for ExternalObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::with_gil(|py| {
-            let r = self
-                .obj
-                .as_ref(py)
-                .repr()
-                .map(|r| r.to_string())
-                .unwrap_or_else(|_| "<external object>".to_string());
+            let r = self.obj.as_ref(py).repr().map(|r| r.to_string()).unwrap_or_else(|_| "<external object>".to_string());
             write!(f, "{:?}", r)
         })
     }

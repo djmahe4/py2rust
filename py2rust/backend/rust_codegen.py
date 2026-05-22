@@ -523,6 +523,8 @@ class RustCodegen:
             params = ", ".join(self._get_rust_type(p) for p in t.params)
             return f"{base}<{params}>"
         if isinstance(t, IRExternalPythonType):
+            if t.is_local:
+                return t.name if t.name else t.module.split(".")[-1]
             self._uses_python_wrappers = True
             return "ExternalObject"
         raise ValueError(f"Unknown type {type(t).__name__}")
@@ -717,6 +719,29 @@ class RustCodegen:
 
         # Imports
         imports = []
+
+        # Local Module Imports from DependencyManager
+        resolver = None
+        repo_root = getattr(self.config, "repo_root", None)
+        if repo_root:
+            package_dir = getattr(self.config, "package_dir", None)
+            from py2rust.project.import_resolver import ImportResolver
+            from pathlib import Path
+            resolver = ImportResolver(
+                repo_root=Path(repo_root),
+                package_dir=package_dir
+            )
+
+        current_module = None
+        if resolver and ir_mod.filename:
+            from pathlib import Path
+            current_module = resolver.get_module_for_file(Path(ir_mod.filename))
+
+        if self.dependency_manager and current_module:
+            use_statements = self.dependency_manager.get_module_imports(current_module)
+            for stmt in use_statements:
+                imports.append(stmt)
+
         if self._uses_hashmap:
             imports.append("use std::collections::HashMap;")
         if self._uses_hashset:
@@ -1323,6 +1348,9 @@ class RustCodegen:
                 return "ExternalObject::default()"
             return 'FileHandle::open("", "r").unwrap()'
         if isinstance(ir_type, IRExternalPythonType):
+            if ir_type.is_local:
+                rust_type = self._get_rust_type(ir_type)
+                return f"{rust_type}::new()"
             return "ExternalObject::default()"
         return "0"
 
@@ -1370,7 +1398,7 @@ class RustCodegen:
             is_ext = False
             if isinstance(obj_type, IRClassType) and obj_type.name == "ExternalObject":
                 is_ext = True
-            elif isinstance(obj_type, IRExternalPythonType):
+            elif isinstance(obj_type, IRExternalPythonType) and not obj_type.is_local:
                 is_ext = True
             
             if is_ext:
@@ -1510,7 +1538,7 @@ class RustCodegen:
             is_ext = False
             if isinstance(stmt.iterable_type, IRClassType) and stmt.iterable_type.name == "ExternalObject":
                 is_ext = True
-            elif isinstance(stmt.iterable_type, IRExternalPythonType):
+            elif isinstance(stmt.iterable_type, IRExternalPythonType) and not stmt.iterable_type.is_local:
                 is_ext = True
 
             if isinstance(stmt.iterable_type, IRDictType):
@@ -1741,7 +1769,7 @@ class RustCodegen:
             is_ext = False
             if isinstance(target_type, IRClassType) and target_type.name == "ExternalObject":
                 is_ext = True
-            elif isinstance(target_type, IRExternalPythonType):
+            elif isinstance(target_type, IRExternalPythonType) and not target_type.is_local:
                 is_ext = True
             
             if is_ext:
@@ -1950,7 +1978,7 @@ class RustCodegen:
             return f'"{escaped}".to_string()'
         elif isinstance(expr, IRName):
             # Check if this name refers to an external python module/object
-            if isinstance(expr.result_type, IRExternalPythonType):
+            if isinstance(expr.result_type, IRExternalPythonType) and not expr.result_type.is_local:
                  # If it's a local variable, field, or parameter, use the name directly
                  if expr.name in self._decl_types or expr.name == "self":
                      return _mangle(expr.name)
@@ -2057,7 +2085,7 @@ class RustCodegen:
         elif isinstance(expr, IRDictLit):
             self._uses_hashmap = True
             is_ext = False
-            if isinstance(expr.value_type, IRExternalPythonType) or (isinstance(expr.value_type, IRClassType) and expr.value_type.name == "ExternalObject"):
+            if (isinstance(expr.value_type, IRExternalPythonType) and not expr.value_type.is_local) or (isinstance(expr.value_type, IRClassType) and expr.value_type.name == "ExternalObject"):
                 is_ext = True
 
             if is_ext:
@@ -2098,7 +2126,7 @@ class RustCodegen:
             # Handle ExternalObject indexing (e.g., json data)
             is_ext = False
             if (isinstance(expr.value_type, IRClassType) and expr.value_type.name == "ExternalObject") or \
-               (isinstance(expr.value_type, IRExternalPythonType)):
+               (isinstance(expr.value_type, IRExternalPythonType) and not expr.value_type.is_local):
                 is_ext = True
             
             if is_ext:
@@ -2266,7 +2294,7 @@ class RustCodegen:
                 self._uses_pythonize = True
                 arg = self._gen_expr(expr.args[0])
                 arg_t = getattr(expr.args[0], "result_type", None)
-                is_ext = isinstance(arg_t, IRExternalPythonType) or (isinstance(arg_t, IRClassType) and arg_t.name == "ExternalObject")
+                is_ext = (isinstance(arg_t, IRExternalPythonType) and not arg_t.is_local) or (isinstance(arg_t, IRClassType) and arg_t.name == "ExternalObject")
                 if is_ext:
                     # Use Python's json.dumps for maximum compatibility with external objects
                     return f"Python::with_gil(|py| -> Result<String, PyError> {{ let json = py.import(\"json\")?; let res = json.getattr(\"dumps\")?.call1(({arg}.obj.as_ref(py),))?; Ok(res.extract()?) }})?"
@@ -2311,7 +2339,7 @@ class RustCodegen:
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             
             # Use call() if it's an external function
-            if isinstance(expr.return_type, IRExternalPythonType):
+            if isinstance(expr.return_type, IRExternalPythonType) and not expr.return_type.is_local:
                 func_name = self._gen_expr(IRName(name=expr.name, result_type=expr.return_type))
                 if not args:
                     tuple_args = "()"
@@ -2361,8 +2389,8 @@ class RustCodegen:
             if isinstance(expr.result_type, IREnumType):
                 return f"{val}::{_mangle(expr.field)}"
             
-            # External object attribute access
-            if isinstance(getattr(expr.value, "result_type", None), IRExternalPythonType):
+            v_type = getattr(expr.value, "result_type", None)
+            if isinstance(v_type, IRExternalPythonType) and not v_type.is_local:
                 return f'{val}.getattr("{expr.field}")?'
 
             return f"{val}.{_mangle(expr.field)}"
@@ -2370,8 +2398,8 @@ class RustCodegen:
             val = self._gen_expr(expr.value)
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             
-            # External object method call (could be heapq module call)
-            if isinstance(getattr(expr.value, "result_type", None), IRExternalPythonType):
+            v_type = getattr(expr.value, "result_type", None)
+            if isinstance(v_type, IRExternalPythonType) and not v_type.is_local:
                 val_type = expr.value.result_type
                 if val_type.module == "heapq":
                     if expr.method == "heappush":

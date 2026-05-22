@@ -67,6 +67,7 @@ impl Counter {
     }
 }
 
+
 fn __py_main() -> Result<(), PyError> {
     let mut c: Counter = Counter::new()?;
     c.increment()?;

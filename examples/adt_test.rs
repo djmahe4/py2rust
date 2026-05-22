@@ -59,12 +59,7 @@ fn describe_number(x: Option<i32>) -> Result<String, PyError> {
     if x.is_none() {
         return Ok("Nothing".to_string());
     } else {
-        return Ok(format!(
-            "Number: {}",
-            x.as_ref()
-                .map(|v| format!("{}", v))
-                .unwrap_or("None".to_string())
-        ));
+        return Ok(format!("Number: {}", x.as_ref().map(|v| format!("{}", v)).unwrap_or("None".to_string())));
     }
     Ok(String::new())
 }

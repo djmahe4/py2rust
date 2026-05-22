@@ -53,56 +53,20 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 fn __py_main() -> Result<(), PyError> {
-    let add: _ = |x, y| (x + y);
+    let add: _ = |x, y| { (x + y) };
     println!("{}", add(10, 20));
     let nums: Vec<i32> = vec![1, 2, 3, 4, 5, 6];
-    let evens: Vec<i32> = {
-        let mut __res = Vec::<i32>::new();
-        for &x in &nums {
-            if (x % 2) == 0 {
-                __res.push(x);
-            }
-        }
-        __res
-    };
+    let evens: Vec<i32> = { let mut __res = Vec::<i32>::new(); for &x in &nums { if (x % 2) == 0 { __res.push(x);  }  }  __res };
     println!("{:?}", evens);
-    let squares: Vec<i32> = {
-        let mut __res = Vec::<i32>::new();
-        for &x in &nums {
-            __res.push((x * x));
-        }
-        __res
-    };
+    let squares: Vec<i32> = { let mut __res = Vec::<i32>::new(); for &x in &nums { __res.push((x * x));  }  __res };
     println!("{:?}", squares);
     let xs: Vec<i32> = vec![1, 2];
     let ys: Vec<i32> = vec![10, 20];
-    let pairs: Vec<(i32, i32)> = {
-        let mut __res = Vec::<(i32, i32)>::new();
-        for &x in &xs {
-            for &y in &ys {
-                __res.push((x, y));
-            }
-        }
-        __res
-    };
+    let pairs: Vec<(i32, i32)> = { let mut __res = Vec::<(i32, i32)>::new(); for &x in &xs { for &y in &ys { __res.push((x, y));  }  }  __res };
     println!("{:?}", pairs);
-    let unique_nums: HashSet<i32> = {
-        let mut __res = HashSet::<i32>::new();
-        for &x in &nums {
-            __res.insert((x % 3));
-        }
-        __res
-    };
+    let unique_nums: HashSet<i32> = { let mut __res = HashSet::<i32>::new(); for &x in &nums { __res.insert((x % 3));  }  __res };
     println!("{}", unique_nums.len() as i32);
-    let mapping: HashMap<i32, i32> = {
-        let mut __res = HashMap::<i32, i32>::new();
-        for &x in &nums {
-            if x < 4 {
-                __res.insert(x, (x * 10));
-            }
-        }
-        __res
-    };
+    let mapping: HashMap<i32, i32> = { let mut __res = HashMap::<i32, i32>::new(); for &x in &nums { if x < 4 { __res.insert(x, (x * 10));  }  }  __res };
     println!("{:?}", mapping);
     return Ok(());
 }

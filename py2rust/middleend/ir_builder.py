@@ -220,7 +220,7 @@ def _to_ir_type(t):
     if isinstance(t, GenericType):
         return IRGenericType(base=_to_ir_type(t.base), params=tuple(_to_ir_type(p) for p in t.params))
     if isinstance(t, ExternalPythonType):
-        return IRExternalPythonType(module=t.module, name=t.name)
+        return IRExternalPythonType(module=t.module, name=t.name, is_local=t.is_local)
     if isinstance(t, OptionalType):
         return IROptionType(inner_type=_to_ir_type(t.inner_type))
     if isinstance(t, UnionType):
@@ -1287,7 +1287,7 @@ class IRBuilder:
                 # Check for external python object/module
                 lookup_res = self.st.lookup(expr.name)
                 if isinstance(lookup_res, ExternalPythonType):
-                    ir_ret = IRExternalPythonType(module=lookup_res.module, name=f"{lookup_res.name or expr.name}()")
+                    ir_ret = IRExternalPythonType(module=lookup_res.module, name=f"{lookup_res.name or expr.name}()", is_local=lookup_res.is_local)
                     args = [self._build_expr(a) for a in expr.args]
                     return IRFunctionCall(name=expr.name, args=tuple(args), return_type=ir_ret, is_fallible=True)
 
@@ -1313,7 +1313,7 @@ class IRBuilder:
             # Fallback for external python types
             val_type = self.inferencer.infer(expr.value)
             if isinstance(val_type, ExternalPythonType):
-                ir_result = IRExternalPythonType(module=val_type.module, name=f"{val_type.name or ''}.{expr.attr}")
+                ir_result = IRExternalPythonType(module=val_type.module, name=f"{val_type.name or ''}.{expr.attr}", is_local=val_type.is_local)
                 return IRStructAccess(value=val, field=expr.attr, result_type=ir_result)
             
             raise self._err(
@@ -1385,7 +1385,7 @@ class IRBuilder:
                     file=file_val, method=expr.method, args=tuple(ir_args)
                 )
             if isinstance(val_type, ExternalPythonType):
-                ir_ret = IRExternalPythonType(module=val_type.module, name=f"{val_type.name or ''}.{expr.method}()")
+                ir_ret = IRExternalPythonType(module=val_type.module, name=f"{val_type.name or ''}.{expr.method}()", is_local=val_type.is_local)
                 args = [self._build_expr(a) for a in expr.args]
                 return IRMethodCall(
                     value=val,

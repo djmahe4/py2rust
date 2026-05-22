@@ -175,28 +175,121 @@ class TypeChecker:
         return False
 
     def check_module(self, module: Module) -> Module:
-        # Process Imports first to load plugins
+        from pathlib import Path
+        from py2rust.project.import_resolver import ImportResolver
+
+        # Initialize resolver if project context is available
+        resolver = None
+        repo_root = getattr(self.st.config, "repo_root", None)
+        if repo_root:
+            package_dir = getattr(self.st.config, "package_dir", None)
+            resolver = ImportResolver(
+                repo_root=Path(repo_root),
+                package_dir=package_dir
+            )
+
+        current_module = None
+        if resolver and module.filename:
+            current_module = resolver.get_module_for_file(Path(module.filename))
+
+        # Process Imports first to load plugins or resolve intra-repo imports
         for imp in module.imports:
             plugin = None
             if isinstance(imp, Import):
                 for alias in imp.names:
-                    plugin = self.st.pm.load_plugin(alias.name)
-                    if plugin is None and not getattr(self.st.config, "mock_mode", False):
-                        raise self._sem_err(f"Unsupported import: '{alias.name}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
-                    
-                    # Register alias in symbol table
-                    alias_name = alias.asname if alias.asname else alias.name
-                    self.st.define(alias_name, ExternalPythonType(module=alias.name))
-            elif isinstance(imp, ImportFrom):
-                if imp.module:
-                    plugin = self.st.pm.load_plugin(imp.module)
-                    if plugin is None and not getattr(self.st.config, "mock_mode", False):
-                        raise self._sem_err(f"Unsupported import: '{imp.module}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
-                    
-                    for alias in imp.names:
+                    resolved_mod = alias.name
+                    is_local = resolver.is_intra_repo(resolved_mod) if resolver else False
+
+                    if is_local:
                         alias_name = alias.asname if alias.asname else alias.name
-                        self.st.define(alias_name, ExternalPythonType(module=imp.module, name=alias.name))
-            # Call transform_ast to allow plugins to register aliases/members
+                        self.st.define(alias_name, ExternalPythonType(module=resolved_mod, is_local=True))
+
+                        if current_module and self.st.dependency_manager:
+                            try:
+                                self.st.dependency_manager.add_import_edge(current_module, resolved_mod)
+                            except ValueError as e:
+                                raise self._sem_err(str(e), imp.line, imp.col)
+
+                            parts = resolved_mod.split(".")
+                            rust_path = "::".join(parts)
+                            if alias.asname:
+                                use_stmt = f"use crate::{rust_path} as {alias.asname};"
+                            else:
+                                use_stmt = f"use crate::{rust_path};"
+                            self.st.dependency_manager.add_module_import(current_module, use_stmt)
+                    else:
+                        plugin = self.st.pm.load_plugin(alias.name)
+                        if plugin is None and not getattr(self.st.config, "mock_mode", False):
+                            raise self._sem_err(f"Unsupported import: '{alias.name}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
+                        
+                        alias_name = alias.asname if alias.asname else alias.name
+                        self.st.define(alias_name, ExternalPythonType(module=alias.name, is_local=False))
+
+            elif isinstance(imp, ImportFrom):
+                if imp.module or imp.level > 0:
+                    if imp.level > 0:
+                        if not current_module or not resolver:
+                            raise self._sem_err(
+                                "Relative imports require a project context with repository root configured.",
+                                imp.line,
+                                imp.col,
+                            )
+                        try:
+                            base_mod_name = resolver.resolve_relative_import(current_module, imp.level, imp.module)
+                        except ValueError as e:
+                            raise self._sem_err(str(e), imp.line, imp.col)
+                    else:
+                        base_mod_name = imp.module
+
+                    for alias in imp.names:
+                        if base_mod_name:
+                            full_target = f"{base_mod_name}.{alias.name}"
+                        else:
+                            full_target = alias.name
+
+                        if resolver and (full_target in resolver.local_modules):
+                            resolved_mod = full_target
+                            symbol_name = None
+                        elif resolver and (base_mod_name in resolver.local_modules):
+                            resolved_mod = base_mod_name
+                            symbol_name = alias.name
+                        else:
+                            resolved_mod = base_mod_name
+                            symbol_name = alias.name
+
+                        is_local = resolver.is_intra_repo(resolved_mod) if resolver and resolved_mod else False
+
+                        if is_local:
+                            alias_name = alias.asname if alias.asname else alias.name
+                            self.st.define(alias_name, ExternalPythonType(module=resolved_mod, name=symbol_name, is_local=True))
+
+                            if current_module and self.st.dependency_manager:
+                                try:
+                                    self.st.dependency_manager.add_import_edge(current_module, resolved_mod)
+                                except ValueError as e:
+                                    raise self._sem_err(str(e), imp.line, imp.col)
+
+                                parts = resolved_mod.split(".")
+                                rust_path = "::".join(parts)
+                                if symbol_name:
+                                    if alias.asname:
+                                        use_stmt = f"use crate::{rust_path}::{symbol_name} as {alias.asname};"
+                                    else:
+                                        use_stmt = f"use crate::{rust_path}::{symbol_name};"
+                                else:
+                                    if alias.asname:
+                                        use_stmt = f"use crate::{rust_path} as {alias.asname};"
+                                    else:
+                                        use_stmt = f"use crate::{rust_path};"
+                                self.st.dependency_manager.add_module_import(current_module, use_stmt)
+                        else:
+                            plugin = self.st.pm.load_plugin(resolved_mod) if resolved_mod else None
+                            if plugin is None and not getattr(self.st.config, "mock_mode", False):
+                                raise self._sem_err(f"Unsupported import: '{resolved_mod}'. No plugin found and mock_mode is disabled.", imp.line, imp.col)
+                            
+                            alias_name = alias.asname if alias.asname else alias.name
+                            self.st.define(alias_name, ExternalPythonType(module=resolved_mod or "", name=alias.name, is_local=False))
+
             self.st.pm.transform_ast(imp, self)
 
         # Allow plugins to transform the whole module (e.g. ClassDef -> EnumDef)

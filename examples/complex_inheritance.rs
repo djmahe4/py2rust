@@ -61,14 +61,16 @@ pub trait CTrait: ATrait {
     fn specific_c(&self) -> Result<String, PyError>;
 }
 
-pub trait DTrait: BTrait + CTrait {}
+pub trait DTrait: BTrait + CTrait {
+}
 
 #[derive(Clone, Debug)]
-struct A {}
+struct A {
+}
 
 impl A {
     fn new() -> Result<Self, PyError> {
-        Ok(Self {})
+        Ok(Self {  })
     }
 }
 
@@ -78,12 +80,14 @@ impl ATrait for A {
     }
 }
 
+
 #[derive(Clone, Debug)]
-struct B {}
+struct B {
+}
 
 impl B {
     fn new() -> Result<Self, PyError> {
-        Ok(Self {})
+        Ok(Self {  })
     }
 }
 
@@ -99,12 +103,14 @@ impl ATrait for B {
     }
 }
 
+
 #[derive(Clone, Debug)]
-struct C {}
+struct C {
+}
 
 impl C {
     fn new() -> Result<Self, PyError> {
-        Ok(Self {})
+        Ok(Self {  })
     }
 }
 
@@ -120,16 +126,19 @@ impl ATrait for C {
     }
 }
 
+
 #[derive(Clone, Debug)]
-struct D {}
+struct D {
+}
 
 impl D {
     fn new() -> Result<Self, PyError> {
-        Ok(Self {})
+        Ok(Self {  })
     }
 }
 
-impl DTrait for D {}
+impl DTrait for D {
+}
 
 impl BTrait for D {
     fn specific_b(&self) -> Result<String, PyError> {
@@ -148,6 +157,7 @@ impl ATrait for D {
         return Ok("D".to_string());
     }
 }
+
 
 fn __py_main() -> Result<(), PyError> {
     let d: D = D::new()?;

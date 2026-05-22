@@ -72,11 +72,17 @@ def compile_file(config: CompilerConfig) -> bool:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_dir_path = Path(tmp_dir)
             
+            env = os.environ.copy()
+            cargo_bin = os.path.expanduser("~/.cargo/bin")
+            if cargo_bin not in env.get("PATH", ""):
+                env["PATH"] = f"{cargo_bin}:{env.get('PATH', '')}"
+            env["PYO3_USE_ABI3_FORWARD_COMPATIBILITY"] = "1"
+            
             # Initialize a new cargo project
             try:
                 subprocess.run(
                     ['cargo', 'init', '--bin', '--name', 'verification_project', str(tmp_dir_path)],
-                    capture_output=True, check=True
+                    capture_output=True, check=True, env=env
                 )
                 
                 # Write Cargo.toml with dependencies
@@ -91,8 +97,6 @@ def compile_file(config: CompilerConfig) -> bool:
                 # Run cargo check
                 # We use --offline if possible to speed up, but first run might need network
                 # For now, let it run normally.
-                env = os.environ.copy()
-                env["PYO3_USE_ABI3_FORWARD_COMPATIBILITY"] = "1"
                 result = subprocess.run(
                     ['cargo', 'check'],
                     cwd=tmp_dir_path,

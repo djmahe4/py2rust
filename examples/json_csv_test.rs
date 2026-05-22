@@ -9,12 +9,12 @@
 // serde_json = { version = "1.0" }
 //
 
-use csv;
+use std::collections::HashMap;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
-use pythonize;
 use serde_json;
-use std::collections::HashMap;
+use pythonize;
+use csv;
 
 #[derive(Debug, Clone)]
 pub enum PyError {
@@ -74,42 +74,14 @@ fn test_json() -> Result<(), PyError> {
     let mut k: ExternalObject = ExternalObject::default();
 
     println!("{}", "Testing JSON support...".to_string());
-    let data: ExternalObject = ExternalObject::new(Python::with_gil(|py| {
-        let d = PyDict::new(py);
-        d.set_item("a".to_string(), 1).unwrap();
-        d.set_item("b".to_string(), vec![1, 2, 3]).unwrap();
-        d.set_item("c".to_string(), HashMap::from([("d".to_string(), true)]))
-            .unwrap();
-        d.to_object(py)
-    }));
-    let s: String = Python::with_gil(|py| -> Result<String, PyError> {
-        let json = py.import("json")?;
-        let res = json.getattr("dumps")?.call1((data.obj.as_ref(py),))?;
-        Ok(res.extract()?)
-    })?;
+    let data: ExternalObject = ExternalObject::new(Python::with_gil(|py| { let d = PyDict::new(py); d.set_item("a".to_string(), 1).unwrap(); d.set_item("b".to_string(), vec![1, 2, 3]).unwrap(); d.set_item("c".to_string(), HashMap::from([("d".to_string(), true)])).unwrap(); d.to_object(py) }));
+    let s: String = Python::with_gil(|py| -> Result<String, PyError> { let json = py.import("json")?; let res = json.getattr("dumps")?.call1((data.obj.as_ref(py),))?; Ok(res.extract()?) })?;
     println!("{} {}", "Serialized:".to_string(), s);
-    let mut data2: ExternalObject = Python::with_gil(|py| -> Result<ExternalObject, PyError> {
-        let v: serde_json::Value =
-            serde_json::from_str(&s).map_err(|e| PyError::ValueError(e.to_string()))?;
-        let obj = pythonize::pythonize(py, &v).map_err(|e| PyError::ValueError(e.to_string()))?;
-        Ok(ExternalObject::new(obj))
-    })?;
-    println!(
-        "{} {}",
-        "Deserialized 'a':".to_string(),
-        data2.getitem("a".to_string())?
-    );
-    println!(
-        "{} {}",
-        "Deserialized 'b':".to_string(),
-        data2.getitem("b".to_string())?
-    );
+    let mut data2: ExternalObject = Python::with_gil(|py| -> Result<ExternalObject, PyError> { let v: serde_json::Value = serde_json::from_str(&s).map_err(|e| PyError::ValueError(e.to_string()))?; let obj = pythonize::pythonize(py, &v).map_err(|e| PyError::ValueError(e.to_string()))?; Ok(ExternalObject::new(obj)) })?;
+    println!("{} {}", "Deserialized 'a':".to_string(), data2.getitem("a".to_string())?);
+    println!("{} {}", "Deserialized 'b':".to_string(), data2.getitem("b".to_string())?);
     data2.setitem("a".to_string(), 42)?;
-    println!(
-        "{} {}",
-        "Updated 'a':".to_string(),
-        data2.getitem("a".to_string())?
-    );
+    println!("{} {}", "Updated 'a':".to_string(), data2.getitem("a".to_string())?);
     println!("{}", "Iterating over keys:".to_string());
     {
         '__loop_0: for __loop_val in data2.iter()? {
@@ -124,12 +96,10 @@ fn test_csv() -> Result<(), PyError> {
     let mut row: ExternalObject = ExternalObject::default();
 
     println!("{}", "\nTesting CSV support...".to_string());
-    let mut f1: ExternalObject =
-        ExternalObject::call_builtin("open", ("test.csv".to_string(), "w".to_string()))?;
+    let mut f1: ExternalObject = ExternalObject::call_builtin("open", ("test.csv".to_string(), "w".to_string()))?;
     f1.write(&"name,age\nalice,30\nbob,25\n".to_string())?;
     f1.close()?;
-    let mut f2: ExternalObject =
-        ExternalObject::call_builtin("open", ("test.csv".to_string(), "r".to_string()))?;
+    let mut f2: ExternalObject = ExternalObject::call_builtin("open", ("test.csv".to_string(), "r".to_string()))?;
     let reader: ExternalObject = ExternalObject::new_csv_reader(&f2)?;
     {
         '__loop_0: for __loop_val in reader.iter()? {
@@ -153,6 +123,7 @@ fn main() -> Result<(), PyError> {
 
     Ok(())
 }
+
 
 #[derive(Clone)]
 pub struct ExternalObject {
@@ -178,9 +149,7 @@ impl ExternalObject {
     pub fn from_module(module: &str, name: &str) -> Self {
         Python::with_gil(|py| {
             let m = py.import(module).expect("Failed to import module");
-            let attr = m
-                .getattr(name)
-                .expect("Failed to get attribute from module");
+            let attr = m.getattr(name).expect("Failed to get attribute from module");
             Self::new(attr.to_object(py))
         })
     }
@@ -214,12 +183,7 @@ impl ExternalObject {
                 if let Ok(entries) = std::fs::read_dir(lib_dir) {
                     for entry in entries.flatten() {
                         let p = entry.path();
-                        if p.is_dir()
-                            && p.file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .starts_with("python")
-                        {
+                        if p.is_dir() && p.file_name().unwrap_or_default().to_string_lossy().starts_with("python") {
                             let site_packages = p.join("site-packages");
                             if site_packages.exists() {
                                 let sp_str = site_packages.to_string_lossy().to_string();
@@ -263,11 +227,7 @@ impl ExternalObject {
         })
     }
 
-    pub fn setitem(
-        &self,
-        key: impl IntoPy<PyObject>,
-        value: impl IntoPy<PyObject>,
-    ) -> PyResult<()> {
+    pub fn setitem(&self, key: impl IntoPy<PyObject>, value: impl IntoPy<PyObject>) -> PyResult<()> {
         Python::with_gil(|py| {
             let key = key.into_py(py);
             let value = value.into_py(py);
@@ -315,7 +275,9 @@ impl ExternalObject {
     }
 
     pub fn len(&self) -> usize {
-        Python::with_gil(|py| self.obj.as_ref(py).len().unwrap_or(0))
+        Python::with_gil(|py| {
+            self.obj.as_ref(py).len().unwrap_or(0)
+        })
     }
 
     pub fn iter(&self) -> PyResult<Vec<Self>> {
@@ -341,12 +303,7 @@ impl ExternalObject {
 impl std::fmt::Display for ExternalObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::with_gil(|py| {
-            let s = self
-                .obj
-                .as_ref(py)
-                .str()
-                .and_then(|s| s.extract::<String>())
-                .unwrap_or_else(|_| "<external object>".to_string());
+            let s = self.obj.as_ref(py).str().and_then(|s| s.extract::<String>()).unwrap_or_else(|_| "<external object>".to_string());
             write!(f, "{}", s)
         })
     }
@@ -355,12 +312,7 @@ impl std::fmt::Display for ExternalObject {
 impl std::fmt::Debug for ExternalObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::with_gil(|py| {
-            let r = self
-                .obj
-                .as_ref(py)
-                .repr()
-                .map(|r| r.to_string())
-                .unwrap_or_else(|_| "<external object>".to_string());
+            let r = self.obj.as_ref(py).repr().map(|r| r.to_string()).unwrap_or_else(|_| "<external object>".to_string());
             write!(f, "{:?}", r)
         })
     }
