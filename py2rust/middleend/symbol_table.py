@@ -56,10 +56,12 @@ class TraitInfo:
 
 
 class SymbolTable:
-    def __init__(self, config=None, dependency_manager=None):
+    def __init__(self, config=None, dependency_manager=None, cross_module_table=None, module_name=None):
         from ..config import CompilerConfig
         self.config = config or CompilerConfig()
         self.dependency_manager = dependency_manager
+        self.cross_module_table = cross_module_table
+        self.module_name = module_name
         self._global = Scope("global")
         self._current = self._global
         self._stack: list[Scope] = [self._global]
@@ -133,7 +135,13 @@ class SymbolTable:
         return self._current.lookup(name)
 
     def lookup_function(self, name: str):
-        return self._functions.get(name)
+        if name in self._functions:
+            return self._functions[name]
+        val = self._global.lookup_local(name)
+        if isinstance(val, ExternalPythonType) and val.is_local:
+            if val.name and self.cross_module_table:
+                return self.cross_module_table.lookup_symbol(val.module, val.name, "functions")
+        return None
 
     def is_global_scope(self) -> bool:
         return self._current is self._global
@@ -142,26 +150,44 @@ class SymbolTable:
         self._classes[name] = ClassInfo(name, bases, fields, methods, constructors, type_params)
 
     def lookup_class(self, name: str):
-        return self._classes.get(name)
+        if name in self._classes:
+            return self._classes[name]
+        val = self._global.lookup_local(name)
+        if isinstance(val, ExternalPythonType) and val.is_local:
+            if val.name and self.cross_module_table:
+                return self.cross_module_table.lookup_symbol(val.module, val.name, "classes")
+        return None
 
     def define_enum(self, name: str, variants: dict) -> None:
         self._enums[name] = EnumInfo(name, variants)
 
     def lookup_enum(self, name: str) -> Optional[EnumInfo]:
-        return self._enums.get(name)
+        if name in self._enums:
+            return self._enums[name]
+        val = self._global.lookup_local(name)
+        if isinstance(val, ExternalPythonType) and val.is_local:
+            if val.name and self.cross_module_table:
+                return self.cross_module_table.lookup_symbol(val.module, val.name, "enums")
+        return None
 
     def define_trait(self, name: str, bases: list, methods: dict) -> None:
         self._traits[name] = TraitInfo(name, bases, methods)
 
     def lookup_trait(self, name: str) -> Optional[TraitInfo]:
-        return self._traits.get(name)
+        if name in self._traits:
+            return self._traits[name]
+        val = self._global.lookup_local(name)
+        if isinstance(val, ExternalPythonType) and val.is_local:
+            if val.name and self.cross_module_table:
+                return self.cross_module_table.lookup_symbol(val.module, val.name, "traits")
+        return None
 
     def register_external_name(self, name: str, type_: ExternalPythonType) -> None:
         """Register a name that is satisfied by an external Python module."""
         self._global.define(name, type_)
 
     def get_field_type(self, class_name: str, field: str):
-        cls = self._classes.get(class_name)
+        cls = self.lookup_class(class_name)
         if cls and field in cls.fields:
             return cls.fields[field]
         if cls:
@@ -173,7 +199,7 @@ class SymbolTable:
 
     def lookup_method(self, target_name: str, method: str, arity: int):
         # Check classes
-        cls = self._classes.get(target_name)
+        cls = self.lookup_class(target_name)
         if cls and method in cls.methods:
             arities = cls.methods[method]
             if arity in arities:
@@ -186,7 +212,7 @@ class SymbolTable:
                     return result
         
         # Check traits
-        trait = self._traits.get(target_name)
+        trait = self.lookup_trait(target_name)
         if trait and method in trait.methods:
             arities = trait.methods[method]
             if arity in arities:
@@ -195,7 +221,7 @@ class SymbolTable:
         return None
 
     def lookup_constructor(self, class_name: str, arity: int):
-        cls = self._classes.get(class_name)
+        cls = self.lookup_class(class_name)
         if cls and arity in cls.constructors:
             return cls.constructors[arity]
         if cls:

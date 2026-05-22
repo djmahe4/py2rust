@@ -55,6 +55,9 @@ def compile_repo(config: CompilerConfig) -> bool:
         
     compiled_modules: dict[str, str] = {}
     
+    from py2rust.middleend.cross_module_symbol_table import CrossModuleSymbolTable
+    cross_module_table = CrossModuleSymbolTable()
+    
     # Accumulate all crate dependencies across all compiled modules
     global_dep_manager = DependencyManager()
     
@@ -84,7 +87,9 @@ def compile_repo(config: CompilerConfig) -> bool:
                 filename=str(file_path),
                 source_lines=source_lines,
                 config=config,
-                dependency_manager=mod_dep_manager
+                dependency_manager=mod_dep_manager,
+                cross_module_table=cross_module_table,
+                module_name=mod_name
             )
             
             rust_code = generate_rust(ir_module, dependency_manager=mod_dep_manager, config=config)

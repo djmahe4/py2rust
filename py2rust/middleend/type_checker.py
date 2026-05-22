@@ -198,7 +198,11 @@ class TypeChecker:
             if isinstance(imp, Import):
                 for alias in imp.names:
                     resolved_mod = alias.name
-                    is_local = resolver.is_intra_repo(resolved_mod) if resolver else False
+                    is_local = False
+                    if resolver:
+                        is_local = resolver.is_intra_repo(resolved_mod)
+                    elif self.st.cross_module_table:
+                        is_local = self.st.cross_module_table.has_module(resolved_mod)
 
                     if is_local:
                         alias_name = alias.asname if alias.asname else alias.name
@@ -247,19 +251,47 @@ class TypeChecker:
                         else:
                             full_target = alias.name
 
-                        if resolver and (full_target in resolver.local_modules):
-                            resolved_mod = full_target
-                            symbol_name = None
-                        elif resolver and (base_mod_name in resolver.local_modules):
-                            resolved_mod = base_mod_name
-                            symbol_name = alias.name
+                        if resolver:
+                            if full_target in resolver.local_modules:
+                                resolved_mod = full_target
+                                symbol_name = None
+                            elif base_mod_name in resolver.local_modules:
+                                resolved_mod = base_mod_name
+                                symbol_name = alias.name
+                            else:
+                                resolved_mod = base_mod_name
+                                symbol_name = alias.name
+                        elif self.st.cross_module_table:
+                            if self.st.cross_module_table.has_module(full_target):
+                                resolved_mod = full_target
+                                symbol_name = None
+                            elif self.st.cross_module_table.has_module(base_mod_name):
+                                resolved_mod = base_mod_name
+                                symbol_name = alias.name
+                            else:
+                                resolved_mod = base_mod_name
+                                symbol_name = alias.name
                         else:
                             resolved_mod = base_mod_name
                             symbol_name = alias.name
 
-                        is_local = resolver.is_intra_repo(resolved_mod) if resolver and resolved_mod else False
+                        is_local = False
+                        if resolver and resolved_mod:
+                            is_local = resolver.is_intra_repo(resolved_mod)
+                        elif self.st.cross_module_table and resolved_mod:
+                            is_local = self.st.cross_module_table.has_module(resolved_mod)
 
                         if is_local:
+                            if symbol_name and self.st.cross_module_table:
+                                if self.st.cross_module_table.has_module(resolved_mod):
+                                    symbol_val = self.st.cross_module_table.lookup_symbol(resolved_mod, symbol_name)
+                                    if symbol_val is None:
+                                        raise self._sem_err(
+                                            f"cannot import name '{symbol_name}' from '{resolved_mod}'",
+                                            imp.line,
+                                            imp.col,
+                                        )
+
                             alias_name = alias.asname if alias.asname else alias.name
                             self.st.define(alias_name, ExternalPythonType(module=resolved_mod, name=symbol_name, is_local=True))
 

@@ -170,13 +170,13 @@ class WorkspaceGenerator:
         all_parent_paths = set(parts[:-1] for parts in module_structure if len(parts) > 1)
         all_mods = set(module_structure.keys()) | all_parent_paths
 
-        # For each parent path, write child module declarations.
+        # For each parent path, write child module declarations and re-exports.
         # Ensure we also create empty files for parent paths if they don't have explicit code.
         for parent_parts in sorted(all_parent_paths, key=len):
             # Find all child modules of this parent path
             children = [parts[-1] for parts in all_mods if len(parts) > 1 and parts[:-1] == parent_parts]
             
-            mod_decls = "\n".join(f"pub mod {child};" for child in sorted(children)) + "\n"
+            mod_decls = "\n".join(f"pub mod {child};\npub use {child}::*;" for child in sorted(children)) + "\n"
             
             parent_code = module_structure.get(parent_parts, "")
             combined_code = mod_decls + "\n" + parent_code
@@ -192,12 +192,13 @@ class WorkspaceGenerator:
                 top_level_mods.remove(matched_entry_key[0])
                 
         top_level_decls = "\n".join(f"pub mod {mod};" for mod in top_level_mods) + "\n" if top_level_mods else ""
+        top_level_reexports = "\n".join(f"pub use {mod}::*;" for mod in top_level_mods if mod != "errors") + "\n" if top_level_mods else ""
         
         entry_code = ""
         if matched_entry_key:
             entry_code = module_structure[matched_entry_key]
             
-        combined_entry = top_level_decls + "\n" + entry_code
+        combined_entry = top_level_decls + "\n" + top_level_reexports + "\n" + entry_code
         
         # Decide lib.rs vs main.rs based on entry_point or presence of a main-like function
         is_bin = bool(entry_point) or "fn main(" in combined_entry or "pub fn main(" in combined_entry

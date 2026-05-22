@@ -1655,14 +1655,14 @@ class IRBuilder:
         return IRName(name="unknown")
 
 
-def build_ir(module, filename: str = "<unknown>", source_lines: list = None, config=None, dependency_manager=None):
+def build_ir(module, filename: str = "<unknown>", source_lines: list = None, config=None, dependency_manager=None, cross_module_table=None, module_name=None):
     from .type_checker import TypeChecker
     from .symbol_table import SymbolTable
     from ..plugins.heapq_plugin import HeapqPlugin
     from ..plugins.collections_plugin import CollectionsPlugin
     from ..plugins.typing_plugin import TypingPlugin
     
-    st = SymbolTable(config=config, dependency_manager=dependency_manager)
+    st = SymbolTable(config=config, dependency_manager=dependency_manager, cross_module_table=cross_module_table, module_name=module_name)
     st.pm.add_plugin(HeapqPlugin())
     st.pm.add_plugin(CollectionsPlugin())
     st.pm.add_plugin(TypingPlugin())
@@ -1670,6 +1670,10 @@ def build_ir(module, filename: str = "<unknown>", source_lines: list = None, con
     # Run TypeChecker pass first
     checker = TypeChecker(st)
     checker.check_module(module)
+    
+    # Register st in the cross_module_table after verification/typechecking is complete
+    if cross_module_table and module_name:
+        cross_module_table.register_module(module_name, st)
     
     # Run IRBuilder pass
     builder = IRBuilder(filename, source_lines, config=config, symbol_table=st)
