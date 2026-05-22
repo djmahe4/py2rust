@@ -3,7 +3,6 @@
 // Required dependencies for Cargo.toml:
 // [dependencies]
 // csv = { version = "1.1" }
-// pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 // pythonize = { version = "0.20" }
 // serde = { version = "1.0", features = ["derive"] }
 // serde_json = { version = "1.0" }
@@ -50,28 +49,6 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-impl From<PyError> for pyo3::PyErr {
-    fn from(err: PyError) -> Self {
-        match err {
-            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
-            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
-            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
-            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
-            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
-            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
-        }
-    }
-}
-
-pub trait PointTrait {
-    fn __add__(&self, other: Point) -> Result<Point, PyError>;
-    fn __sub__(&self, other: Point) -> Result<Point, PyError>;
-    fn __mul__(&self, factor: i32) -> Result<Point, PyError>;
-    fn __eq__(&self, other: Point) -> Result<bool, PyError>;
-    fn __lt__(&self, other: Point) -> Result<bool, PyError>;
-    fn __str__(&self) -> Result<String, PyError>;
-}
-
 #[derive(Clone, Debug)]
 struct Point {
     x: i32,
@@ -82,9 +59,6 @@ impl Point {
     fn new(x: i32, y: i32) -> Result<Self, PyError> {
         Ok(Self { x: x, y: y })
     }
-}
-
-impl PointTrait for Point {
     fn __add__(&self, other: Point) -> Result<Point, PyError> {
         return Ok(Point::new((self.x + other.x), (self.y + other.y))?);
     }
@@ -156,7 +130,6 @@ impl PartialOrd<Point> for Point {
     }
 }
 
-
 fn __py_main() -> Result<(), PyError> {
     let p1: Point = Point::new(10, 20)?;
     let p2: Point = Point::new(5, 5)?;
@@ -194,14 +167,3 @@ fn main() -> Result<(), PyError> {
     __py_main()?;
     Ok(())
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/

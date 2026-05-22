@@ -3,7 +3,6 @@
 // Required dependencies for Cargo.toml:
 // [dependencies]
 // csv = { version = "1.1" }
-// pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 // pythonize = { version = "0.20" }
 // serde = { version = "1.0", features = ["derive"] }
 // serde_json = { version = "1.0" }
@@ -50,21 +49,17 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-impl From<PyError> for pyo3::PyErr {
-    fn from(err: PyError) -> Self {
-        match err {
-            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
-            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
-            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
-            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
-            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
-            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
-        }
-    }
-}
-
 fn first_element<T: Clone>(items: Vec<T>) -> Result<T, PyError> {
-    return Ok({ let __coll = &(items); let __idx_raw = 0; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx].clone() });
+    return Ok({
+        let __coll = &(items);
+        let __idx_raw = 0;
+        let actual_idx = if __idx_raw < 0 {
+            (__idx_raw + (__coll.len() as i32) as i32) as usize
+        } else {
+            __idx_raw as usize
+        };
+        __coll[actual_idx].clone()
+    });
 }
 
 fn __py_main() -> Result<(), PyError> {
@@ -78,14 +73,3 @@ fn main() -> Result<(), PyError> {
     __py_main()?;
     Ok(())
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/

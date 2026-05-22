@@ -91,9 +91,12 @@ def compile_file(config: CompilerConfig) -> bool:
                 # Run cargo check
                 # We use --offline if possible to speed up, but first run might need network
                 # For now, let it run normally.
+                env = os.environ.copy()
+                env["PYO3_USE_ABI3_FORWARD_COMPATIBILITY"] = "1"
                 result = subprocess.run(
                     ['cargo', 'check'],
                     cwd=tmp_dir_path,
+                    env=env,
                     capture_output=True, text=True
                 )
                 

@@ -3,7 +3,6 @@
 // Required dependencies for Cargo.toml:
 // [dependencies]
 // csv = { version = "1.1" }
-// pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 // pythonize = { version = "0.20" }
 // serde = { version = "1.0", features = ["derive"] }
 // serde_json = { version = "1.0" }
@@ -50,25 +49,6 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-impl From<PyError> for pyo3::PyErr {
-    fn from(err: PyError) -> Self {
-        match err {
-            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
-            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
-            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
-            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
-            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
-            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
-        }
-    }
-}
-
-pub trait PointTrait {
-    fn get_x(&self) -> Result<i32, PyError>;
-    fn get_y(&self) -> Result<i32, PyError>;
-    fn distance_to(&self, other_x: i32) -> Result<i32, PyError>;
-}
-
 #[derive(Clone, Debug)]
 struct Point {
     x: i32,
@@ -79,9 +59,6 @@ impl Point {
     fn new(x: i32, y: i32) -> Result<Self, PyError> {
         Ok(Self { x: x, y: y })
     }
-}
-
-impl PointTrait for Point {
     fn get_x(&self) -> Result<i32, PyError> {
         return Ok(self.x);
     }
@@ -94,26 +71,17 @@ impl PointTrait for Point {
     }
 }
 
-
 fn __py_main() -> Result<(), PyError> {
     let p: Point = Point::new(3, 4)?;
     let x: i32 = p.get_x()?;
     let y: i32 = p.get_y()?;
     let d: i32 = p.distance_to(0)?;
-    return Ok({ (x + y) + d; () });
+    return Ok({
+        (x + y) + d;
+        ()
+    });
 }
 fn main() -> Result<(), PyError> {
     __py_main()?;
     Ok(())
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/

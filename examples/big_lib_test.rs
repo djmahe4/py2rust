@@ -68,19 +68,37 @@ impl From<PyError> for pyo3::PyErr {
 
 fn test_numpy() -> Result<(), PyError> {
     println!("{}", "Testing NumPy...".to_string());
-    let arr: ExternalObject = ExternalObject::load_module("numpy")?.call_method("array", (vec![1, 2, 3],))?;
+    let arr: ExternalObject =
+        ExternalObject::load_module("numpy")?.call_method("array", (vec![1, 2, 3],))?;
     println!("{}", format!("Array: {}", arr));
-    println!("{}", format!("Mean: {}", ExternalObject::load_module("numpy")?.call_method("mean", (arr,))?));
+    println!(
+        "{}",
+        format!(
+            "Mean: {}",
+            ExternalObject::load_module("numpy")?.call_method("mean", (arr,))?
+        )
+    );
     Ok(())
 }
 
 fn test_opencv() -> Result<(), PyError> {
     println!("{}", "\nTesting OpenCV...".to_string());
-    println!("{}", format!("OpenCV Version: {}", ExternalObject::load_module("cv2")?.getattr("__version__")?));
-    let img: ExternalObject = ExternalObject::load_module("numpy")?.call_method("zeros", ((10, 10, 3),))?;
+    println!(
+        "{}",
+        format!(
+            "OpenCV Version: {}",
+            ExternalObject::load_module("cv2")?.getattr("__version__")?
+        )
+    );
+    let img: ExternalObject =
+        ExternalObject::load_module("numpy")?.call_method("zeros", ((10, 10, 3),))?;
     println!("{}", format!("Image shape: {}", img.getattr("shape")?));
-    println!("{}", "Opening window (might fail on headless systems)...".to_string());
-    ExternalObject::load_module("cv2")?.call_method("imshow", ("Py2Rust OpenCV Test".to_string(), img,))?;
+    println!(
+        "{}",
+        "Opening window (might fail on headless systems)...".to_string()
+    );
+    ExternalObject::load_module("cv2")?
+        .call_method("imshow", ("Py2Rust OpenCV Test".to_string(), img))?;
     ExternalObject::load_module("cv2")?.call_method("waitKey", (1,))?;
     ExternalObject::load_module("cv2")?.call_method("destroyAllWindows", ())?;
     println!("{}", "OpenCV test complete.".to_string());
@@ -93,7 +111,6 @@ fn main() -> Result<(), PyError> {
 
     Ok(())
 }
-
 
 #[derive(Clone)]
 pub struct ExternalObject {
@@ -119,7 +136,9 @@ impl ExternalObject {
     pub fn from_module(module: &str, name: &str) -> Self {
         Python::with_gil(|py| {
             let m = py.import(module).expect("Failed to import module");
-            let attr = m.getattr(name).expect("Failed to get attribute from module");
+            let attr = m
+                .getattr(name)
+                .expect("Failed to get attribute from module");
             Self::new(attr.to_object(py))
         })
     }
@@ -153,7 +172,12 @@ impl ExternalObject {
                 if let Ok(entries) = std::fs::read_dir(lib_dir) {
                     for entry in entries.flatten() {
                         let p = entry.path();
-                        if p.is_dir() && p.file_name().unwrap_or_default().to_string_lossy().starts_with("python") {
+                        if p.is_dir()
+                            && p.file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .starts_with("python")
+                        {
                             let site_packages = p.join("site-packages");
                             if site_packages.exists() {
                                 let sp_str = site_packages.to_string_lossy().to_string();
@@ -197,7 +221,11 @@ impl ExternalObject {
         })
     }
 
-    pub fn setitem(&self, key: impl IntoPy<PyObject>, value: impl IntoPy<PyObject>) -> PyResult<()> {
+    pub fn setitem(
+        &self,
+        key: impl IntoPy<PyObject>,
+        value: impl IntoPy<PyObject>,
+    ) -> PyResult<()> {
         Python::with_gil(|py| {
             let key = key.into_py(py);
             let value = value.into_py(py);
@@ -245,9 +273,7 @@ impl ExternalObject {
     }
 
     pub fn len(&self) -> usize {
-        Python::with_gil(|py| {
-            self.obj.as_ref(py).len().unwrap_or(0)
-        })
+        Python::with_gil(|py| self.obj.as_ref(py).len().unwrap_or(0))
     }
 
     pub fn iter(&self) -> PyResult<Vec<Self>> {
@@ -273,7 +299,12 @@ impl ExternalObject {
 impl std::fmt::Display for ExternalObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::with_gil(|py| {
-            let s = self.obj.as_ref(py).str().and_then(|s| s.extract::<String>()).unwrap_or_else(|_| "<external object>".to_string());
+            let s = self
+                .obj
+                .as_ref(py)
+                .str()
+                .and_then(|s| s.extract::<String>())
+                .unwrap_or_else(|_| "<external object>".to_string());
             write!(f, "{}", s)
         })
     }
@@ -282,7 +313,12 @@ impl std::fmt::Display for ExternalObject {
 impl std::fmt::Debug for ExternalObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         Python::with_gil(|py| {
-            let r = self.obj.as_ref(py).repr().map(|r| r.to_string()).unwrap_or_else(|_| "<external object>".to_string());
+            let r = self
+                .obj
+                .as_ref(py)
+                .repr()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|_| "<external object>".to_string());
             write!(f, "{:?}", r)
         })
     }

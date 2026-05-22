@@ -19,3 +19,6 @@ class CompilerConfig:
     format_output: bool = True
     mock_mode: bool = False
     async_runtime: AsyncRuntime = AsyncRuntime.TOKIO
+    repo_root: str = ""
+    package_dir: str = ""
+

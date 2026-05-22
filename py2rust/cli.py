@@ -20,6 +20,8 @@ def main():
     parser.add_argument("--no-format", action="store_true", help="Disable rustfmt formatting")
     parser.add_argument("--mock-mode", "-M", action="store_true", help="Mock missing imports as ExternalPythonType")
     parser.add_argument("--runtime", choices=["tokio", "futures"], default="tokio", help="Async runtime to use (default: tokio)")
+    parser.add_argument("--repo-root", default="", help="Root of python repository to compile")
+    parser.add_argument("--package-dir", default="", help="Subdirectory containing python package")
 
     args = parser.parse_args()
 
@@ -34,7 +36,10 @@ def main():
         format_output=not args.no_format,
         mock_mode=args.mock_mode,
         async_runtime=AsyncRuntime(args.runtime),
+        repo_root=args.repo_root,
+        package_dir=args.package_dir,
     )
+
 
     success = compile_file(config)
     sys.exit(0 if success else 1)

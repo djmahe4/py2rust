@@ -3,7 +3,6 @@
 // Required dependencies for Cargo.toml:
 // [dependencies]
 // csv = { version = "1.1" }
-// pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 // pythonize = { version = "0.20" }
 // serde = { version = "1.0", features = ["derive"] }
 // serde_json = { version = "1.0" }
@@ -50,19 +49,6 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-impl From<PyError> for pyo3::PyErr {
-    fn from(err: PyError) -> Self {
-        match err {
-            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
-            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
-            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
-            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
-            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
-            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
-        }
-    }
-}
-
 fn float_math(x: f64, y: f64) -> Result<f64, PyError> {
     let z: f64 = (x as f64) + (y as f64);
     let a: f64 = (x as f64) * 2.0;
@@ -73,20 +59,9 @@ fn float_math(x: f64, y: f64) -> Result<f64, PyError> {
 fn __py_main() -> Result<(), PyError> {
     let res: f64 = float_math(10.5, 5.5)?;
     println!("{}", res);
-    return Ok({ 0; () });
+    return Ok(());
 }
 fn main() -> Result<(), PyError> {
     __py_main()?;
     Ok(())
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/

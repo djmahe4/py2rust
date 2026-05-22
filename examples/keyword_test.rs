@@ -3,14 +3,13 @@
 // Required dependencies for Cargo.toml:
 // [dependencies]
 // csv = { version = "1.1" }
-// pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 // pythonize = { version = "0.20" }
 // serde = { version = "1.0", features = ["derive"] }
 // serde_json = { version = "1.0" }
 //
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 
 #[derive(Debug, Clone)]
 pub enum PyError {
@@ -50,19 +49,6 @@ impl From<std::num::ParseIntError> for PyError {
 impl From<std::num::ParseFloatError> for PyError {
     fn from(err: std::num::ParseFloatError) -> Self {
         PyError::ValueError(err.to_string())
-    }
-}
-
-impl From<PyError> for pyo3::PyErr {
-    fn from(err: PyError) -> Self {
-        match err {
-            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
-            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
-            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
-            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
-            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
-            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
-        }
     }
 }
 
@@ -138,17 +124,6 @@ fn __py_main() -> Result<(), PyError> {
 }
 fn main() -> Result<(), PyError> {
     __py_main()?;
-    
+
     Ok(())
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/

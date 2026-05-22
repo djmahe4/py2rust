@@ -3,7 +3,6 @@
 // Required dependencies for Cargo.toml:
 // [dependencies]
 // csv = { version = "1.1" }
-// pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 // pythonize = { version = "0.20" }
 // serde = { version = "1.0", features = ["derive"] }
 // serde_json = { version = "1.0" }
@@ -50,25 +49,11 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-impl From<PyError> for pyo3::PyErr {
-    fn from(err: PyError) -> Self {
-        match err {
-            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
-            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
-            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
-            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
-            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
-            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
-        }
-    }
-}
-
 pub trait AnimalTrait {
     fn speak(&self) -> Result<i32, PyError>;
 }
 
-pub trait DogTrait: AnimalTrait {
-}
+pub trait DogTrait: AnimalTrait {}
 
 #[derive(Clone, Debug)]
 struct Animal {
@@ -87,7 +72,6 @@ impl AnimalTrait for Animal {
     }
 }
 
-
 #[derive(Clone, Debug)]
 struct Dog {
     name: String,
@@ -99,8 +83,7 @@ impl Dog {
     }
 }
 
-impl DogTrait for Dog {
-}
+impl DogTrait for Dog {}
 
 impl AnimalTrait for Dog {
     fn speak(&self) -> Result<i32, PyError> {
@@ -108,25 +91,13 @@ impl AnimalTrait for Dog {
     }
 }
 
-
 fn __py_main() -> Result<(), PyError> {
     let d: Dog = Dog::new("Buddy".to_string())?;
     let result: i32 = d.speak()?;
     println!("{}", result);
-    return Ok({ 0; () });
+    return Ok(());
 }
 fn main() -> Result<(), PyError> {
     __py_main()?;
     Ok(())
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/

@@ -3,7 +3,6 @@
 // Required dependencies for Cargo.toml:
 // [dependencies]
 // csv = { version = "1.1" }
-// pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 // pythonize = { version = "0.20" }
 // serde = { version = "1.0", features = ["derive"] }
 // serde_json = { version = "1.0" }
@@ -50,28 +49,7 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-impl From<PyError> for pyo3::PyErr {
-    fn from(err: PyError) -> Self {
-        match err {
-            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
-            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
-            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
-            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
-            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
-            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
-        }
-    }
-}
-
 pub trait Drawable {
-    fn draw(&self) -> Result<String, PyError>;
-}
-
-pub trait CircleTrait {
-    fn draw(&self) -> Result<String, PyError>;
-}
-
-pub trait SquareTrait {
     fn draw(&self) -> Result<String, PyError>;
 }
 
@@ -84,14 +62,10 @@ impl Circle {
     fn new(radius: i32) -> Result<Self, PyError> {
         Ok(Self { radius: radius })
     }
-}
-
-impl CircleTrait for Circle {
     fn draw(&self) -> Result<String, PyError> {
         return Ok(format!("Circle({})", self.radius));
     }
 }
-
 
 #[derive(Clone, Debug)]
 struct Square {
@@ -102,27 +76,21 @@ impl Square {
     fn new(side: i32) -> Result<Self, PyError> {
         Ok(Self { side: side })
     }
-}
-
-impl SquareTrait for Square {
     fn draw(&self) -> Result<String, PyError> {
         return Ok(format!("Square({})", self.side));
     }
 }
 
-
 impl Drawable for Circle {
     fn draw(&self) -> Result<String, PyError> {
         return Ok(format!("Circle({})", self.radius));
     }
-    
 }
 
 impl Drawable for Square {
     fn draw(&self) -> Result<String, PyError> {
         return Ok(format!("Square({})", self.side));
     }
-    
 }
 
 fn render(items: Vec<Box<dyn Drawable>>) -> Result<(), PyError> {
@@ -138,7 +106,10 @@ fn render(items: Vec<Box<dyn Drawable>>) -> Result<(), PyError> {
 }
 
 fn __py_main() -> Result<(), PyError> {
-    let shapes: Vec<Box<dyn Drawable>> = vec![Box::new(Circle::new(5)?) as Box<dyn Drawable>, Box::new(Square::new(10)?) as Box<dyn Drawable>];
+    let shapes: Vec<Box<dyn Drawable>> = vec![
+        Box::new(Circle::new(5)?) as Box<dyn Drawable>,
+        Box::new(Square::new(10)?) as Box<dyn Drawable>,
+    ];
     render(shapes)?;
     Ok(())
 }
@@ -146,14 +117,3 @@ fn main() -> Result<(), PyError> {
     __py_main()?;
     Ok(())
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/

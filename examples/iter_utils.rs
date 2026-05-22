@@ -3,7 +3,6 @@
 // Required dependencies for Cargo.toml:
 // [dependencies]
 // csv = { version = "1.1" }
-// pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
 // pythonize = { version = "0.20" }
 // serde = { version = "1.0", features = ["derive"] }
 // serde_json = { version = "1.0" }
@@ -50,25 +49,12 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-impl From<PyError> for pyo3::PyErr {
-    fn from(err: PyError) -> Self {
-        match err {
-            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),
-            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),
-            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),
-            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),
-            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),
-            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),
-        }
-    }
-}
-
 fn __py_main() -> Result<(), PyError> {
     let mut n: i32 = 0;
     let mut r: i32 = 0;
     let mut i: i32 = 0;
-    let mut d: i32 = 0;
     let mut c: String = String::new();
+    let mut d: i32 = 0;
 
     let nums: Vec<i32> = vec![1, 2, 3];
     let chars: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string()];
@@ -90,7 +76,7 @@ fn __py_main() -> Result<(), PyError> {
             println!("{}", n);
         }
     }
-    let doubled: Vec<i32> = (&nums).iter().map(|x| { (x * 2) }).collect::<Vec<_>>();
+    let doubled: Vec<i32> = (&nums).iter().map(|x| (x * 2)).collect::<Vec<_>>();
     {
         '__loop_0: for __loop_val in &doubled {
             d = __loop_val.clone();
@@ -103,20 +89,9 @@ fn __py_main() -> Result<(), PyError> {
             println!("{}", r);
         }
     }
-    return Ok({ 0; () });
+    return Ok(());
 }
 fn main() -> Result<(), PyError> {
     __py_main()?;
     Ok(())
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/
