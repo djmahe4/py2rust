@@ -1219,7 +1219,7 @@ def main() -> int:
 """
     code = _compile(src)
     assert "fn main() -> Result<(), PyError> {" in code
-    assert "{ 0; () }" in code
+    assert "{ 0; () }" not in code
 
 
 def test_main_discard_return_value():
@@ -1419,3 +1419,71 @@ def main() -> int:
     code = _compile(src)
     assert "let mut type_: i32 = 0;" in code
     assert "type_ =" in code
+
+
+def test_companion_traits_omitted_for_standalone_classes():
+    src = """
+class Standalone:
+    x: int = 0
+    def __init__(self, val: int) -> None:
+        self.x = val
+    def get_val(self) -> int:
+        return self.x
+"""
+    code = _compile(src)
+    assert "pub trait StandaloneTrait" not in code
+    assert "impl Standalone" in code
+    assert "fn get_val(&self) -> Result<i32, PyError>" in code
+
+
+def test_unreachable_if_branches_mut_and_code_pruning():
+    src = """
+def main() -> int:
+    x: int = 42
+    if False:
+        x = 100
+        y: int = 1
+    elif False:
+        x = 200
+        z: int = 2
+    else:
+        # reachable!
+        pass
+    return x
+"""
+    code = _compile(src)
+    # x should not be mut because its only assignments are in dead branches
+    assert "let x: i32 = 42;" in code
+    assert "let mut x" not in code
+    # z and y should not be declared at all since they are inside unreachable blocks
+    assert "let y" not in code
+    assert "let z" not in code
+    # There should be no if blocks for the False branches
+    assert "if false" not in code
+    assert "100" not in code
+    assert "200" not in code
+
+
+def test_no_duplicate_dependency_headers():
+    src = """
+def main() -> int:
+    return 0
+"""
+    code = _compile(src)
+    # Check that standard headers aren't duplicated
+    assert code.count("Required dependencies for Cargo.toml:") <= 1
+
+
+def test_trailing_spaces_and_newlines_eliminated():
+    src = """
+def main() -> int:
+    return 0
+"""
+    code = _compile(src)
+    # Check that there are no trailing whitespace on any line, and it ends with exactly one newline
+    lines = code.split("\n")
+    for line in lines[:-1]:
+        assert line == line.rstrip()
+    assert code.endswith("\n")
+    assert not code.endswith("\n\n")
+

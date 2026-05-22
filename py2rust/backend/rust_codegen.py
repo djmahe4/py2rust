@@ -225,6 +225,47 @@ def _collect_vars_from_expr(expr) -> set:
     return vars
 
 
+def _get_reachable_if_branches(stmt: IRIf) -> list[tuple[Optional[IRExpr], list[IRStmt]]]:
+    """
+    Returns a list of reachable branches in the format (condition, body).
+    If condition is None, it represents an unconditional body (like 'else').
+    """
+    reachable = []
+    
+    # Check main condition
+    if isinstance(stmt.condition, IRBoolLit):
+        if stmt.condition.value:
+            # Main branch is always taken
+            reachable.append((stmt.condition, stmt.then_body))
+            return reachable
+        else:
+            # Main branch is never taken, move on to elif and else
+            pass
+    else:
+        # Dynamic condition, main branch is reachable
+        reachable.append((stmt.condition, stmt.then_body))
+    
+    # Check elif clauses
+    for elif_cond, elif_body in stmt.elif_clauses:
+        if isinstance(elif_cond, IRBoolLit):
+            if elif_cond.value:
+                # Elif branch is always taken
+                reachable.append((elif_cond, elif_body))
+                return reachable
+            else:
+                # Elif branch is never taken
+                pass
+        else:
+            # Dynamic condition, elif is reachable
+            reachable.append((elif_cond, elif_body))
+            
+    # Check else clause
+    if stmt.else_body is not None:
+        reachable.append((None, stmt.else_body))
+        
+    return reachable
+
+
 def _collect_mutated_vars(stmts) -> set:
     """Recursively collect all variable names that are reassigned anywhere in the function."""
     mutated: set = set()
@@ -283,11 +324,8 @@ def _collect_mutated_vars(stmts) -> set:
             elif isinstance(stmt, IRWhile):
                 _visit(stmt.body, True)
             elif isinstance(stmt, IRIf):
-                _visit(stmt.then_body, in_loop)
-                for _, elif_body in stmt.elif_clauses:
-                    _visit(elif_body, in_loop)
-                if stmt.else_body:
-                    _visit(stmt.else_body, in_loop)
+                for _, body in _get_reachable_if_branches(stmt):
+                    _visit(body, in_loop)
             elif isinstance(stmt, IRTryExcept):
                 _visit(stmt.body, in_loop)
                 for h_type, h_name, h_body in stmt.handlers:
@@ -376,11 +414,8 @@ def _collect_decls(stmts, uses_python_wrappers=False) -> tuple[dict[str, object]
             elif isinstance(stmt, IRNonlocal):
                 pass
             elif isinstance(stmt, IRIf):
-                _recurse(stmt.then_body, depth + 1)
-                for _, elif_body in stmt.elif_clauses:
-                    _recurse(elif_body, depth + 1)
-                if stmt.else_body:
-                    _recurse(stmt.else_body, depth + 1)
+                for _, body in _get_reachable_if_branches(stmt):
+                    _recurse(body, depth + 1)
 
     _recurse(stmts, depth=0)
     return decls, pre_declare
@@ -574,15 +609,53 @@ class RustCodegen:
         self._uses_heap = False
         self._decl_types = {}
 
+        # Compute needed traits (omit standalone companion traits)
+        companion_traits = {f"{cls.name}Trait": cls for cls in ir_mod.classes}
+        needed_companion_traits = set()
+        
+        all_bases = set()
+        for cls in ir_mod.classes:
+            for base in cls.bases:
+                all_bases.add(base)
+                
+        for cls in ir_mod.classes:
+            if cls.bases or cls.name in all_bases:
+                needed_companion_traits.add(f"{cls.name}Trait")
+                
+        changed = True
+        while changed:
+            changed = False
+            new_needed = set(needed_companion_traits)
+            for t_name in needed_companion_traits:
+                if t_name in companion_traits:
+                    cls = companion_traits[t_name]
+                    for base in cls.bases:
+                        base_trait = f"{base}Trait"
+                        if base_trait not in new_needed:
+                            new_needed.add(base_trait)
+                            changed = True
+            needed_companion_traits = new_needed
+            
+        self._needed_traits = set()
+        for trait in ir_mod.traits:
+            if trait.name not in companion_traits:
+                self._needed_traits.add(trait.name)
+            elif trait.name in needed_companion_traits:
+                self._needed_traits.add(trait.name)
+
         # Pre-pass: Generate Traits
         trait_lines = []
         for trait in ir_mod.traits:
+            if trait.name not in self._needed_traits:
+                continue
             trait_lines.append(self._gen_trait(trait))
             trait_lines.append("")
 
         # Generate Trait Impls
         trait_impl_lines = []
         for impl_def in ir_mod.trait_impls:
+            if impl_def.trait_name not in self._needed_traits:
+                continue
             self._gen_trait_impl(impl_def)
             trait_impl_lines.extend(self._lines)
             self._lines = []
@@ -633,6 +706,8 @@ class RustCodegen:
         
         # Emit dependency info for Cargo.toml
         if self.dependency_manager:
+            if self._uses_python_wrappers:
+                self.dependency_manager.add_dependency("pyo3", version="0.20", features=["extension-module", "abi3-py310"])
             final_lines.append("//")
             final_lines.append("// Required dependencies for Cargo.toml:")
             for line in self.dependency_manager.get_cargo_dependencies().splitlines():
@@ -719,19 +794,20 @@ class RustCodegen:
             final_lines.append("    }")
             final_lines.append("}")
             final_lines.append("")
-            final_lines.append("impl From<PyError> for pyo3::PyErr {")
-            final_lines.append("    fn from(err: PyError) -> Self {")
-            final_lines.append("        match err {")
-            final_lines.append("            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),")
-            final_lines.append("            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),")
-            final_lines.append("            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),")
-            final_lines.append("            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),")
-            final_lines.append("            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),")
-            final_lines.append("            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),")
-            final_lines.append("        }")
-            final_lines.append("    }")
-            final_lines.append("}")
-            final_lines.append("")
+            if self._uses_python_wrappers:
+                final_lines.append("impl From<PyError> for pyo3::PyErr {")
+                final_lines.append("    fn from(err: PyError) -> Self {")
+                final_lines.append("        match err {")
+                final_lines.append("            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),")
+                final_lines.append("            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),")
+                final_lines.append("            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),")
+                final_lines.append("            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),")
+                final_lines.append("            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),")
+                final_lines.append("            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),")
+                final_lines.append("        }")
+                final_lines.append("    }")
+                final_lines.append("}")
+                final_lines.append("")
 
         if self._uses_try_result:
             final_lines.append("pub enum TryResult<T> {")
@@ -852,7 +928,15 @@ class RustCodegen:
             final_lines.extend(self._lines)
             self._lines = []
 
-        return "\n".join(final_lines) + "\n"
+        # Clean trailing whitespaces on each line, and drop trailing empty lines
+        cleaned_lines = []
+        for line in final_lines:
+            cleaned_lines.append(line.rstrip())
+        
+        while cleaned_lines and not cleaned_lines[-1]:
+            cleaned_lines.pop()
+            
+        return "\n".join(cleaned_lines) + "\n"
 
     def _gen_trait(self, trait: IRTraitDefinition) -> str:
         bases_str = " + ".join(trait.bases) if trait.bases else ""
@@ -906,23 +990,30 @@ class RustCodegen:
         self._emit("}")
         self._emit("")
 
-        # Inherent Impl (Constructors)
-        if cls.constructors:
+        # Inherent Impl (Constructors and inherent methods)
+        has_inherent_methods = (f"{cls.name}Trait" not in self._needed_traits) and any(m.name != "__init__" for m in cls.methods)
+        if cls.constructors or has_inherent_methods:
             self._emit(f"impl{type_params_str} {cls.name}{type_params_str} {{")
             self._indent += 1
             for ctor in cls.constructors:
                 self._gen_method(ctor, is_init=True)
+            if has_inherent_methods:
+                for m in cls.methods:
+                    if m.name != "__init__":
+                        self._gen_method(m)
             self._indent -= 1
             self._emit("}")
             self._emit("")
 
         # Trait Impls (Implement all traits in the hierarchy)
         # 1. Map trait names to their definitions for easy lookup
-        all_trait_defs = {t.name: t for t in self._current_module.traits}
+        all_trait_defs = {t.name: t for t in self._current_module.traits if t.name in self._needed_traits}
         
         # 2. Get all traits this class must implement (recursively)
         traits_to_impl = []
-        queue = [f"{cls.name}Trait"]
+        queue = []
+        if f"{cls.name}Trait" in self._needed_traits:
+            queue.append(f"{cls.name}Trait")
         visited = set()
         while queue:
             t_name = queue.pop(0)
@@ -1294,33 +1385,43 @@ class RustCodegen:
             self._emit(f"{_mangle(stmt.target)} {stmt.op} {val};")
 
         elif isinstance(stmt, IRIf):
-            cond = self._strip_parens(self._gen_condition(stmt.condition))
-            self._emit(f"if {cond} {{")
-            self._indent += 1
-            old_top_level = self._at_top_level
-            self._at_top_level = False
-            for s in stmt.then_body:
-                self._gen_stmt(s)
-            self._at_top_level = old_top_level
-            self._indent -= 1
-            for elif_cond, elif_body in stmt.elif_clauses:
-                ec = self._strip_parens(self._gen_condition(elif_cond))
-                self._emit(f"}} else if {ec} {{")
+            reachable = _get_reachable_if_branches(stmt)
+            if not reachable:
+                pass
+            else:
+                first_cond, first_body = reachable[0]
+                if first_cond is None:
+                    cond = "true"
+                elif isinstance(first_cond, IRBoolLit) and first_cond.value:
+                    cond = "true"
+                else:
+                    cond = self._strip_parens(self._gen_condition(first_cond))
+                
+                self._emit(f"if {cond} {{")
                 self._indent += 1
+                old_top_level = self._at_top_level
                 self._at_top_level = False
-                for s in elif_body:
+                for s in first_body:
                     self._gen_stmt(s)
                 self._at_top_level = old_top_level
                 self._indent -= 1
-            if stmt.else_body is not None:
-                self._emit("} else {")
-                self._indent += 1
-                self._at_top_level = False
-                for s in stmt.else_body:
-                    self._gen_stmt(s)
-                self._at_top_level = old_top_level
-                self._indent -= 1
-            self._emit("}")
+                
+                for cond_expr, body in reachable[1:]:
+                    if cond_expr is None:
+                        self._emit("} else {")
+                    elif isinstance(cond_expr, IRBoolLit) and cond_expr.value:
+                        self._emit("} else if true {")
+                    else:
+                        ec = self._strip_parens(self._gen_condition(cond_expr))
+                        self._emit(f"}} else if {ec} {{")
+                    
+                    self._indent += 1
+                    self._at_top_level = False
+                    for s in body:
+                        self._gen_stmt(s)
+                    self._at_top_level = old_top_level
+                    self._indent -= 1
+                self._emit("}")
 
         elif isinstance(stmt, IRWhile):
             self._loop_depth += 1
@@ -1473,7 +1574,13 @@ class RustCodegen:
                 if stmt.value is not None:
                     e = self._gen_expr(stmt.value)
                     val = e if isinstance(stmt.value, IRTupleLit) else self._strip_parens(e)
-                    val_str = f"{{ {val}; () }}"
+                    
+                    import re
+                    is_simple = re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', val.strip()) or val.strip().isdigit() or val.strip() in ("true", "false", "None", "()", '""', "''")
+                    if is_simple:
+                        val_str = "()"
+                    else:
+                        val_str = f"{{ {val}; () }}"
                 else:
                     val_str = "()"
             elif stmt.value is None:
@@ -2810,12 +2917,4 @@ class RustCodegen:
 
 def generate_rust(module: IRModule, dependency_manager=None, config: CompilerConfig = None) -> str:
     cg = RustCodegen(dependency_manager=dependency_manager, config=config)
-    rust_code = cg.generate(module)
-    
-    # If we have dependencies and an output comment is desired, we can append it
-    if dependency_manager:
-        rust_code += "\n\n/*\n"
-        rust_code += dependency_manager.get_cargo_dependencies()
-        rust_code += "\n*/\n"
-        
-    return rust_code
+    return cg.generate(module)

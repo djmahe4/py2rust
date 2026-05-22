@@ -88,9 +88,9 @@ fn test_opencv() -> Result<(), PyError> {
 }
 fn main() -> Result<(), PyError> {
     test_numpy()?;
-    
+
     test_opencv()?;
-    
+
     Ok(())
 }
 
@@ -137,7 +137,7 @@ impl ExternalObject {
         if let Ok(venv) = env::var("PY2RUST_VENV") {
             let sys = py.import("sys")?;
             let path = sys.getattr("path")?;
-            
+
             let venv_path = std::path::PathBuf::from(venv);
             #[cfg(target_os = "windows")]
             {
@@ -293,14 +293,3 @@ impl IntoPy<PyObject> for ExternalObject {
         self.obj
     }
 }
-
-
-
-/*
-[dependencies]
-csv = { version = "1.1" }
-pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-pythonize = { version = "0.20" }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
-*/

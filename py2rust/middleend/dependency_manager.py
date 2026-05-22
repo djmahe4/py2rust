@@ -30,10 +30,6 @@ class DependencyManager:
     def get_cargo_dependencies(self) -> str:
         """Generates the [dependencies] section for Cargo.toml."""
         lines = ["[dependencies]"]
-        # Always include pyo3 as it's the core interoperability layer
-        if "pyo3" not in self.dependencies:
-            self.add_dependency("pyo3", version="0.20", features=["extension-module", "abi3-py310"])
-
         for crate, info in sorted(self.dependencies.items()):
             feature_str = ""
             if "features" in info:
