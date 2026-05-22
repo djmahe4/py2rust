@@ -14,8 +14,12 @@ from .utils.logger import setup_logger, get_logger
 
 
 def compile_file(config: CompilerConfig) -> bool:
-    logger = setup_logger(config.verbose)
     source_path = Path(config.input_file)
+    if source_path.exists() and source_path.is_dir():
+        from .project.repo_compiler import compile_repo
+        return compile_repo(config)
+
+    logger = setup_logger(config.verbose)
     dep_manager = DependencyManager()
 
     if not source_path.exists():

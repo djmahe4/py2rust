@@ -52,7 +52,7 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let add: _ = |x, y| { (x + y) };
     println!("{}", add(10, 20));
     let nums: Vec<i32> = vec![1, 2, 3, 4, 5, 6];

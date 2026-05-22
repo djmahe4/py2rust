@@ -49,9 +49,9 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn sum_list(nums: Vec<i32>) -> Result<i32, PyError> {
-    let mut total: i32 = 0;
+pub fn sum_list(nums: Vec<i32>) -> Result<i32, PyError> {
     let mut n: i32 = 0;
+    let mut total: i32 = 0;
 
     total = 0;
     {
@@ -63,7 +63,7 @@ fn sum_list(nums: Vec<i32>) -> Result<i32, PyError> {
     return Ok(total);
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
     let result: i32 = sum_list(numbers)?;
     println!("{}", result);

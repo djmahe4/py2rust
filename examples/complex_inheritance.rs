@@ -65,11 +65,11 @@ pub trait DTrait: BTrait + CTrait {
 }
 
 #[derive(Clone, Debug)]
-struct A {
+pub struct A {
 }
 
 impl A {
-    fn new() -> Result<Self, PyError> {
+    pub fn new() -> Result<Self, PyError> {
         Ok(Self {  })
     }
 }
@@ -82,11 +82,11 @@ impl ATrait for A {
 
 
 #[derive(Clone, Debug)]
-struct B {
+pub struct B {
 }
 
 impl B {
-    fn new() -> Result<Self, PyError> {
+    pub fn new() -> Result<Self, PyError> {
         Ok(Self {  })
     }
 }
@@ -105,11 +105,11 @@ impl ATrait for B {
 
 
 #[derive(Clone, Debug)]
-struct C {
+pub struct C {
 }
 
 impl C {
-    fn new() -> Result<Self, PyError> {
+    pub fn new() -> Result<Self, PyError> {
         Ok(Self {  })
     }
 }
@@ -128,11 +128,11 @@ impl ATrait for C {
 
 
 #[derive(Clone, Debug)]
-struct D {
+pub struct D {
 }
 
 impl D {
-    fn new() -> Result<Self, PyError> {
+    pub fn new() -> Result<Self, PyError> {
         Ok(Self {  })
     }
 }
@@ -159,7 +159,7 @@ impl ATrait for D {
 }
 
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let d: D = D::new()?;
     println!("{}", d.greet()?);
     println!("{}", d.specific_b()?);

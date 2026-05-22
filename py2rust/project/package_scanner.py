@@ -53,12 +53,10 @@ class PackageScanner:
                     # Otherwise, package base is search_dir
                     
                     # Let's find the correct base for module naming
-                    if search_dir.name == "src":
-                        # Modules under src/foo/bar.py should be named foo.bar (unless foo is src itself, but src is just root wrapper)
-                        # Actually in src/ layout, the root of package is src/.
-                        # If there is src/package_name/__init__.py, package_name is top level.
-                        # If there is just src/foo.py, foo is top level.
-                        module_base = search_dir
+                    if (search_dir / "__init__.py").exists() and search_dir != self.repo_root:
+                        # If the search directory has an __init__.py, it is a package itself.
+                        # We want its name to be part of the module paths, so base is its parent.
+                        module_base = search_dir.parent
                     else:
                         module_base = search_dir
                     

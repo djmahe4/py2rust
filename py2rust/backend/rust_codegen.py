@@ -777,71 +777,78 @@ class RustCodegen:
                     final_lines.insert(0, "use futures::executor::block_on;")
                 if self.dependency_manager:
                     self.dependency_manager.add_dependency("futures", "0.3")
+        is_submodule = bool(self.config and self.config.repo_root)
         if self._uses_py_error:
-            final_lines.append("#[derive(Debug, Clone)]")
-            final_lines.append("pub enum PyError {")
-            final_lines.append("    Exception(String),")
-            final_lines.append("    ValueError(String),")
-            final_lines.append("    TypeError(String),")
-            final_lines.append("    KeyError(String),")
-            final_lines.append("    IndexError(String),")
-            final_lines.append("    IOError(String),")
-            final_lines.append("}")
-            final_lines.append("")
-            final_lines.append("impl std::fmt::Display for PyError {")
-            final_lines.append("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {")
-            final_lines.append("        match self {")
-            final_lines.append('            PyError::Exception(s) => write!(f, "Exception: {}", s),')
-            final_lines.append('            PyError::ValueError(s) => write!(f, "ValueError: {}", s),')
-            final_lines.append('            PyError::TypeError(s) => write!(f, "TypeError: {}", s),')
-            final_lines.append('            PyError::KeyError(s) => write!(f, "KeyError: {}", s),')
-            final_lines.append('            PyError::IndexError(s) => write!(f, "IndexError: {}", s),')
-            final_lines.append('            PyError::IOError(s) => write!(f, "IOError: {}", s),')
-            final_lines.append("        }")
-            final_lines.append("    }")
-            final_lines.append("}")
-            final_lines.append("")
-            final_lines.append("impl From<std::io::Error> for PyError {")
-            final_lines.append("    fn from(err: std::io::Error) -> Self {")
-            final_lines.append("        PyError::IOError(err.to_string())")
-            final_lines.append("    }")
-            final_lines.append("}")
-            final_lines.append("")
-            final_lines.append("impl From<std::num::ParseIntError> for PyError {")
-            final_lines.append("    fn from(err: std::num::ParseIntError) -> Self {")
-            final_lines.append("        PyError::ValueError(err.to_string())")
-            final_lines.append("    }")
-            final_lines.append("}")
-            final_lines.append("")
-            final_lines.append("impl From<std::num::ParseFloatError> for PyError {")
-            final_lines.append("    fn from(err: std::num::ParseFloatError) -> Self {")
-            final_lines.append("        PyError::ValueError(err.to_string())")
-            final_lines.append("    }")
-            final_lines.append("}")
-            final_lines.append("")
-            if self._uses_python_wrappers:
-                final_lines.append("impl From<PyError> for pyo3::PyErr {")
-                final_lines.append("    fn from(err: PyError) -> Self {")
-                final_lines.append("        match err {")
-                final_lines.append("            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),")
-                final_lines.append("            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),")
-                final_lines.append("            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),")
-                final_lines.append("            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),")
-                final_lines.append("            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),")
-                final_lines.append("            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),")
+            if is_submodule:
+                final_lines.append("use crate::errors::PyError;")
+            else:
+                final_lines.append("#[derive(Debug, Clone)]")
+                final_lines.append("pub enum PyError {")
+                final_lines.append("    Exception(String),")
+                final_lines.append("    ValueError(String),")
+                final_lines.append("    TypeError(String),")
+                final_lines.append("    KeyError(String),")
+                final_lines.append("    IndexError(String),")
+                final_lines.append("    IOError(String),")
+                final_lines.append("}")
+                final_lines.append("")
+                final_lines.append("impl std::fmt::Display for PyError {")
+                final_lines.append("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {")
+                final_lines.append("        match self {")
+                final_lines.append('            PyError::Exception(s) => write!(f, "Exception: {}", s),')
+                final_lines.append('            PyError::ValueError(s) => write!(f, "ValueError: {}", s),')
+                final_lines.append('            PyError::TypeError(s) => write!(f, "TypeError: {}", s),')
+                final_lines.append('            PyError::KeyError(s) => write!(f, "KeyError: {}", s),')
+                final_lines.append('            PyError::IndexError(s) => write!(f, "IndexError: {}", s),')
+                final_lines.append('            PyError::IOError(s) => write!(f, "IOError: {}", s),')
                 final_lines.append("        }")
                 final_lines.append("    }")
                 final_lines.append("}")
                 final_lines.append("")
+                final_lines.append("impl From<std::io::Error> for PyError {")
+                final_lines.append("    fn from(err: std::io::Error) -> Self {")
+                final_lines.append("        PyError::IOError(err.to_string())")
+                final_lines.append("    }")
+                final_lines.append("}")
+                final_lines.append("")
+                final_lines.append("impl From<std::num::ParseIntError> for PyError {")
+                final_lines.append("    fn from(err: std::num::ParseIntError) -> Self {")
+                final_lines.append("        PyError::ValueError(err.to_string())")
+                final_lines.append("    }")
+                final_lines.append("}")
+                final_lines.append("")
+                final_lines.append("impl From<std::num::ParseFloatError> for PyError {")
+                final_lines.append("    fn from(err: std::num::ParseFloatError) -> Self {")
+                final_lines.append("        PyError::ValueError(err.to_string())")
+                final_lines.append("    }")
+                final_lines.append("}")
+                final_lines.append("")
+                if self._uses_python_wrappers:
+                    final_lines.append("impl From<PyError> for pyo3::PyErr {")
+                    final_lines.append("    fn from(err: PyError) -> Self {")
+                    final_lines.append("        match err {")
+                    final_lines.append("            PyError::Exception(s) => pyo3::exceptions::PyException::new_err(s),")
+                    final_lines.append("            PyError::ValueError(s) => pyo3::exceptions::PyValueError::new_err(s),")
+                    final_lines.append("            PyError::TypeError(s) => pyo3::exceptions::PyTypeError::new_err(s),")
+                    final_lines.append("            PyError::KeyError(s) => pyo3::exceptions::PyKeyError::new_err(s),")
+                    final_lines.append("            PyError::IndexError(s) => pyo3::exceptions::PyIndexError::new_err(s),")
+                    final_lines.append("            PyError::IOError(s) => pyo3::exceptions::PyOSError::new_err(s),")
+                    final_lines.append("        }")
+                    final_lines.append("    }")
+                    final_lines.append("}")
+                    final_lines.append("")
 
         if self._uses_try_result:
-            final_lines.append("pub enum TryResult<T> {")
-            final_lines.append("    Normal,")
-            final_lines.append("    Return(T),")
-            final_lines.append("    Break,")
-            final_lines.append("    Continue,")
-            final_lines.append("}")
-            final_lines.append("")
+            if is_submodule:
+                final_lines.append("use crate::errors::TryResult;")
+            else:
+                final_lines.append("pub enum TryResult<T> {")
+                final_lines.append("    Normal,")
+                final_lines.append("    Return(T),")
+                final_lines.append("    Break,")
+                final_lines.append("    Continue,")
+                final_lines.append("}")
+                final_lines.append("")
 
         if self._uses_file_handle:
             final_lines.append("struct FileHandle {")
@@ -992,7 +999,7 @@ class RustCodegen:
         self._emit(f"impl {impl_def.trait_name} for {impl_def.target_name} {{")
         self._indent += 1
         for method in impl_def.methods:
-            self._gen_method(method)
+            self._gen_method(method, is_trait_impl=True)
             self._emit("")
         self._indent -= 1
         self._emit("}")
@@ -1007,10 +1014,10 @@ class RustCodegen:
             self._emit(f"#[derive(Clone, Debug, Serialize, Deserialize)]")
         else:
             self._emit(f"#[derive(Clone, Debug)]")
-        self._emit(f"struct {cls.name}{type_params_str} {{")
+        self._emit(f"pub struct {cls.name}{type_params_str} {{")
         self._indent += 1
         for field_name, field_type in cls.fields:
-            self._emit(f"{_mangle(field_name)}: {self._get_rust_type(field_type)},")
+            self._emit(f"pub {_mangle(field_name)}: {self._get_rust_type(field_type)},")
         self._indent -= 1
         self._emit("}")
         self._emit("")
@@ -1057,7 +1064,7 @@ class RustCodegen:
             self._indent += 1
             for tm in trait.methods:
                 if tm.name in class_methods:
-                    self._gen_method(class_methods[tm.name])
+                    self._gen_method(class_methods[tm.name], is_trait_impl=True)
             self._indent -= 1
             self._emit("}")
             self._emit("")
@@ -1160,7 +1167,7 @@ class RustCodegen:
             self._emit("}")
             self._emit("")
 
-    def _gen_method(self, func: IRFunction, is_init: bool = False) -> None:
+    def _gen_method(self, func: IRFunction, is_init: bool = False, is_trait_impl: bool = False) -> None:
         self._uses_py_error = True
         self._mutated_vars = _collect_mutated_vars(func.body)
         decls, pre_declare = _collect_decls(func.body, self._uses_python_wrappers)
@@ -1182,13 +1189,14 @@ class RustCodegen:
             type_params_str = f"<{tp_list}>"
 
         if is_init:
-            self._emit(f"fn new({params}) -> Result<Self, PyError> {{")
+            self._emit(f"pub fn new({params}) -> Result<Self, PyError> {{")
         else:
             ret = self._get_rust_type(func.return_type)
             if func.is_async:
                 self._uses_async = True
             async_kw = "async " if func.is_async else ""
-            self._emit(f"{async_kw}fn {_mangle(func.name)}{type_params_str}({params}) -> Result<{ret}, PyError> {{")
+            pub_kw = "" if is_trait_impl else "pub "
+            self._emit(f"{pub_kw}{async_kw}fn {_mangle(func.name)}{type_params_str}({params}) -> Result<{ret}, PyError> {{")
 
         self._indent += 1
 
@@ -1267,7 +1275,7 @@ class RustCodegen:
             # Always rename Python main to __py_main to avoid collision with Rust main entrypoint
             fn_name = "__py_main" 
             async_kw = "async " if func.is_async else ""
-            self._emit(f"{async_kw}fn {fn_name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
+            self._emit(f"pub {async_kw}fn {fn_name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
             if func.is_async:
                 self._uses_async = True
         else:
@@ -1276,7 +1284,7 @@ class RustCodegen:
             if func.is_async:
                 self._uses_async = True
             async_kw = "async " if func.is_async else ""
-            self._emit(f"{async_kw}fn {func.name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
+            self._emit(f"pub {async_kw}fn {func.name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
 
         self._indent += 1
 

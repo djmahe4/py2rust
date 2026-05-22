@@ -55,7 +55,7 @@ pub enum StrOrIntUnion {
     Int(i32),
 }
 
-fn describe_number(x: Option<i32>) -> Result<String, PyError> {
+pub fn describe_number(x: Option<i32>) -> Result<String, PyError> {
     if x.is_none() {
         return Ok("Nothing".to_string());
     } else {
@@ -64,7 +64,7 @@ fn describe_number(x: Option<i32>) -> Result<String, PyError> {
     Ok(String::new())
 }
 
-fn combine(x: StrOrIntUnion) -> Result<String, PyError> {
+pub fn combine(x: StrOrIntUnion) -> Result<String, PyError> {
     if matches!(x, StrOrIntUnion::Int(_)) {
         return Ok(format!("Int: {:?}", x));
     } else if matches!(x, StrOrIntUnion::Str(_)) {
@@ -73,7 +73,7 @@ fn combine(x: StrOrIntUnion) -> Result<String, PyError> {
     return Ok("Unknown".to_string());
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     println!("{}", describe_number(Some(10))?);
     println!("{}", describe_number(None)?);
     println!("{}", combine(StrOrIntUnion::Int(42))?);

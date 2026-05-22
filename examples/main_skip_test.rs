@@ -49,7 +49,7 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn foo() -> Result<(), PyError> {
+pub fn foo() -> Result<(), PyError> {
     println!("{}", "foo".to_string());
     Ok(())
 }

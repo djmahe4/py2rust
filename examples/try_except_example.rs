@@ -56,7 +56,7 @@ pub enum TryResult<T> {
     Continue,
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let mut i: i32 = 0;
 
     {
@@ -120,7 +120,7 @@ fn __py_main() -> Result<(), PyError> {
     Ok(())
 }
 
-fn test_return() -> Result<i32, PyError> {
+pub fn test_return() -> Result<i32, PyError> {
     {
         let __result = (|| -> Result<TryResult<i32>, PyError> {
             return Ok(TryResult::Return((42)));

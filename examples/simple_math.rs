@@ -49,15 +49,15 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn add(x: i32, y: i32) -> Result<i32, PyError> {
+pub fn add(x: i32, y: i32) -> Result<i32, PyError> {
     return Ok(x + y);
 }
 
-fn multiply(x: i32, y: i32) -> Result<i32, PyError> {
+pub fn multiply(x: i32, y: i32) -> Result<i32, PyError> {
     return Ok(x * y);
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let a: i32 = 10;
     let b: i32 = 5;
     let sum_result: i32 = add(a, b)?;

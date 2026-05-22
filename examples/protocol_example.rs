@@ -54,30 +54,30 @@ pub trait Drawable {
 }
 
 #[derive(Clone, Debug)]
-struct Circle {
-    radius: i32,
+pub struct Circle {
+    pub radius: i32,
 }
 
 impl Circle {
-    fn new(radius: i32) -> Result<Self, PyError> {
+    pub fn new(radius: i32) -> Result<Self, PyError> {
         Ok(Self { radius: radius })
     }
-    fn draw(&self) -> Result<String, PyError> {
+    pub fn draw(&self) -> Result<String, PyError> {
         return Ok(format!("Circle({})", self.radius));
     }
 }
 
 
 #[derive(Clone, Debug)]
-struct Square {
-    side: i32,
+pub struct Square {
+    pub side: i32,
 }
 
 impl Square {
-    fn new(side: i32) -> Result<Self, PyError> {
+    pub fn new(side: i32) -> Result<Self, PyError> {
         Ok(Self { side: side })
     }
-    fn draw(&self) -> Result<String, PyError> {
+    pub fn draw(&self) -> Result<String, PyError> {
         return Ok(format!("Square({})", self.side));
     }
 }
@@ -97,7 +97,7 @@ impl Drawable for Square {
 
 }
 
-fn render(items: Vec<Box<dyn Drawable>>) -> Result<(), PyError> {
+pub fn render(items: Vec<Box<dyn Drawable>>) -> Result<(), PyError> {
     let mut item: &dyn Drawable;
 
     {
@@ -109,7 +109,7 @@ fn render(items: Vec<Box<dyn Drawable>>) -> Result<(), PyError> {
     Ok(())
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let shapes: Vec<Box<dyn Drawable>> = vec![Box::new(Circle::new(5)?) as Box<dyn Drawable>, Box::new(Square::new(10)?) as Box<dyn Drawable>];
     render(shapes)?;
     Ok(())

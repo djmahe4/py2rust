@@ -66,7 +66,7 @@ impl From<PyError> for pyo3::PyErr {
     }
 }
 
-fn test_external() -> Result<(), PyError> {
+pub fn test_external() -> Result<(), PyError> {
     let cwd: ExternalObject = ExternalObject::load_module("os")?.call_method("getcwd", ())?;
     println!("{}", cwd);
     let parent: ExternalObject = ExternalObject::load_module("os")?.getattr("path")?.call_method("dirname", (cwd,))?;

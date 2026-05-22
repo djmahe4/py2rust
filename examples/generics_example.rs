@@ -49,11 +49,11 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn first_element<T: Clone>(items: Vec<T>) -> Result<T, PyError> {
+pub fn first_element<T: Clone>(items: Vec<T>) -> Result<T, PyError> {
     return Ok({ let __coll = &(items); let __idx_raw = 0; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx].clone() });
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let nums: Vec<i32> = vec![1, 2, 3];
     let strs: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string()];
     println!("{}", first_element(nums)?);

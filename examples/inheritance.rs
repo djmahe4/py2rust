@@ -57,12 +57,12 @@ pub trait DogTrait: AnimalTrait {
 }
 
 #[derive(Clone, Debug)]
-struct Animal {
-    name: String,
+pub struct Animal {
+    pub name: String,
 }
 
 impl Animal {
-    fn new(name: String) -> Result<Self, PyError> {
+    pub fn new(name: String) -> Result<Self, PyError> {
         Ok(Self { name: name })
     }
 }
@@ -75,12 +75,12 @@ impl AnimalTrait for Animal {
 
 
 #[derive(Clone, Debug)]
-struct Dog {
-    name: String,
+pub struct Dog {
+    pub name: String,
 }
 
 impl Dog {
-    fn new(name: String) -> Result<Self, PyError> {
+    pub fn new(name: String) -> Result<Self, PyError> {
         Ok(Self { name: name })
     }
 }
@@ -95,7 +95,7 @@ impl AnimalTrait for Dog {
 }
 
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let d: Dog = Dog::new("Buddy".to_string())?;
     let result: i32 = d.speak()?;
     println!("{}", result);

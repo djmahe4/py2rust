@@ -51,7 +51,7 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let lst: Vec<i32> = vec![1, 2, 3];
     if lst.contains(&1) {
         println!("{}", 100);

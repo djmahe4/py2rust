@@ -100,7 +100,7 @@ impl FileHandle {
     }
 }
 
-fn test_assert() -> Result<(), PyError> {
+pub fn test_assert() -> Result<(), PyError> {
     let x: i32 = 10;
     assert!(x > 0);
     assert!(x == 10, "{}", "x should be 10".to_string());
@@ -108,7 +108,7 @@ fn test_assert() -> Result<(), PyError> {
     Ok(())
 }
 
-fn test_with() -> Result<(), PyError> {
+pub fn test_with() -> Result<(), PyError> {
     {
         let mut f = FileHandle::open(&"test.txt".to_string(), &"w".to_string())?;
         f.write(&"hello world".to_string())?;
@@ -117,7 +117,7 @@ fn test_with() -> Result<(), PyError> {
     Ok(())
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     test_assert()?;
     test_with()?;
     Ok(())

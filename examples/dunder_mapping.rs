@@ -50,34 +50,34 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 #[derive(Clone, Debug)]
-struct Point {
-    x: i32,
-    y: i32,
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Point {
-    fn new(x: i32, y: i32) -> Result<Self, PyError> {
+    pub fn new(x: i32, y: i32) -> Result<Self, PyError> {
         Ok(Self { x: x, y: y })
     }
-    fn __add__(&self, other: Point) -> Result<Point, PyError> {
+    pub fn __add__(&self, other: Point) -> Result<Point, PyError> {
         return Ok(Point::new((self.x + other.x), (self.y + other.y))?);
     }
-    fn __sub__(&self, other: Point) -> Result<Point, PyError> {
+    pub fn __sub__(&self, other: Point) -> Result<Point, PyError> {
         return Ok(Point::new((self.x - other.x), (self.y - other.y))?);
     }
-    fn __mul__(&self, factor: i32) -> Result<Point, PyError> {
+    pub fn __mul__(&self, factor: i32) -> Result<Point, PyError> {
         return Ok(Point::new((self.x * factor), (self.y * factor))?);
     }
-    fn __eq__(&self, other: Point) -> Result<bool, PyError> {
+    pub fn __eq__(&self, other: Point) -> Result<bool, PyError> {
         return Ok(self.x == other.x && self.y == other.y);
     }
-    fn __lt__(&self, other: Point) -> Result<bool, PyError> {
+    pub fn __lt__(&self, other: Point) -> Result<bool, PyError> {
         if self.x != other.x {
             return Ok(self.x < other.x);
         }
         return Ok(self.y < other.y);
     }
-    fn __str__(&self) -> Result<String, PyError> {
+    pub fn __str__(&self) -> Result<String, PyError> {
         return Ok(format!("Point({}, {})", self.x, self.y));
     }
 }
@@ -131,7 +131,7 @@ impl PartialOrd<Point> for Point {
 }
 
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let p1: Point = Point::new(10, 20)?;
     let p2: Point = Point::new(5, 5)?;
     let p3: Point = p1.clone() + p2.clone();

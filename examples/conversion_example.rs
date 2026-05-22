@@ -50,16 +50,16 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 #[derive(Clone, Debug)]
-struct Point {
-    x: i32,
-    y: i32,
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Point {
-    fn new(x: i32, y: i32) -> Result<Self, PyError> {
+    pub fn new(x: i32, y: i32) -> Result<Self, PyError> {
         Ok(Self { x: x, y: y })
     }
-    fn __str__(&self) -> Result<String, PyError> {
+    pub fn __str__(&self) -> Result<String, PyError> {
         return Ok(format!("({}, {})", self.x, self.y));
     }
 }
@@ -74,7 +74,7 @@ impl std::fmt::Display for Point {
 }
 
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let p: Point = Point::new(1, 2)?;
     let s: String = p.__str__()?;
     println!("{}", s);

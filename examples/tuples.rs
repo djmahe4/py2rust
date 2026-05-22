@@ -49,11 +49,11 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn swap(x: i32, y: i32) -> Result<(i32, i32), PyError> {
+pub fn swap(x: i32, y: i32) -> Result<(i32, i32), PyError> {
     return Ok((y, x));
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let mut a: i32 = 1;
     let mut b: i32 = 2;
     let (a, b) = swap(a, b)?;

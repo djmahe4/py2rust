@@ -50,32 +50,32 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 #[derive(Clone, Debug)]
-struct Container {
-    items: Vec<i32>,
+pub struct Container {
+    pub items: Vec<i32>,
 }
 
 impl Container {
-    fn new() -> Result<Self, PyError> {
+    pub fn new() -> Result<Self, PyError> {
         Ok(Self { items: vec![0].repeat(3 as usize) })
     }
-    fn __getitem__(&self, idx: i32) -> Result<i32, PyError> {
+    pub fn __getitem__(&self, idx: i32) -> Result<i32, PyError> {
         return Ok({ let __coll = &(self.items); let __idx_raw = idx; let actual_idx = if __idx_raw < 0 { (__idx_raw + (__coll.len() as i32) as i32) as usize } else { __idx_raw as usize }; __coll[actual_idx] });
     }
-    fn __setitem__(&mut self, idx: i32, val: i32) -> Result<(), PyError> {
+    pub fn __setitem__(&mut self, idx: i32, val: i32) -> Result<(), PyError> {
         self.items[idx as usize] = val;
         Ok(())
     }
 }
 
 
-fn test() -> Result<(), PyError> {
+pub fn test() -> Result<(), PyError> {
     let mut c: Container = Container::new()?;
     c.__setitem__(1, 10)?;
     println!("{}", c.__getitem__(1)?);
     Ok(())
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     test()?;
     Ok(())
 }

@@ -50,29 +50,29 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 #[derive(Clone, Debug)]
-struct Point {
-    x: i32,
-    y: i32,
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Point {
-    fn new(x: i32, y: i32) -> Result<Self, PyError> {
+    pub fn new(x: i32, y: i32) -> Result<Self, PyError> {
         Ok(Self { x: x, y: y })
     }
-    fn get_x(&self) -> Result<i32, PyError> {
+    pub fn get_x(&self) -> Result<i32, PyError> {
         return Ok(self.x);
     }
-    fn get_y(&self) -> Result<i32, PyError> {
+    pub fn get_y(&self) -> Result<i32, PyError> {
         return Ok(self.y);
     }
-    fn distance_to(&self, other_x: i32) -> Result<i32, PyError> {
+    pub fn distance_to(&self, other_x: i32) -> Result<i32, PyError> {
         let dx: i32 = self.x - other_x;
         return Ok(dx);
     }
 }
 
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let p: Point = Point::new(3, 4)?;
     let x: i32 = p.get_x()?;
     let y: i32 = p.get_y()?;

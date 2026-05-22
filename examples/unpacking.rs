@@ -49,11 +49,11 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn get_point() -> Result<(i32, i32), PyError> {
+pub fn get_point() -> Result<(i32, i32), PyError> {
     return Ok((10, 20));
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let mut x: i32 = 0;
     let mut y: i32 = 0;
     let (x, y) = get_point()?;

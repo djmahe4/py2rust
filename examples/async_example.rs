@@ -52,15 +52,15 @@ impl From<std::num::ParseFloatError> for PyError {
 // Using tokio as async runtime
 
 
-async fn say_hello(name: String) -> Result<String, PyError> {
+pub async fn say_hello(name: String) -> Result<String, PyError> {
     return Ok("Hello, ".to_string().to_string() + &name);
 }
 
-async fn calculate(a: i32, b: i32) -> Result<i32, PyError> {
+pub async fn calculate(a: i32, b: i32) -> Result<i32, PyError> {
     return Ok(a + b);
 }
 
-async fn __py_main() -> Result<(), PyError> {
+pub async fn __py_main() -> Result<(), PyError> {
     let msg: String = say_hello("Async World".to_string()).await?;
     println!("{}", msg);
     let val: i32 = calculate(10, 20).await?;

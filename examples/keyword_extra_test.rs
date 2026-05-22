@@ -66,12 +66,12 @@ impl From<PyError> for pyo3::PyErr {
     }
 }
 
-fn test_as() -> Result<(), PyError> {
+pub fn test_as() -> Result<(), PyError> {
     println!("{}", "math as m test".to_string());
     Ok(())
 }
 
-fn test_global_local() -> Result<(), PyError> {
+pub fn test_global_local() -> Result<(), PyError> {
     // WARNING: Python 'global' for [x] is not fully supported in Rust's ownership model.
     // It usually indicates shared state which should be handled via Arc<Mutex<T>> or passed as arguments.
     let x: i32 = 1;
@@ -79,7 +79,7 @@ fn test_global_local() -> Result<(), PyError> {
     Ok(())
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     test_as()?;
     test_global_local()?;
     Ok(())

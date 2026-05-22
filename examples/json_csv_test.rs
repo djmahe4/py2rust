@@ -70,7 +70,7 @@ impl From<PyError> for pyo3::PyErr {
     }
 }
 
-fn test_json() -> Result<(), PyError> {
+pub fn test_json() -> Result<(), PyError> {
     let mut k: ExternalObject = ExternalObject::default();
 
     println!("{}", "Testing JSON support...".to_string());
@@ -92,7 +92,7 @@ fn test_json() -> Result<(), PyError> {
     Ok(())
 }
 
-fn test_csv() -> Result<(), PyError> {
+pub fn test_csv() -> Result<(), PyError> {
     let mut row: ExternalObject = ExternalObject::default();
 
     println!("{}", "\nTesting CSV support...".to_string());
@@ -111,7 +111,7 @@ fn test_csv() -> Result<(), PyError> {
     Ok(())
 }
 
-fn test_attr() -> Result<(), PyError> {
+pub fn test_attr() -> Result<(), PyError> {
     Ok(())
 }
 fn main() -> Result<(), PyError> {

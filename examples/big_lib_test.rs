@@ -66,7 +66,7 @@ impl From<PyError> for pyo3::PyErr {
     }
 }
 
-fn test_numpy() -> Result<(), PyError> {
+pub fn test_numpy() -> Result<(), PyError> {
     println!("{}", "Testing NumPy...".to_string());
     let arr: ExternalObject = ExternalObject::load_module("numpy")?.call_method("array", (vec![1, 2, 3],))?;
     println!("{}", format!("Array: {}", arr));
@@ -74,7 +74,7 @@ fn test_numpy() -> Result<(), PyError> {
     Ok(())
 }
 
-fn test_opencv() -> Result<(), PyError> {
+pub fn test_opencv() -> Result<(), PyError> {
     println!("{}", "\nTesting OpenCV...".to_string());
     println!("{}", format!("OpenCV Version: {}", ExternalObject::load_module("cv2")?.getattr("__version__")?));
     let img: ExternalObject = ExternalObject::load_module("numpy")?.call_method("zeros", ((10, 10, 3),))?;

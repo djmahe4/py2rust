@@ -66,7 +66,7 @@ impl From<PyError> for pyo3::PyErr {
     }
 }
 
-fn test_print_variants() -> Result<(), PyError> {
+pub fn test_print_variants() -> Result<(), PyError> {
     let a: i32 = 1;
     let b: f64 = 2.5;
     let c: String = "hello".to_string();
@@ -79,13 +79,13 @@ fn test_print_variants() -> Result<(), PyError> {
     Ok(())
 }
 
-fn test_import_alias() -> Result<(), PyError> {
+pub fn test_import_alias() -> Result<(), PyError> {
     let res: ExternalObject = ExternalObject::load_module("math")?.call_method("sqrt", (16,))?;
     println!("{} {}", "sqrt(16) =".to_string(), res);
     Ok(())
 }
 
-fn test_keywords_combinations() -> Result<(), PyError> {
+pub fn test_keywords_combinations() -> Result<(), PyError> {
     let mut content: String = String::new();
 
     // WARNING: Python 'global' for [x] is not fully supported in Rust's ownership model.

@@ -100,7 +100,7 @@ impl FileHandle {
     }
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let mut f: FileHandle = FileHandle::open(&"test.txt".to_string(), &"w".to_string())?;
     f.write(&"Hello".to_string())?;
     f.close()?;

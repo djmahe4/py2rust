@@ -50,25 +50,25 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 #[derive(Clone, Debug)]
-struct Counter {
-    count: i32,
+pub struct Counter {
+    pub count: i32,
 }
 
 impl Counter {
-    fn new() -> Result<Self, PyError> {
+    pub fn new() -> Result<Self, PyError> {
         Ok(Self { count: 0 })
     }
-    fn increment(&mut self) -> Result<(), PyError> {
+    pub fn increment(&mut self) -> Result<(), PyError> {
         self.count = self.count + 1;
         Ok(())
     }
-    fn get_count(&self) -> Result<i32, PyError> {
+    pub fn get_count(&self) -> Result<i32, PyError> {
         return Ok(self.count);
     }
 }
 
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let mut c: Counter = Counter::new()?;
     c.increment()?;
     c.increment()?;

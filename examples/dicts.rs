@@ -51,7 +51,7 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let mut scores: HashMap<String, i32> = HashMap::from([("alice".to_string(), 90), ("bob".to_string(), 85)]);
     scores.insert("charlie".to_string(), 95);
     let alice_score: i32 = scores.get(&"alice".to_string()).unwrap().clone();

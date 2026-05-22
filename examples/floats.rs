@@ -49,14 +49,14 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn float_math(x: f64, y: f64) -> Result<f64, PyError> {
+pub fn float_math(x: f64, y: f64) -> Result<f64, PyError> {
     let z: f64 = (x as f64) + (y as f64);
     let a: f64 = (x as f64) * 2.0;
     let b: f64 = (y as f64) / 2.0;
     return Ok((((z as f64) + (a as f64)) - (b as f64)));
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let res: f64 = float_math(10.5, 5.5)?;
     println!("{}", res);
     return Ok(());

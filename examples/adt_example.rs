@@ -57,7 +57,7 @@ pub enum Color {
 }
 
 
-fn describe_color(c: Color) -> Result<(), PyError> {
+pub fn describe_color(c: Color) -> Result<(), PyError> {
     match c {
         Color::RED => {
             println!("{}", "It is red".to_string());
@@ -75,7 +75,7 @@ fn describe_color(c: Color) -> Result<(), PyError> {
     Ok(())
 }
 
-fn check_value(x: i32) -> Result<(), PyError> {
+pub fn check_value(x: i32) -> Result<(), PyError> {
     match x {
         1 => {
             println!("{}", "One".to_string());
@@ -90,7 +90,7 @@ fn check_value(x: i32) -> Result<(), PyError> {
     Ok(())
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     describe_color(Color::RED)?;
     describe_color(Color::GREEN)?;
     check_value(1)?;

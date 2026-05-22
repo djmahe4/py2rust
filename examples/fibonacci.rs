@@ -49,10 +49,10 @@ impl From<std::num::ParseFloatError> for PyError {
     }
 }
 
-fn fib(n: i32) -> Result<i32, PyError> {
-    let mut b: i32 = 0;
+pub fn fib(n: i32) -> Result<i32, PyError> {
     let mut a: i32 = 0;
     let mut temp: i32 = 0;
+    let mut b: i32 = 0;
 
     if n <= 1 {
         return Ok(n);
@@ -69,7 +69,7 @@ fn fib(n: i32) -> Result<i32, PyError> {
     return Ok(b);
 }
 
-fn __py_main() -> Result<(), PyError> {
+pub fn __py_main() -> Result<(), PyError> {
     let result: i32 = fib(10)?;
     println!("{}", result);
     return Ok(());
