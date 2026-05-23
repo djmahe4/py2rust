@@ -32,3 +32,22 @@ def test_ollama_client_generate():
         res = client.generate("test prompt")
         assert "VERDICT: PASS" in res
 
+def test_semantic_validator_format_and_context():
+    from py2rust.learning_system.validation.semantic_validator import SemanticValidator
+    validator = SemanticValidator()
+    # verify context retrieval handles Windows/Unix tools and fallback safely
+    context = validator.get_symbol_context("my_func")
+    assert context is not None
+    
+    # Mocking client response for validator equivalence check
+    import unittest.mock as mock
+    mock_client = mock.Mock()
+    mock_client.generate.return_value = "VERDICT: PASS\nCONFIDENCE: 0.95\nREASONING: Code matches exactly."
+    validator.client = mock_client
+    
+    res = validator.validate_equivalence("def my_func(): pass", "fn my_func() {}", "my_func")
+    assert res["verdict"] == "PASS"
+    assert res["confidence"] == 0.95
+    assert "matches exactly" in res["reasoning"].lower()
+
+
