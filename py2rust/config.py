@@ -27,5 +27,6 @@ class CompilerConfig:
     learn_patterns: bool = False
     apply_learned_patterns: bool = False
     review_failures: bool = False
+    force: bool = False
 
 

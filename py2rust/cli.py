@@ -29,6 +29,7 @@ def main():
     parser.add_argument("--learn-patterns", action="store_true", help="Extract and store architectural patterns from validation results")
     parser.add_argument("--apply-learned-patterns", action="store_true", help="Apply previously learned patterns during compilation")
     parser.add_argument("--review-failures", action="store_true", help="Interactively review validation failures")
+    parser.add_argument("--force", "-f", action="store_true", help="Force recompile all modules, bypassing the build cache.")
 
     args = parser.parse_args()
 
@@ -51,6 +52,7 @@ def main():
         learn_patterns=args.learn_patterns,
         apply_learned_patterns=args.apply_learned_patterns,
         review_failures=args.review_failures,
+        force=args.force,
     )
 
 

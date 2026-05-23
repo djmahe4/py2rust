@@ -12,6 +12,7 @@ from py2rust.backend.rust_codegen import generate_rust
 from py2rust.backend.rust_formatter import format_rust
 from py2rust.backend.workspace_generator import WorkspaceGenerator
 from py2rust.utils.logger import setup_logger
+from py2rust.project.build_cache import BuildCache
 
 def compile_repo(config: CompilerConfig) -> bool:
     logger = setup_logger(config.verbose)
@@ -69,9 +70,15 @@ def compile_repo(config: CompilerConfig) -> bool:
             else:
                 global_dep_manager.add_dependency(crate, version=ver)
                 
+    # Initialize incremental build cache
+    cache_dir = repo_root / ".py2rust"
+    cache_file = cache_dir / "cache.json"
+    cache = BuildCache(cache_file)
+    recompiled_modules: set[str] = set()
+
     for mod_name in sorted_modules:
         file_path = resolver.local_modules[mod_name]
-        logger.info(f"Compiling module: {mod_name} ({file_path})")
+        logger.info(f"Processing module: {mod_name} ({file_path})")
         
         try:
             source = file_path.read_text(encoding="utf-8")
@@ -92,11 +99,60 @@ def compile_repo(config: CompilerConfig) -> bool:
                 module_name=mod_name
             )
             
-            rust_code = generate_rust(ir_module, dependency_manager=mod_dep_manager, config=config)
+            current_hash = BuildCache.get_file_hash(file_path)
+            cache_entry = cache.get_entry(mod_name)
             
-            if config.format_output:
-                rust_code = format_rust(rust_code)
+            recompile = False
+            if config.force:
+                recompile = True
+            elif not cache_entry:
+                recompile = True
+            elif cache_entry.get("content_hash") != current_hash:
+                recompile = True
+            else:
+                current_deps = graph.dependencies.get(mod_name, set())
+                cached_deps = cache_entry.get("dependency_hashes", {})
+                if set(current_deps) != set(cached_deps.keys()):
+                    recompile = True
+                else:
+                    for dep in current_deps:
+                        if dep in recompiled_modules:
+                            recompile = True
+                            break
+                        dep_path = resolver.local_modules.get(dep)
+                        if dep_path:
+                            dep_current_hash = BuildCache.get_file_hash(dep_path)
+                            if cached_deps.get(dep) != dep_current_hash:
+                                recompile = True
+                                break
+                        else:
+                            recompile = True
+                            break
+            
+            if recompile:
+                logger.info(f"Recompiling module: {mod_name}")
+                rust_code = generate_rust(ir_module, dependency_manager=mod_dep_manager, config=config)
+                if config.format_output:
+                    rust_code = format_rust(rust_code)
                 
+                # Save cache entry
+                dependency_hashes = {}
+                for dep in graph.dependencies.get(mod_name, set()):
+                    dep_path = resolver.local_modules.get(dep)
+                    if dep_path:
+                        dependency_hashes[dep] = BuildCache.get_file_hash(dep_path)
+                cache.set_entry(
+                    module_name=mod_name,
+                    file_path=file_path,
+                    content_hash=current_hash,
+                    dependency_hashes=dependency_hashes,
+                    rust_code=rust_code
+                )
+                recompiled_modules.add(mod_name)
+            else:
+                logger.info(f"Cache hit for module: {mod_name} - using cached Rust code")
+                rust_code = cache_entry["rust_code"]
+            
             compiled_modules[mod_name] = rust_code
             
             # Merge module dependencies into the global manager
