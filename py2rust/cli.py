@@ -22,6 +22,13 @@ def main():
     parser.add_argument("--runtime", choices=["tokio", "futures"], default="tokio", help="Async runtime to use (default: tokio)")
     parser.add_argument("--repo-root", default="", help="Root of python repository to compile")
     parser.add_argument("--package-dir", default="", help="Subdirectory containing python package")
+    # Wave 33: Semantic validation and learning flags
+    parser.add_argument("--validate", action="store_true", help="Enable semantic validation using local Ollama model")
+    parser.add_argument("--ollama-model", default="deepseek-coder", help="Ollama model to use for validation (default: deepseek-coder)")
+    parser.add_argument("--strict-validation", action="store_true", help="Fail compilation if semantic validation fails")
+    parser.add_argument("--learn-patterns", action="store_true", help="Extract and store architectural patterns from validation results")
+    parser.add_argument("--apply-learned-patterns", action="store_true", help="Apply previously learned patterns during compilation")
+    parser.add_argument("--review-failures", action="store_true", help="Interactively review validation failures")
 
     args = parser.parse_args()
 
@@ -38,7 +45,14 @@ def main():
         async_runtime=AsyncRuntime(args.runtime),
         repo_root=args.repo_root,
         package_dir=args.package_dir,
+        validate=args.validate,
+        ollama_model=args.ollama_model,
+        strict_validation=args.strict_validation,
+        learn_patterns=args.learn_patterns,
+        apply_learned_patterns=args.apply_learned_patterns,
+        review_failures=args.review_failures,
     )
+
 
 
     success = compile_file(config)

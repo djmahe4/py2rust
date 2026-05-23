@@ -21,4 +21,11 @@ class CompilerConfig:
     async_runtime: AsyncRuntime = AsyncRuntime.TOKIO
     repo_root: str = ""
     package_dir: str = ""
+    validate: bool = False
+    ollama_model: str = "deepseek-coder"
+    strict_validation: bool = False
+    learn_patterns: bool = False
+    apply_learned_patterns: bool = False
+    review_failures: bool = False
+
 
