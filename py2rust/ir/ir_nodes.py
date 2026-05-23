@@ -581,6 +581,8 @@ class IRDictDelete:
 class IRWithItem:
     context_expr: IRExpr
     optional_vars: Optional[IRExpr] = None
+    # ctx_kind: "file" | "mutex" | "generic"
+    ctx_kind: str = "generic"
 
 
 @dataclass(frozen=True)

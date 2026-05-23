@@ -231,6 +231,18 @@ def _to_ir_type(t):
     raise SemanticError(f"Unknown type: {t}")
 
 
+_MUTEX_NAMES = frozenset({"Mutex", "Lock", "RwLock", "Semaphore", "Condition",
+                           "threading.Lock", "threading.RLock", "threading.Semaphore",
+                           "threading.Condition", "asyncio.Lock", "asyncio.Semaphore"})
+
+
+def _is_mutex_like(name: str) -> bool:
+    """Return True if the type name looks like a mutex/lock synchronisation primitive."""
+    return name in _MUTEX_NAMES or any(
+        name.endswith(suffix) for suffix in ("Lock", "Mutex", "RwLock", "Semaphore", "Guard")
+    )
+
+
 class IRBuilder:
     def __init__(self, filename: str = "<unknown>", source_lines: list = None, symbol_table: SymbolTable = None, config=None):
         self.filename = filename
@@ -1635,17 +1647,30 @@ class IRBuilder:
         for item in node.items:
             ctx = self._build_expr(item.context_expr)
             vars_ = self._build_expr(item.optional_vars) if item.optional_vars else None
-            
-            # Simple type inference/binding for with vars
-            if item.optional_vars:
-                ctx_type = self.inferencer.infer(item.context_expr)
+
+            # Classify context manager kind and bind the target variable
+            ctx_type = self.inferencer.infer(item.context_expr)
+            ctx_kind = "generic"
+            if isinstance(ctx_type, FileType):
+                ctx_kind = "file"
+                res_type = FileType()
+            elif isinstance(ctx_type, ClassType) and _is_mutex_like(ctx_type.name):
+                ctx_kind = "mutex"
                 res_type = UnknownType()
-                if isinstance(ctx_type, FileType):
-                    res_type = FileType()
+            else:
+                # Detect Mutex by checking for a .lock()/.acquire() method-call pattern
+                from ..frontend.ast_nodes import MethodCall, FunctionCall, Name
+                if isinstance(item.context_expr, MethodCall) and item.context_expr.method in (
+                    "lock", "acquire", "read", "write"
+                ):
+                    ctx_kind = "mutex"
+                res_type = UnknownType()
+
+            if item.optional_vars:
                 self._bind_target(item.optional_vars, res_type)
-            
-            items.append(IRWithItem(context_expr=ctx, optional_vars=vars_))
-        
+
+            items.append(IRWithItem(context_expr=ctx, optional_vars=vars_, ctx_kind=ctx_kind))
+
         body = tuple(self._build_stmts(node.body))
         return IRWith(items=tuple(items), body=body, is_async=node.is_async)
 

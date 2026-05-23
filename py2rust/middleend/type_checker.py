@@ -117,6 +117,17 @@ def _types_compatible(a, b, invariant=False) -> bool:
     return False
 
 
+_MUTEX_CLASS_NAMES = frozenset({"Mutex", "Lock", "RwLock", "Semaphore", "Condition",
+                                  "threading.Lock", "threading.RLock", "threading.Semaphore"})
+
+
+def _is_mutex_like_name(name: str) -> bool:
+    """Return True if the class name is a known mutex/lock synchronisation primitive."""
+    return name in _MUTEX_CLASS_NAMES or any(
+        name.endswith(suffix) for suffix in ("Lock", "Mutex", "RwLock", "Semaphore", "Guard")
+    )
+
+
 class TypeChecker:
     def __init__(
         self,
@@ -1242,9 +1253,15 @@ class TypeChecker:
             if item.optional_vars:
                 ctx_t = self.inferencer.infer(item.context_expr)
                 res_t = UnknownType()
-                # File handle special case
+                # File handle: the bound var has file type
                 if isinstance(ctx_t, FileType):
                     res_t = FileType()
+                # Mutex/Lock: bound var is the guard (opaque → UnknownType)
+                elif isinstance(ctx_t, ClassType) and _is_mutex_like_name(ctx_t.name):
+                    res_t = UnknownType()
+                # Custom context manager with __enter__/__exit__: still UnknownType
+                elif isinstance(ctx_t, ClassType):
+                    res_t = UnknownType()
                 self._bind_target(item.optional_vars, res_t)
         node.body = self._check_body(node.body)
         node.scope = self.st.current_scope

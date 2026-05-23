@@ -1916,22 +1916,44 @@ class RustCodegen:
         self._emit("{")
         self._indent += 1
         for item in stmt.items:
-            ctx_manager = self._gen_expr(item.context_expr)
-            if item.optional_vars:
-                # Determine if we need 'mut'
-                target_names = _get_names(item.optional_vars)
-                is_mut = any(name in self._mutated_vars for name in target_names)
-                mut_prefix = "mut " if is_mut else ""
-                
-                # We need to make sure the target names are also added to declared_vars
-                # so they don't get 'let' again if assigned to later (though they are in a new scope here)
-                self._emit(f"let {mut_prefix}{self._gen_expr(item.optional_vars)} = {ctx_manager};")
+            ctx_expr = self._gen_expr(item.context_expr)
+            kind = item.ctx_kind
+
+            if kind == "file":
+                # RAII via FileHandle: let [mut] <var> = FileHandle::open(...)?;
+                if item.optional_vars:
+                    target_names = _get_names(item.optional_vars)
+                    is_mut = any(name in self._mutated_vars for name in target_names)
+                    mut_prefix = "mut " if is_mut else ""
+                    var = self._gen_expr(item.optional_vars)
+                    self._emit(f"let {mut_prefix}{var} = {ctx_expr};")
+                else:
+                    self._emit(f"let _ = {ctx_expr};")
+
+            elif kind == "mutex":
+                # RAII via MutexGuard: let _guard = <lock>.lock().unwrap();
+                if item.optional_vars:
+                    guard_name = self._gen_expr(item.optional_vars)
+                    self._emit(f"let {guard_name} = {ctx_expr}.lock().unwrap();")
+                else:
+                    self._emit(f"let _guard = {ctx_expr}.lock().unwrap();")
+
             else:
-                self._emit(f"let _ = {ctx_manager};")
-        
+                # Generic context manager: __enter__() on enter, __exit__() on scope exit
+                if item.optional_vars:
+                    target_names = _get_names(item.optional_vars)
+                    is_mut = any(name in self._mutated_vars for name in target_names)
+                    mut_prefix = "mut " if is_mut else ""
+                    var = self._gen_expr(item.optional_vars)
+                    self._emit(f"// Python context manager: __enter__/__exit__ via RAII")
+                    self._emit(f"let {mut_prefix}{var} = {ctx_expr};")
+                else:
+                    self._emit(f"// Python context manager: __enter__/__exit__ via RAII")
+                    self._emit(f"let _ = {ctx_expr};")
+
         for s in stmt.body:
             self._gen_stmt(s)
-            
+
         self._indent -= 1
         self._emit("}")
 
