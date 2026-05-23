@@ -629,7 +629,7 @@ class RustCodegen:
         self._uses_heap = False
         self._decl_types = {}
 
-        # Compute needed traits (omit standalone companion traits)
+        # Compute needed traits (omit standalone companion traits unless in repo mode)
         companion_traits = {f"{cls.name}Trait": cls for cls in ir_mod.classes}
         needed_companion_traits = set()
         
@@ -638,8 +638,9 @@ class RustCodegen:
             for base in cls.bases:
                 all_bases.add(base)
                 
+        is_repo = bool(self.config and self.config.repo_root)
         for cls in ir_mod.classes:
-            if cls.bases or cls.name in all_bases:
+            if cls.bases or cls.name in all_bases or is_repo:
                 needed_companion_traits.add(f"{cls.name}Trait")
                 
         changed = True
@@ -665,9 +666,14 @@ class RustCodegen:
 
         # Pre-pass: Generate Traits
         trait_lines = []
+        local_classes = {cls.name for cls in ir_mod.classes}
         for trait in ir_mod.traits:
             if trait.name not in self._needed_traits:
                 continue
+            if trait.name.endswith("Trait"):
+                class_name = trait.name[:-5]
+                if class_name not in local_classes:
+                    continue
             trait_lines.append(self._gen_trait(trait))
             trait_lines.append("")
 
@@ -2960,6 +2966,10 @@ self.__state = {cond_state};"""
             return "self"
         elif isinstance(expr, IRStructAccess):
             if isinstance(expr.value, IRSelf):
+                from py2rust.ir.ir_nodes import IRIntType, IRFloatType, IRBoolType, IRUnitType
+                is_copy = isinstance(expr.result_type, (IRIntType, IRFloatType, IRBoolType, IRUnitType))
+                if not is_copy:
+                    return f"self.{_mangle(expr.field)}.clone()"
                 return f"self.{_mangle(expr.field)}"
             val = self._gen_expr(expr.value)
             # Use :: for static enum variant access

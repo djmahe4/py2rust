@@ -405,6 +405,13 @@ class IRBuilder:
             for f_name, f_type in info.fields.items():
                 all_fields[f_name] = _to_ir_type(f_type)
 
+        # Determine if class has its own local constructor
+        has_local_init = False
+        for item in cls.body:
+            if hasattr(item, "__class__") and type(item).__name__ == "FunctionDef" and item.name == "__init__":
+                has_local_init = True
+                break
+
         # 2. Inherit from base classes and local items
         for base_name in cls.bases:
             base_info = self.st.lookup_class(base_name)
@@ -421,8 +428,9 @@ class IRBuilder:
                         all_methods[(m_name, arity)] = self._build_method(full_name, m_def, defining_class=origin)
 
                 # Constructors
-                for arity, c_def in base_info.constructors.items():
-                    all_constructors[arity] = self._build_method(full_name, c_def)
+                if not has_local_init:
+                    for arity, c_def in base_info.constructors.items():
+                        all_constructors[arity] = self._build_method(full_name, c_def)
 
         # 2. Add local items
         # Define nested classes in this scope for resolution
@@ -476,6 +484,10 @@ class IRBuilder:
         )
         self._ir_traits.append(trait_def)
 
+        # Recursively add external traits of all base classes to ensure they can be resolved
+        for b_name in cls.bases:
+            self._add_external_base_traits(b_name)
+
         # 4. Ensure at least one constructor exists (default __init__)
         if not all_constructors:
             all_constructors[0] = IRFunction(
@@ -504,6 +516,38 @@ class IRBuilder:
         self._check_and_register_trait_impls(full_name, all_methods)
         
         return res
+
+    def _add_external_base_traits(self, base_name: str) -> None:
+        from ..ir.ir_nodes import IRTraitDefinition, IRParam
+        trait_name = f"{base_name}Trait"
+        # Check if already added to local traits list
+        if any(t.name == trait_name for t in self._ir_traits):
+            return
+        
+        base_info = self.st.lookup_class(base_name)
+        if not base_info:
+            return
+            
+        # Recurse into parent's bases first
+        for parent_base in base_info.bases:
+            self._add_external_base_traits(parent_base)
+            
+        # Build IRTraitDefinition for this base class
+        trait_methods = []
+        for m_name, arities in base_info.methods.items():
+            if m_name == "__init__":
+                continue
+            for arity, method_info in arities.items():
+                m_def, origin = method_info
+                if m_def and hasattr(m_def, 'params'):
+                    trait_methods.append(self._build_trait_method(m_def))
+                    
+        trait_def = IRTraitDefinition(
+            name=trait_name,
+            bases=tuple(f"{b}Trait" for b in base_info.bases),
+            methods=tuple(trait_methods)
+        )
+        self._ir_traits.append(trait_def)
 
     def _build_trait_method(self, func) -> IRTraitMethod:
         from ..ir.ir_nodes import IRTraitMethod

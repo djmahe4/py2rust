@@ -372,12 +372,58 @@ class TypeChecker:
                                         use_stmt = f"use crate::{rust_path}::{symbol_name} as {alias.asname};"
                                     else:
                                         use_stmt = f"use crate::{rust_path}::{symbol_name};"
+                                    self.st.dependency_manager.add_module_import(current_module, use_stmt)
+
+                                    # If the symbol is a class, also import its Trait
+                                    is_class = False
+                                    if self.st.cross_module_table:
+                                        symbol_val = self.st.cross_module_table.lookup_symbol(resolved_mod, symbol_name)
+                                        if symbol_val and type(symbol_val).__name__ == "ClassInfo":
+                                            is_class = True
+                                    # Fallback: if name is capitalized and not found yet, also import it to be safe
+                                    if not is_class and symbol_name and symbol_name[0].isupper():
+                                        is_class = True
+
+                                    if is_class:
+                                        if alias.asname:
+                                            use_stmt_trait = f"use crate::{rust_path}::{symbol_name}Trait as {alias.asname}Trait;"
+                                        else:
+                                            use_stmt_trait = f"use crate::{rust_path}::{symbol_name}Trait;"
+                                        self.st.dependency_manager.add_module_import(current_module, use_stmt_trait)
+
+                                        # Recursively import companion traits of all base classes
+                                        if symbol_val and type(symbol_val).__name__ == "ClassInfo":
+                                            def _add_base_traits(mod_name, class_info):
+                                                for base in class_info.bases:
+                                                    base_mod = mod_name
+                                                    base_info = None
+                                                    if self.st.cross_module_table:
+                                                        # Try direct lookup in mod_name
+                                                        base_val = self.st.cross_module_table.lookup_symbol(mod_name, base)
+                                                        if base_val and type(base_val).__name__ == "ClassInfo":
+                                                            base_info = base_val
+                                                        else:
+                                                            # Search all modules
+                                                            for other_mod_name, other_st in self.st.cross_module_table.modules.items():
+                                                                if base in other_st._classes:
+                                                                    base_mod = other_mod_name
+                                                                    base_info = other_st._classes[base]
+                                                                    break
+                                                    if base_info and base_mod != current_module:
+                                                        base_parts = base_mod.split(".")
+                                                        base_rust_path = "::".join(base_parts)
+                                                        use_stmt_base_trait = f"use crate::{base_rust_path}::{base}Trait;"
+                                                        self.st.dependency_manager.add_module_import(current_module, use_stmt_base_trait)
+                                                        _add_base_traits(base_mod, base_info)
+
+                                            _add_base_traits(resolved_mod, symbol_val)
                                 else:
                                     if alias.asname:
                                         use_stmt = f"use crate::{rust_path} as {alias.asname};"
                                     else:
                                         use_stmt = f"use crate::{rust_path};"
-                                self.st.dependency_manager.add_module_import(current_module, use_stmt)
+                                    self.st.dependency_manager.add_module_import(current_module, use_stmt)
+
                         else:
                             plugin = self.st.pm.load_plugin(resolved_mod) if resolved_mod else None
                             if plugin is None and not getattr(self.st.config, "mock_mode", False):
