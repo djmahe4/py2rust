@@ -20,3 +20,15 @@ def test_compiler_config_validation_fields():
     assert config.learn_patterns is True
     assert config.apply_learned_patterns is True
     assert config.review_failures is True
+
+def test_ollama_client_generate():
+    from py2rust.learning_system.validation.ollama_client import OllamaClient
+    client = OllamaClient(model="deepseek-coder")
+    # Mocking standard post requests to bypass external service
+    import unittest.mock as mock
+    with mock.patch("requests.post") as mock_post:
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {"response": "VERDICT: PASS"}
+        res = client.generate("test prompt")
+        assert "VERDICT: PASS" in res
+
