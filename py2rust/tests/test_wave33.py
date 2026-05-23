@@ -50,4 +50,29 @@ def test_semantic_validator_format_and_context():
     assert res["confidence"] == 0.95
     assert "matches exactly" in res["reasoning"].lower()
 
+def test_validation_store_persistence():
+    from py2rust.learning_system.validation.validation_store import ValidationStore
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "validations.jsonl")
+        store = ValidationStore(db_path)
+        
+        # Save validation record
+        record = {
+            "symbol_name": "calc_sum",
+            "python_source": "def calc_sum(a, b): return a + b",
+            "generated_rust": "fn calc_sum(a: i32, b: i32) -> i32 { a + b }",
+            "verdict": "PASS",
+            "confidence": 0.98,
+            "reasoning": "Behaviorally identical."
+        }
+        store.save_validation(record)
+        
+        # Verify persistence and retrieval
+        records = store.get_validations()
+        assert len(records) == 1
+        assert records[0]["symbol_name"] == "calc_sum"
+        assert records[0]["verdict"] == "PASS"
+        assert records[0]["confidence"] == 0.98
+
+
 
