@@ -59,6 +59,12 @@ from ..frontend.ast_nodes import (
     SliceType,
     DequeType,
     HeapType,
+    Yield,
+    YieldFrom,
+    GeneratorExp,
+    IteratorType,
+    IterableType,
+    GeneratorType,
 )
 from ..ir.ir_nodes import (
     IRModule,
@@ -161,6 +167,12 @@ from ..ir.ir_nodes import (
     IROptionType,
     IRSumType,
     IRType,
+    IRYield,
+    IRYieldFrom,
+    IRGeneratorExp,
+    IRIteratorType,
+    IRIterableType,
+    IRGeneratorType,
 )
 from ..utils.errors import SemanticError
 from .symbol_table import SymbolTable
@@ -174,7 +186,7 @@ def _to_ir_type(t):
     if t is None:
         return IRUnitType()
     # If already an IR type, return as is
-    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType, IRExternalPythonType, IROptionType, IRSumType)):
+    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType, IRExternalPythonType, IROptionType, IRSumType, IRIteratorType, IRIterableType, IRGeneratorType)):
         return t
         
     if isinstance(t, IntType):
@@ -227,6 +239,16 @@ def _to_ir_type(t):
         return IRSumType(variants=tuple(_to_ir_type(v) for v in t.variants))
     if isinstance(t, SliceType):
         return IRSliceType()
+    if isinstance(t, IteratorType):
+        return IRIteratorType(element_type=_to_ir_type(t.element_type))
+    if isinstance(t, IterableType):
+        return IRIterableType(element_type=_to_ir_type(t.element_type))
+    if isinstance(t, GeneratorType):
+        return IRGeneratorType(
+            yield_type=_to_ir_type(t.yield_type),
+            send_type=_to_ir_type(t.send_type),
+            return_type=_to_ir_type(t.return_type),
+        )
     
     raise SemanticError(f"Unknown type: {t}")
 
@@ -850,6 +872,12 @@ class IRBuilder:
                 elem_type = iterable_type.key_type
             elif isinstance(iterable_type, StrType):
                 elem_type = StrType()
+            elif isinstance(iterable_type, IteratorType):
+                elem_type = iterable_type.element_type
+            elif isinstance(iterable_type, IterableType):
+                elem_type = iterable_type.element_type
+            elif isinstance(iterable_type, GeneratorType):
+                elem_type = iterable_type.yield_type
             elif isinstance(iterable_type, (ExternalPythonType, UnknownType)):
                 elem_type = UnknownType()
             
@@ -1497,6 +1525,21 @@ class IRBuilder:
         elif name == "SetComp":
             return self._build_set_comp(expr)
 
+        elif name == "GeneratorExp":
+            return self._build_generator_exp(expr)
+
+        elif name == "Yield":
+            res_t = getattr(expr, "inferred_type", None)
+            ir_res_t = _to_ir_type(res_t) if res_t else IRUnitType()
+            val = self._build_expr(expr.value) if expr.value else None
+            return IRYield(value=val, result_type=ir_res_t)
+
+        elif name == "YieldFrom":
+            res_t = getattr(expr, "inferred_type", None)
+            ir_res_t = _to_ir_type(res_t) if res_t else IRUnitType()
+            val = self._build_expr(expr.value)
+            return IRYieldFrom(value=val, result_type=ir_res_t)
+
         elif name == "JoinedStr":
             values = tuple(self._build_expr(v) for v in expr.values)
             return IRJoinedStr(values=values)
@@ -1544,6 +1587,12 @@ class IRBuilder:
                 elem_t = StrType()
             elif isinstance(it_t, DictType):
                 elem_t = it_t.key_type
+            elif isinstance(it_t, IteratorType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, IterableType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, GeneratorType):
+                elem_t = it_t.yield_type
 
             self._bind_target(gen.target, elem_t)
 
@@ -1598,6 +1647,12 @@ class IRBuilder:
                 elem_t = StrType()
             elif isinstance(it_t, DictType):
                 elem_t = it_t.key_type
+            elif isinstance(it_t, IteratorType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, IterableType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, GeneratorType):
+                elem_t = it_t.yield_type
 
             self._bind_target(gen.target, elem_t)
 
@@ -1629,6 +1684,12 @@ class IRBuilder:
                 elem_t = StrType()
             elif isinstance(it_t, DictType):
                 elem_t = it_t.key_type
+            elif isinstance(it_t, IteratorType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, IterableType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, GeneratorType):
+                elem_t = it_t.yield_type
 
             self._bind_target(gen.target, elem_t)
 
@@ -1641,6 +1702,40 @@ class IRBuilder:
         res_ir_t = IRSetType(element_type=ir_elt_t)
         self.st.exit_scope()
         return IRSetComp(elt=elt, generators=tuple(generators), result_type=res_ir_t)
+
+    def _build_generator_exp(self, node: GeneratorExp) -> IRGeneratorExp:
+        self.st.enter_scope("comprehension")
+        generators = []
+        for gen in node.generators:
+            target = self._build_comp_target(gen.target)
+            iterable = self._build_expr(gen.iterable)
+            
+            it_t = self.inferencer.infer(gen.iterable)
+            elem_t = IntType()
+            if isinstance(it_t, ListType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, StrType):
+                elem_t = StrType()
+            elif isinstance(it_t, DictType):
+                elem_t = it_t.key_type
+            elif isinstance(it_t, IteratorType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, IterableType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, GeneratorType):
+                elem_t = it_t.yield_type
+
+            self._bind_target(gen.target, elem_t)
+
+            ifs = tuple(self._build_expr(i) for i in gen.ifs)
+            generators.append(IRComprehension(target=target, iterable=iterable, ifs=ifs, is_async=gen.is_async))
+        
+        elt = self._build_expr(node.elt)
+        elt_t = self.inferencer.infer(node.elt)
+        ir_elt_t = _to_ir_type(elt_t) if elt_t else IRIntType()
+        res_ir_t = IRIteratorType(element_type=ir_elt_t)
+        self.st.exit_scope()
+        return IRGeneratorExp(elt=elt, generators=tuple(generators), result_type=res_ir_t)
 
     def _build_with(self, node: WithStmt) -> IRWith:
         items = []

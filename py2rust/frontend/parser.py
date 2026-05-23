@@ -87,6 +87,12 @@ from .ast_nodes import (
     DictComp,
     SetComp,
     Slice,
+    Yield,
+    YieldFrom,
+    GeneratorExp,
+    IteratorType,
+    IterableType,
+    GeneratorType,
 )
 
 _BINOP_MAP = {
@@ -506,6 +512,22 @@ class Parser:
                     else:
                         variants = (self._parse_type(node.slice),)
                     return UnionType(variants=variants)
+            if isinstance(node.value, ast.Name) and node.value.id in ("Iterator", "iterator"):
+                elem_type = self._parse_type(node.slice)
+                return IteratorType(element_type=elem_type)
+            if isinstance(node.value, ast.Name) and node.value.id in ("Iterable", "iterable"):
+                elem_type = self._parse_type(node.slice)
+                return IterableType(element_type=elem_type)
+            if isinstance(node.value, ast.Name) and node.value.id in ("Generator", "generator"):
+                if isinstance(node.slice, ast.Tuple):
+                    elts = node.slice.elts
+                    yield_t = self._parse_type(elts[0])
+                    send_t = self._parse_type(elts[1]) if len(elts) > 1 else UnitType()
+                    return_t = self._parse_type(elts[2]) if len(elts) > 2 else UnitType()
+                    return GeneratorType(yield_type=yield_t, send_type=send_t, return_type=return_t)
+                else:
+                    yield_t = self._parse_type(node.slice)
+                    return GeneratorType(yield_type=yield_t, send_type=UnitType(), return_type=UnitType())
             raise self._err("Unsupported generic type", node, UnsupportedFeatureError)
         elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
             left = self._parse_type(node.left)
@@ -721,6 +743,22 @@ class Parser:
             # Special case for Ellipsis (...)
             if isinstance(node.value, ast.Constant) and node.value.value is Ellipsis:
                 return PassStmt(line=node.lineno, col=node.col_offset + 1)
+
+            if isinstance(node.value, (ast.Yield, ast.YieldFrom)):
+                fake_assign = ast.Assign(
+                    targets=[
+                        ast.Name(
+                            id="_",
+                            ctx=ast.Store(),
+                            lineno=node.lineno,
+                            col_offset=node.col_offset,
+                        )
+                    ],
+                    value=node.value,
+                    lineno=node.lineno,
+                    col_offset=node.col_offset,
+                )
+                return self._parse_stmt(fake_assign)
             
             if isinstance(node.value, ast.Call):
                 call = node.value
@@ -1094,6 +1132,14 @@ class Parser:
                 col=node.col_offset + 1,
             )
 
+        if isinstance(node, ast.Yield):
+            val = self._parse_expr(node.value) if node.value else None
+            return Yield(value=val, line=node.lineno, col=node.col_offset + 1)
+
+        if isinstance(node, ast.YieldFrom):
+            val = self._parse_expr(node.value)
+            return YieldFrom(value=val, line=node.lineno, col=node.col_offset + 1)
+
         raise self._err(
             f"Unsupported expression: {type(node).__name__}",
             node,
@@ -1165,12 +1211,10 @@ class Parser:
             col=node.col_offset + 1,
         )
 
-    def _parse_gen_exp(self, node: ast.GeneratorExp) -> ListComp:
-        # For now, map generator expressions to list comprehensions
-        # until we have full generator support.
+    def _parse_gen_exp(self, node: ast.GeneratorExp) -> GeneratorExp:
         elt = self._parse_expr(node.elt)
         generators = tuple(self._parse_comprehension(c) for c in node.generators)
-        return ListComp(
+        return GeneratorExp(
             elt=elt,
             generators=generators,
             line=node.lineno,

@@ -176,6 +176,32 @@ class ExternalPythonType:
         return f"py({self.module})"
 
 
+@dataclass
+class IteratorType:
+    element_type: object
+
+    def __str__(self):
+        return f"Iterator[{self.element_type}]"
+
+
+@dataclass
+class IterableType:
+    element_type: object
+
+    def __str__(self):
+        return f"Iterable[{self.element_type}]"
+
+
+@dataclass
+class GeneratorType:
+    yield_type: object
+    send_type: object
+    return_type: object
+
+    def __str__(self):
+        return f"Generator[{self.yield_type}, {self.send_type}, {self.return_type}]"
+
+
 AnyType = Union[
     IntType,
     FloatType,
@@ -196,6 +222,9 @@ AnyType = Union[
     SliceType,
     DequeType,
     HeapType,
+    IteratorType,
+    IterableType,
+    GeneratorType,
 ]
 
 
@@ -412,6 +441,28 @@ class JoinedStr:
     col: int = 0
 
 
+@dataclass
+class Yield:
+    value: Optional[Expr] = None
+    line: int = 0
+    col: int = 0
+
+
+@dataclass
+class YieldFrom:
+    value: Expr
+    line: int = 0
+    col: int = 0
+
+
+@dataclass
+class GeneratorExp:
+    elt: Expr
+    generators: tuple  # tuple of Comprehension
+    line: int = 0
+    col: int = 0
+
+
 Expr = Union[
     IntLiteral,
     FloatLiteral,
@@ -439,6 +490,9 @@ Expr = Union[
     SetComp,
     JoinedStr,
     FormattedValue,
+    Yield,
+    YieldFrom,
+    GeneratorExp,
 ]
 
 

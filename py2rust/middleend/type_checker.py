@@ -14,6 +14,12 @@ from ..frontend.ast_nodes import (
     UnionType,
     SliceType,
     UnitType,
+    IteratorType,
+    IterableType,
+    GeneratorType,
+    Yield,
+    YieldFrom,
+    GeneratorExp,
     EnumDef,
     MatchStmt,
     MatchCase,
@@ -106,7 +112,28 @@ def _types_compatible(a, b, invariant=False) -> bool:
             ) and _types_compatible(a.value_type, b.value_type, invariant=True)
         if isinstance(a, SetType) and isinstance(b, SetType):
             return _types_compatible(a.element_type, b.element_type, invariant=True)
+        if isinstance(a, IteratorType) and isinstance(b, IteratorType):
+            return _types_compatible(a.element_type, b.element_type, invariant=True)
+        if isinstance(a, IterableType) and isinstance(b, IterableType):
+            return _types_compatible(a.element_type, b.element_type, invariant=True)
+        if isinstance(a, GeneratorType) and isinstance(b, GeneratorType):
+            return (_types_compatible(a.yield_type, b.yield_type, invariant=True) and
+                    _types_compatible(a.send_type, b.send_type, invariant=True) and
+                    _types_compatible(a.return_type, b.return_type, invariant=True))
         return True
+
+    # GeneratorType is compatible with IteratorType or IterableType in both directions
+    if isinstance(a, IteratorType) and isinstance(b, GeneratorType):
+        return _types_compatible(a.element_type, b.yield_type, invariant=True)
+    if isinstance(a, IterableType) and isinstance(b, GeneratorType):
+        return _types_compatible(a.element_type, b.yield_type, invariant=True)
+    if isinstance(a, GeneratorType) and isinstance(b, IteratorType):
+        return _types_compatible(a.yield_type, b.element_type, invariant=True)
+    if isinstance(a, GeneratorType) and isinstance(b, IterableType):
+        return _types_compatible(a.yield_type, b.element_type, invariant=True)
+    if isinstance(a, IterableType) and isinstance(b, IteratorType):
+        return _types_compatible(a.element_type, b.element_type, invariant=True)
+
     if isinstance(a, FloatType) and isinstance(b, IntType):
         # f64 accepts i32, but Vec<f64> does NOT accept Vec<i32>
         return not invariant
@@ -115,6 +142,32 @@ def _types_compatible(a, b, invariant=False) -> bool:
     if isinstance(a, (EnumType, ClassType)) and isinstance(b, (EnumType, ClassType)):
         return getattr(a, "name", None) == getattr(b, "name", None)
     return False
+
+
+def _get_yield_item_type(expected_type):
+    if isinstance(expected_type, IteratorType):
+        return expected_type.element_type
+    if isinstance(expected_type, IterableType):
+        return expected_type.element_type
+    if isinstance(expected_type, GeneratorType):
+        return expected_type.yield_type
+    return None
+
+
+def _get_iterable_item_type(it_type):
+    if isinstance(it_type, ListType):
+        return it_type.element_type
+    if isinstance(it_type, IteratorType):
+        return it_type.element_type
+    if isinstance(it_type, IterableType):
+        return it_type.element_type
+    if isinstance(it_type, GeneratorType):
+        return it_type.yield_type
+    if isinstance(it_type, StrType):
+        return StrType()
+    if isinstance(it_type, DictType):
+        return it_type.key_type
+    return None
 
 
 _MUTEX_CLASS_NAMES = frozenset({"Mutex", "Lock", "RwLock", "Semaphore", "Condition",
@@ -550,6 +603,9 @@ class TypeChecker:
             ListComp,
             DictComp,
             SetComp,
+            Yield,
+            YieldFrom,
+            GeneratorExp,
         )
 
         if isinstance(expr, Name):
@@ -904,8 +960,35 @@ class TypeChecker:
                             )
         elif isinstance(expr, LambdaExpr):
             self._check_lambda(expr)
-        elif isinstance(expr, (ListComp, DictComp, SetComp)):
+        elif isinstance(expr, (ListComp, DictComp, SetComp, GeneratorExp)):
             self._check_comprehension(expr)
+        elif isinstance(expr, Yield):
+            if expr.value:
+                self.check_expr(expr.value)
+                if self._current_return_type:
+                    expected_yield_t = _get_yield_item_type(self._current_return_type)
+                    if expected_yield_t:
+                        yielded_t = self.inferencer.infer(expr.value)
+                        if yielded_t and not _types_compatible(expected_yield_t, yielded_t):
+                            raise self._err(
+                                f"Yield type mismatch: expected {expected_yield_t}, got {yielded_t}",
+                                expr.line,
+                                expr.col,
+                            )
+        elif isinstance(expr, YieldFrom):
+            self.check_expr(expr.value)
+            if self._current_return_type:
+                expected_yield_t = _get_yield_item_type(self._current_return_type)
+                if expected_yield_t:
+                    yielded_from_t = self.inferencer.infer(expr.value)
+                    if yielded_from_t:
+                        yielded_item_t = _get_iterable_item_type(yielded_from_t)
+                        if yielded_item_t and not _types_compatible(expected_yield_t, yielded_item_t):
+                            raise self._err(
+                                f"Yield from type mismatch: expected elements compatible with {expected_yield_t}, got elements of {yielded_item_t}",
+                                expr.line,
+                                expr.col,
+                            )
         elif isinstance(expr, JoinedStr):
             for v in expr.values:
                 self.check_expr(v)
@@ -1092,6 +1175,12 @@ class TypeChecker:
             elem_t = IntType()
             if isinstance(it_t, ListType):
                 elem_t = it_t.element_type
+            elif isinstance(it_t, IteratorType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, IterableType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, GeneratorType):
+                elem_t = it_t.yield_type
             elif isinstance(it_t, StrType):
                 elem_t = StrType()
             elif isinstance(it_t, DictType):
@@ -1218,7 +1307,7 @@ class TypeChecker:
         self.check_expr(expr.body)
         self.st.exit_scope()
 
-    def _check_comprehension(self, expr: Union[ListComp, DictComp, SetComp]) -> None:
+    def _check_comprehension(self, expr: Union[ListComp, DictComp, SetComp, GeneratorExp]) -> None:
         self.st.enter_scope("comprehension")
         for gen in expr.generators:
             self.check_expr(gen.iterable)
@@ -1227,6 +1316,12 @@ class TypeChecker:
             elem_t = IntType()
             if isinstance(it_t, ListType):
                 elem_t = it_t.element_type
+            elif isinstance(it_t, IteratorType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, IterableType):
+                elem_t = it_t.element_type
+            elif isinstance(it_t, GeneratorType):
+                elem_t = it_t.yield_type
             elif isinstance(it_t, StrType):
                 elem_t = StrType()
             elif isinstance(it_t, DictType):
@@ -1239,6 +1334,8 @@ class TypeChecker:
         if isinstance(expr, ListComp):
             self.check_expr(expr.elt)
         elif isinstance(expr, SetComp):
+            self.check_expr(expr.elt)
+        elif isinstance(expr, GeneratorExp):
             self.check_expr(expr.elt)
         elif isinstance(expr, DictComp):
             self.check_expr(expr.key)

@@ -172,7 +172,36 @@ class IRSumType:
         return self.name or f"SumType({self.variants})"
 
 
+@dataclass(frozen=True)
+class IRIteratorType:
+    element_type: object
+
+    def __str__(self):
+        return f"Box<dyn Iterator<Item = {self.element_type}>>"
+
+
+@dataclass(frozen=True)
+class IRIterableType:
+    element_type: object
+
+    def __str__(self):
+        return f"Box<dyn IntoIterator<Item = {self.element_type}>>"
+
+
+@dataclass(frozen=True)
+class IRGeneratorType:
+    yield_type: object
+    send_type: object
+    return_type: object
+
+    def __str__(self):
+        return f"Generator<{self.yield_type}, {self.send_type}, {self.return_type}>"
+
+
 IRType = Union[
+    IRIteratorType,
+    IRIterableType,
+    IRGeneratorType,
     IRTypeParam,
     IRGenericType,
     IRIntType,
@@ -402,6 +431,18 @@ class IRLambda:
 
 
 @dataclass(frozen=True)
+class IRYield:
+    value: Optional[IRExpr]
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRYieldFrom:
+    value: IRExpr
+    result_type: object
+
+
+@dataclass(frozen=True)
 class IRComprehension:
     target: object  # IRName or IRTupleLit
     iterable: IRExpr
@@ -428,6 +469,13 @@ class IRDictComp:
 class IRSetComp:
     elt: IRExpr
     generators: tuple
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRGeneratorExp:
+    elt: IRExpr
+    generators: tuple  # tuple of IRComprehension
     result_type: object
 
 
@@ -743,6 +791,9 @@ IRExpr = Union[
     IRListComp,
     IRDictComp,
     IRSetComp,
+    IRYield,
+    IRYieldFrom,
+    IRGeneratorExp,
     IRJoinedStr,
     IRFormattedValue,
     IRExternalPythonType,

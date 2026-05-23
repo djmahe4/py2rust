@@ -23,6 +23,9 @@ from ..frontend.ast_nodes import (
     Name,
     Slice,
     SliceType,
+    IteratorType,
+    IterableType,
+    GeneratorType,
 )
 from .symbol_table import SymbolTable
 
@@ -46,6 +49,8 @@ class TypeInferencer:
                 if expr.name == "None":
                     return UnitType()
                 res = self.st.lookup(expr.name)
+                if res is None:
+                    res = getattr(expr, "inferred_type", None)
                 if isinstance(res, ExternalPythonType) and res.is_local:
                     if res.name:
                         cls = self.st.lookup_class(res.name)
@@ -91,6 +96,10 @@ class TypeInferencer:
                 return self._infer_dict_comp(expr)
             case "SetComp":
                 return self._infer_set_comp(expr)
+            case "GeneratorExp":
+                return self._infer_gen_exp(expr)
+            case "Yield" | "YieldFrom":
+                return UnknownType()
             case "JoinedStr":
                 return StrType()
             case "FormattedValue":
@@ -109,6 +118,10 @@ class TypeInferencer:
     def _infer_list_comp(self, expr):
         elt_t = self.infer(expr.elt)
         return ListType(element_type=elt_t) if elt_t else None
+
+    def _infer_gen_exp(self, expr):
+        elt_t = self.infer(expr.elt)
+        return IteratorType(element_type=elt_t) if elt_t else None
 
     def _infer_dict_comp(self, expr):
         key_t = self.infer(expr.key)

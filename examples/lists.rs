@@ -50,8 +50,8 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 pub fn sum_list(nums: Vec<i32>) -> Result<i32, PyError> {
-    let mut n: i32 = 0;
     let mut total: i32 = 0;
+    let mut n: i32 = 0;
 
     total = 0;
     {
