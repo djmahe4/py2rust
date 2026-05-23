@@ -431,6 +431,35 @@ class IRLambda:
 
 
 @dataclass(frozen=True)
+class IRMap:
+    func: IRExpr
+    iterable: IRExpr
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRFilter:
+    func: IRExpr
+    iterable: IRExpr
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRSorted:
+    iterable: IRExpr
+    key_func: Optional[IRExpr]
+    result_type: object
+
+
+@dataclass(frozen=True)
+class IRReduce:
+    func: IRExpr
+    iterable: IRExpr
+    initial: Optional[IRExpr]
+    result_type: object
+
+
+@dataclass(frozen=True)
 class IRYield:
     value: Optional[IRExpr]
     result_type: object
@@ -788,6 +817,10 @@ IRExpr = Union[
     IRSelf,
     IRAwait,
     IRLambda,
+    IRMap,
+    IRFilter,
+    IRSorted,
+    IRReduce,
     IRListComp,
     IRDictComp,
     IRSetComp,

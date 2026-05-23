@@ -338,9 +338,18 @@ class Slice:
 
 
 @dataclass
+class Keyword:
+    arg: str
+    value: Expr
+    line: int = 0
+    col: int = 0
+
+
+@dataclass
 class FunctionCall:
     name: str
     args: tuple
+    keywords: tuple = ()
     line: int = 0
     col: int = 0
 
@@ -358,6 +367,7 @@ class MethodCall:
     value: object
     method: str
     args: tuple
+    keywords: tuple = ()
     line: int = 0
     col: int = 0
 
@@ -386,6 +396,7 @@ class AwaitExpr:
 class LambdaExpr:
     params: tuple  # tuple of Param
     body: Expr
+    inferred_param_types: Optional[tuple] = None
     line: int = 0
     col: int = 0
 
@@ -475,6 +486,7 @@ Expr = Union[
     BoolOp,
     ListLiteral,
     DictLiteral,
+    Keyword,
     Subscript,
     Slice,
     FunctionCall,

@@ -418,6 +418,8 @@ class TypeChecker:
                 func.is_async,
                 func.type_params,
             )
+            from ..frontend.ast_nodes import FunctionType
+            self.st.define(func.name, FunctionType(tuple(param_types), func.return_type))
 
         for func in module.functions:
             self.check_function(func)
@@ -658,9 +660,12 @@ class TypeChecker:
                             )
         elif isinstance(expr, MethodCall):
             self.check_expr(expr.value)
+            val_type = self.inferencer.infer(expr.value)
+            self._propagate_call_lambda_types(expr.method, val_type, expr.args, expr.keywords)
             for arg in expr.args:
                 self.check_expr(arg)
-            val_type = self.inferencer.infer(expr.value)
+            for kw in expr.keywords:
+                self.check_expr(kw.value)
             if isinstance(val_type, ClassType):
                 arity = len(expr.args)
                 method_info = self.st.lookup_method(val_type.name, expr.method, arity)
@@ -897,9 +902,16 @@ class TypeChecker:
                         expr.col,
                     )
                 self.check_expr(expr.args[0])
-            elif expr.name in ("zip", "enumerate", "map", "reversed"):
+            elif expr.name in ("list", "set", "dict"):
                 for arg in expr.args:
                     self.check_expr(arg)
+            elif expr.name in ("zip", "enumerate", "map", "filter", "sorted", "reversed"):
+                if expr.name in ("map", "filter", "sorted"):
+                    self._propagate_call_lambda_types(expr.name, None, expr.args, expr.keywords)
+                for arg in expr.args:
+                    self.check_expr(arg)
+                for kw in expr.keywords:
+                    self.check_expr(kw.value)
             else:
                 sig = self.st.lookup_function(expr.name)
                 if sig is None:
@@ -909,6 +921,7 @@ class TypeChecker:
                         if cls_info:
                             pass
                     elif isinstance(curr_type, FunctionType):
+                        self._propagate_call_lambda_types(expr.name, curr_type, expr.args, expr.keywords)
                         if len(expr.args) != len(curr_type.param_types):
                             raise self._err(
                                 f"Function '{expr.name}' expected {len(curr_type.param_types)} arguments, got {len(expr.args)}",
@@ -930,8 +943,11 @@ class TypeChecker:
                             self.check_expr(arg)
                     elif isinstance(curr_type, ExternalPythonType):
                         # Always valid for external types (resolved at runtime)
+                        self._propagate_call_lambda_types(expr.name, curr_type, expr.args, expr.keywords)
                         for arg in expr.args:
                             self.check_expr(arg)
+                        for kw in expr.keywords:
+                            self.check_expr(kw.value)
                     elif self.st.lookup_class(expr.name):
                         pass
                     else:
@@ -943,6 +959,8 @@ class TypeChecker:
                         )
                 else:
                     params, _, _, _ = sig
+                    func_type = FunctionType(param_types=tuple(params), return_type=UnknownType())
+                    self._propagate_call_lambda_types(expr.name, func_type, expr.args, expr.keywords)
                     if len(expr.args) != len(params):
                         raise self._err(
                             f"Function '{expr.name}' expected {len(params)} arguments, got {len(expr.args)}",
@@ -1299,11 +1317,67 @@ class TypeChecker:
         else:
             raise self._err(f"Unsupported pattern type: {type(pattern).__name__}", 0, 0, SemanticError)
 
+    def _propagate_call_lambda_types(self, func_name: Optional[str], func_type: Optional[object], args: tuple, keywords: tuple) -> None:
+        # 1. Built-in: map
+        if func_name == "map" and len(args) >= 2:
+            self.check_expr(args[1])
+            it_type = self.inferencer.infer(args[1])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            if isinstance(args[0], LambdaExpr):
+                args[0].inferred_param_types = (elem_t,)
+                
+        # 2. Built-in: filter
+        elif func_name == "filter" and len(args) >= 2:
+            self.check_expr(args[1])
+            it_type = self.inferencer.infer(args[1])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            if isinstance(args[0], LambdaExpr):
+                args[0].inferred_param_types = (elem_t,)
+                
+        # 3. Built-in: sorted
+        elif func_name == "sorted" and len(args) >= 1:
+            self.check_expr(args[0])
+            it_type = self.inferencer.infer(args[0])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            for kw in keywords:
+                if kw.arg == "key":
+                    if isinstance(kw.value, LambdaExpr):
+                        kw.value.inferred_param_types = (elem_t,)
+                    break
+                    
+        # 4. Built-in: reduce (either name "reduce" or imported)
+        elif (func_name == "reduce" or 
+              (isinstance(func_type, ExternalPythonType) and func_type.module == "functools")) and len(args) >= 2:
+            self.check_expr(args[1])
+            it_type = self.inferencer.infer(args[1])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            initial_t = None
+            if len(args) > 2:
+                self.check_expr(args[2])
+                initial_t = self.inferencer.infer(args[2])
+            for kw in keywords:
+                if kw.arg in ("initial", "initializer"):
+                    self.check_expr(kw.value)
+                    initial_t = self.inferencer.infer(kw.value)
+                    break
+            acc_t = initial_t if initial_t is not None else elem_t
+            if isinstance(args[0], LambdaExpr):
+                args[0].inferred_param_types = (acc_t, elem_t)
+                
+        # 5. User-defined / cross-module callable
+        elif isinstance(func_type, FunctionType):
+            for i, arg in enumerate(args):
+                if i < len(func_type.param_types):
+                    param_t = func_type.param_types[i]
+                    if isinstance(param_t, FunctionType) and isinstance(arg, LambdaExpr):
+                        arg.inferred_param_types = param_t.param_types
+
     def _check_lambda(self, expr: LambdaExpr) -> None:
         self.st.enter_scope("lambda")
-        for param in expr.params:
-            # Lambda params are untyped in Python; default to UnknownType
-            self.st.define(param.name, UnknownType())
+        param_types = getattr(expr, "inferred_param_types", None)
+        for i, param in enumerate(expr.params):
+            p_type = param_types[i] if param_types and i < len(param_types) else UnknownType()
+            self.st.define(param.name, p_type)
         self.check_expr(expr.body)
         self.st.exit_scope()
 

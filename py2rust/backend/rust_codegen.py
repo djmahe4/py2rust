@@ -103,6 +103,10 @@ from ..ir.ir_nodes import (
     IRYield,
     IRYieldFrom,
     IRGeneratorExp,
+    IRMap,
+    IRFilter,
+    IRSorted,
+    IRReduce,
 )
 from ..config import CompilerConfig, AsyncRuntime
 from typing import Optional
@@ -2065,6 +2069,10 @@ self.__state = {cond_state};"""
             if isinstance(stmt.iterable, IRFunctionCall):
                 if stmt.iterable.name in ("zip", "enumerate", "map", "reversed"):
                     is_direct_iter = True
+            elif isinstance(stmt.iterable, (IRMap, IRFilter, IRGeneratorExp)):
+                is_direct_iter = True
+            elif isinstance(stmt.iterable_type, (IRIteratorType, IRGeneratorType)):
+                is_direct_iter = True
 
             is_ext = False
             if isinstance(stmt.iterable_type, IRClassType) and stmt.iterable_type.name == "ExternalObject":
@@ -2775,6 +2783,20 @@ self.__state = {cond_state};"""
             if expr.name == "len":
                 arg = self._gen_expr(expr.args[0])
                 return f"{arg}.len() as i32"
+
+            if expr.name == "list" and len(expr.args) == 1:
+                arg = self._gen_expr(expr.args[0])
+                arg_t = getattr(expr.args[0], "result_type", None)
+                if isinstance(arg_t, (IRIteratorType, IRGeneratorType)) or isinstance(expr.args[0], (IRMap, IRFilter)):
+                    return f"{arg}.collect::<Vec<_>>()"
+                return f"{arg}.clone()"
+
+            if expr.name == "set" and len(expr.args) == 1:
+                arg = self._gen_expr(expr.args[0])
+                arg_t = getattr(expr.args[0], "result_type", None)
+                if isinstance(arg_t, (IRIteratorType, IRGeneratorType)) or isinstance(expr.args[0], (IRMap, IRFilter)):
+                    return f"{arg}.collect::<HashSet<_>>()"
+                return f"{arg}.clone().into_iter().collect::<HashSet<_>>()"
             
             if expr.name == "zip":
                 # zip(a, b)
@@ -3022,6 +3044,53 @@ self.__state = {cond_state};"""
 
         elif isinstance(expr, IRLambda):
             return self._gen_lambda(expr)
+
+        elif isinstance(expr, IRMap):
+            if isinstance(expr.func, IRLambda):
+                func_str = self._gen_expr(expr.func)
+            else:
+                func_str = f"|x| ({self._gen_expr(expr.func)})(x).unwrap()"
+            iter_expr = self._get_comp_iter_expr(expr.iterable, getattr(expr.iterable, "result_type", None))
+            return f"Box::new({iter_expr}.map({func_str}))"
+
+        elif isinstance(expr, IRFilter):
+            if isinstance(expr.func, IRLambda):
+                func_str = f"move |__x| {{ let x = __x.clone(); ({self._gen_expr(expr.func)})(x) }}"
+            else:
+                func_str = f"move |__x| {{ let x = __x.clone(); ({self._gen_expr(expr.func)})(x).unwrap() }}"
+            iter_expr = self._get_comp_iter_expr(expr.iterable, getattr(expr.iterable, "result_type", None))
+            return f"Box::new({iter_expr}.filter({func_str}))"
+
+        elif isinstance(expr, IRSorted):
+            iter_expr = self._get_comp_iter_expr(expr.iterable, getattr(expr.iterable, "result_type", None))
+            if expr.key_func:
+                if isinstance(expr.key_func, IRLambda):
+                    key_str = f"|__x| {{ let x = __x.clone(); ({self._gen_expr(expr.key_func)})(x) }}"
+                else:
+                    key_str = f"|__x| {{ let x = __x.clone(); ({self._gen_expr(expr.key_func)})(x).unwrap() }}"
+                return (
+                    f"({{ let mut __tmp = {iter_expr}.collect::<Vec<_>>(); "
+                    f"__tmp.sort_by_key({key_str}); "
+                    f"__tmp }})"
+                )
+            else:
+                return (
+                    f"({{ let mut __tmp = {iter_expr}.collect::<Vec<_>>(); "
+                    f"__tmp.sort(); "
+                    f"__tmp }})"
+                )
+
+        elif isinstance(expr, IRReduce):
+            iter_expr = self._get_comp_iter_expr(expr.iterable, getattr(expr.iterable, "result_type", None))
+            if isinstance(expr.func, IRLambda):
+                func_str = self._gen_expr(expr.func)
+            else:
+                func_str = f"|acc, x| ({self._gen_expr(expr.func)})(acc, x).unwrap()"
+            if expr.initial is not None:
+                initial_str = self._gen_expr(expr.initial)
+                return f"{iter_expr}.fold({initial_str}, {func_str})"
+            else:
+                return f"{iter_expr}.reduce({func_str}).unwrap()"
 
         elif isinstance(expr, IRListComp):
             return self._gen_list_comp(expr)

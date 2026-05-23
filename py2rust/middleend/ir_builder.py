@@ -154,6 +154,10 @@ from ..ir.ir_nodes import (
     IROrPattern,
     IRAsPattern,
     IRLambda,
+    IRMap,
+    IRFilter,
+    IRSorted,
+    IRReduce,
     IRComprehension,
     IRListComp,
     IRDictComp,
@@ -1290,8 +1294,46 @@ class IRBuilder:
                 type_arg = self._build_type_expr(expr.args[1])
                 return IRIsInstance(obj=obj, check_type=type_arg, result_type=IRBoolType())
 
+            if expr.name == "map" and len(expr.args) >= 2:
+                func = self._build_expr(expr.args[0])
+                iterable = self._build_expr(expr.args[1])
+                inferred = self.inferencer.infer(expr)
+                ir_ret_t = _to_ir_type(inferred) if inferred else IRUnknownType()
+                return IRMap(func=func, iterable=iterable, result_type=ir_ret_t)
+
+            if expr.name == "filter" and len(expr.args) >= 2:
+                func = self._build_expr(expr.args[0])
+                iterable = self._build_expr(expr.args[1])
+                inferred = self.inferencer.infer(expr)
+                ir_ret_t = _to_ir_type(inferred) if inferred else IRUnknownType()
+                return IRFilter(func=func, iterable=iterable, result_type=ir_ret_t)
+
+            if expr.name == "sorted" and len(expr.args) >= 1:
+                iterable = self._build_expr(expr.args[0])
+                key_func = None
+                for kw in expr.keywords:
+                    if kw.arg == "key":
+                        key_func = self._build_expr(kw.value)
+                        break
+                inferred = self.inferencer.infer(expr)
+                ir_ret_t = _to_ir_type(inferred) if inferred else IRUnknownType()
+                return IRSorted(iterable=iterable, key_func=key_func, result_type=ir_ret_t)
+
+            if expr.name in ("reduce", "functools.reduce") and len(expr.args) >= 2:
+                func = self._build_expr(expr.args[0])
+                iterable = self._build_expr(expr.args[1])
+                initial = self._build_expr(expr.args[2]) if len(expr.args) > 2 else None
+                for kw in expr.keywords:
+                    if kw.arg in ("initial", "initializer"):
+                        initial = self._build_expr(kw.value)
+                        break
+                inferred = self.inferencer.infer(expr)
+                ir_ret_t = _to_ir_type(inferred) if inferred else IRUnknownType()
+                return IRReduce(func=func, iterable=iterable, initial=initial, result_type=ir_ret_t)
+
             if expr.name in (
-                "zip", "enumerate", "map", "reversed",
+                "zip", "enumerate", "reversed",
+                "list", "set", "dict",
                 "heappush", "heappop", "heapify",
                 "heapq.heappush", "heapq.heappop", "heapq.heapify"
             ):
@@ -1371,6 +1413,18 @@ class IRBuilder:
         elif name == "MethodCall":
             val = self._build_expr(expr.value)
             val_type = self.inferencer.infer(expr.value)
+            if isinstance(val_type, ExternalPythonType) and val_type.module == "functools" and expr.method == "reduce" and len(expr.args) >= 2:
+                func = self._build_expr(expr.args[0])
+                iterable = self._build_expr(expr.args[1])
+                initial = self._build_expr(expr.args[2]) if len(expr.args) > 2 else None
+                for kw in expr.keywords:
+                    if kw.arg in ("initial", "initializer"):
+                        initial = self._build_expr(kw.value)
+                        break
+                inferred = self.inferencer.infer(expr)
+                ir_ret_t = _to_ir_type(inferred) if inferred else IRUnknownType()
+                return IRReduce(func=func, iterable=iterable, initial=initial, result_type=ir_ret_t)
+
             if isinstance(val_type, ClassType):
                 arity = len(expr.args)
                 method_info = self.st.lookup_method(val_type.name, expr.method, arity)
@@ -1558,9 +1612,12 @@ class IRBuilder:
     def _build_lambda(self, expr: LambdaExpr) -> IRLambda:
         self.st.enter_scope("lambda")
         params = []
-        for p in expr.params:
-            self.st.define(p.name, None)
-            params.append(IRParam(name=p.name, type_=IRIntType()))  # Generic type for lambda params
+        param_types = getattr(expr, "inferred_param_types", None)
+        for i, p in enumerate(expr.params):
+            p_type = param_types[i] if param_types and i < len(param_types) else None
+            self.st.define(p.name, p_type)
+            ir_p_type = _to_ir_type(p_type) if p_type else IRIntType()
+            params.append(IRParam(name=p.name, type_=ir_p_type))
         
         body = self._build_expr(expr.body)
         res_type = self.inferencer.infer(expr)

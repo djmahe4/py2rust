@@ -82,6 +82,7 @@ from .ast_nodes import (
     AsPattern,
     EnumDef,
     LambdaExpr,
+    Keyword,
     Comprehension,
     ListComp,
     DictComp,
@@ -1041,20 +1042,33 @@ class Parser:
             )
 
         if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Attribute):
-                value = self._parse_expr(node.func.value)
-                method = node.func.attr
-                if node.keywords:
+            keywords = []
+            for k in node.keywords:
+                if k.arg is None:
                     raise self._err(
-                        "Keyword arguments are not supported",
+                        "Double-star keyword arguments are not supported",
                         node,
                         UnsupportedFeatureError,
                     )
+                keywords.append(
+                    Keyword(
+                        arg=k.arg,
+                        value=self._parse_expr(k.value),
+                        line=k.value.lineno,
+                        col=k.value.col_offset + 1,
+                    )
+                )
+            keywords = tuple(keywords)
+
+            if isinstance(node.func, ast.Attribute):
+                value = self._parse_expr(node.func.value)
+                method = node.func.attr
                 args = tuple(self._parse_expr(a) for a in node.args)
                 return MethodCall(
                     value=value,
                     method=method,
                     args=args,
+                    keywords=keywords,
                     line=node.lineno,
                     col=node.col_offset + 1,
                 )
@@ -1065,16 +1079,11 @@ class Parser:
                         node,
                         UnsupportedFeatureError,
                     )
-                if node.keywords:
-                    raise self._err(
-                        "Keyword arguments are not supported",
-                        node,
-                        UnsupportedFeatureError,
-                    )
                 args = tuple(self._parse_expr(a) for a in node.args)
                 return FunctionCall(
                     name=node.func.id,
                     args=args,
+                    keywords=keywords,
                     line=node.lineno,
                     col=node.col_offset + 1,
                 )

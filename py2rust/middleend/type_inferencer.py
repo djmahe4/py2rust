@@ -30,6 +30,22 @@ from ..frontend.ast_nodes import (
 from .symbol_table import SymbolTable
 
 
+def _get_iterable_item_type(it_type):
+    if isinstance(it_type, ListType):
+        return it_type.element_type
+    if isinstance(it_type, IteratorType):
+        return it_type.element_type
+    if isinstance(it_type, IterableType):
+        return it_type.element_type
+    if isinstance(it_type, GeneratorType):
+        return it_type.yield_type
+    if isinstance(it_type, StrType):
+        return StrType()
+    if isinstance(it_type, DictType):
+        return it_type.key_type
+    return None
+
+
 class TypeInferencer:
     def __init__(self, symbol_table: SymbolTable):
         self.st = symbol_table
@@ -110,9 +126,19 @@ class TypeInferencer:
 
     def _infer_lambda(self, expr):
         # Infer return type from body.
-        # Use UnknownType for params as they are not explicitly typed.
-        param_types = tuple(UnknownType() for _ in expr.params)
+        # Use inferred_param_types if provided, otherwise UnknownType.
+        if getattr(expr, "inferred_param_types", None) is not None:
+            param_types = expr.inferred_param_types
+        else:
+            param_types = tuple(UnknownType() for _ in expr.params)
+        
+        self.st.enter_scope("lambda_inference")
+        for i, param in enumerate(expr.params):
+            p_type = param_types[i] if i < len(param_types) else UnknownType()
+            self.st.define(param.name, p_type)
+        
         return_t = self.infer(expr.body)
+        self.st.exit_scope()
         return FunctionType(param_types=param_types, return_type=return_t or UnknownType())
 
     def _infer_list_comp(self, expr):
@@ -310,6 +336,15 @@ class TypeInferencer:
                 elem_t = StrType()
             return ListType(element_type=TupleType(element_types=(IntType(), elem_t)))
 
+        if expr.name == "list" and len(expr.args) == 1:
+            it_type = self.infer(expr.args[0])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            return ListType(element_type=elem_t)
+        if expr.name == "set" and len(expr.args) == 1:
+            it_type = self.infer(expr.args[0])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            return SetType(element_type=elem_t)
+
         if expr.name in ("deque", "collections.deque"):
             if expr.args:
                 arg_t = self.infer(expr.args[0])
@@ -321,10 +356,35 @@ class TypeInferencer:
 
         if expr.name == "range":
             return ListType(element_type=IntType())
-        if expr.name == "map":
-            # map(f, a) -> list[return_type_f]
-            # Simple heuristic for now
-            return ListType(element_type=UnknownType())
+        if expr.name == "map" and len(expr.args) >= 2:
+            func = expr.args[0]
+            func_type = self.infer(func)
+            if isinstance(func_type, FunctionType):
+                return IteratorType(element_type=func_type.return_type)
+            return IteratorType(element_type=UnknownType())
+        if expr.name == "filter" and len(expr.args) >= 2:
+            it_type = self.infer(expr.args[1])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            return IteratorType(element_type=elem_t)
+        if expr.name == "sorted" and len(expr.args) >= 1:
+            it_type = self.infer(expr.args[0])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            return ListType(element_type=elem_t)
+        if expr.name == "reduce" and len(expr.args) >= 2:
+            func = expr.args[0]
+            func_type = self.infer(func)
+            if isinstance(func_type, FunctionType):
+                return func_type.return_type
+            it_type = self.infer(expr.args[1])
+            elem_t = _get_iterable_item_type(it_type) or UnknownType()
+            initial = expr.args[2] if len(expr.args) > 2 else None
+            for kw in getattr(expr, "keywords", ()):
+                if kw.arg in ("initial", "initializer"):
+                    initial = kw.value
+                    break
+            if initial is not None:
+                return self.infer(initial)
+            return elem_t
         if expr.name == "reversed":
             return self.infer(expr.args[0])
 
@@ -413,6 +473,21 @@ class TypeInferencer:
         if isinstance(val_type, FileType):
             return self.infer_file_method(expr.method)
         if isinstance(val_type, ExternalPythonType):
+            if val_type.module == "functools" and expr.method == "reduce" and len(expr.args) >= 2:
+                func = expr.args[0]
+                func_type = self.infer(func)
+                if isinstance(func_type, FunctionType):
+                    return func_type.return_type
+                it_type = self.infer(expr.args[1])
+                elem_t = _get_iterable_item_type(it_type) or UnknownType()
+                initial = expr.args[2] if len(expr.args) > 2 else None
+                for kw in getattr(expr, "keywords", ()):
+                    if kw.arg in ("initial", "initializer"):
+                        initial = kw.value
+                        break
+                if initial is not None:
+                    return self.infer(initial)
+                return elem_t
             if val_type.is_local:
                 if val_type.name is None:
                     # E.g. math_utils.compute() or math_utils.MathHelper()
