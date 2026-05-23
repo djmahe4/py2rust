@@ -3116,8 +3116,8 @@ self.__state = {cond_state};"""
         close_braces = ""
         for gen in node.generators:
             target = self._gen_comp_target(gen.target)
-            iterable = self._gen_expr(gen.iterable)
-            loop_code += f"for &{target} in &{iterable} {{ "
+            iterable = self._get_comp_iter_expr(gen.iterable, getattr(gen.iterable, "result_type", None))
+            loop_code += f"for __tmp in {iterable} {{ let {target} = __tmp; "
             for if_expr in gen.ifs:
                 cond = self._gen_expr(if_expr)
                 loop_code += f"if {cond} {{ "
@@ -3139,8 +3139,8 @@ self.__state = {cond_state};"""
         close_braces = ""
         for gen in node.generators:
             target = self._gen_comp_target(gen.target)
-            iterable = self._gen_expr(gen.iterable)
-            loop_code += f"for &{target} in &{iterable} {{ "
+            iterable = self._get_comp_iter_expr(gen.iterable, getattr(gen.iterable, "result_type", None))
+            loop_code += f"for __tmp in {iterable} {{ let {target} = __tmp; "
             for if_expr in gen.ifs:
                 cond = self._gen_expr(if_expr)
                 loop_code += f"if {cond} {{ "
@@ -3154,9 +3154,7 @@ self.__state = {cond_state};"""
         return f"({{ {inner}{loop_code}{insert_code}{close_braces} __res }})"
 
     def _gen_set_comp(self, node: IRSetComp) -> str:
-        # In Rust, HashSet is usually used for Python set
-        # Check if uses_hashmap or dedicated flag is needed
-        self._uses_hashmap = True # Standard lib for HashSet too
+        self._uses_hashmap = True
         elem_t = self._get_rust_type(node.result_type.element_type)
         inner = f"let mut __res = HashSet::<{elem_t}>::new(); "
         
@@ -3164,8 +3162,8 @@ self.__state = {cond_state};"""
         close_braces = ""
         for gen in node.generators:
             target = self._gen_comp_target(gen.target)
-            iterable = self._gen_expr(gen.iterable)
-            loop_code += f"for &{target} in &{iterable} {{ "
+            iterable = self._get_comp_iter_expr(gen.iterable, getattr(gen.iterable, "result_type", None))
+            loop_code += f"for __tmp in {iterable} {{ let {target} = __tmp; "
             for if_expr in gen.ifs:
                 cond = self._gen_expr(if_expr)
                 loop_code += f"if {cond} {{ "
@@ -3184,10 +3182,10 @@ self.__state = {cond_state};"""
     def _gen_comp_chain(self, generators, index, elt) -> str:
         gen = generators[index]
         target = self._gen_comp_target(gen.target)
-        iterable = self._gen_expr(gen.iterable)
+        iterable = self._get_comp_iter_expr(gen.iterable, getattr(gen.iterable, "result_type", None))
         
         # Base iterator
-        chain = f"{iterable}.clone().into_iter()"
+        chain = iterable
         
         # Apply filters for this generator
         for if_expr in gen.ifs:
@@ -3203,6 +3201,25 @@ self.__state = {cond_state};"""
             chain = f"{chain}.map(move |__tmp| {{ let {target} = __tmp.clone(); {elt_expr} }})"
             
         return chain
+
+    def _get_comp_iter_expr(self, iterable, iterable_type) -> str:
+        iterable_str = self._gen_expr(iterable)
+        is_direct_iter = False
+        if isinstance(iterable, IRFunctionCall):
+            if iterable.name in ("zip", "enumerate", "map", "reversed"):
+                is_direct_iter = True
+        
+        if isinstance(iterable_type, (IRIteratorType, IRGeneratorType)):
+            is_direct_iter = True
+            
+        if isinstance(iterable_type, IRDictType):
+            return f"{iterable_str}.clone().into_keys()"
+        elif isinstance(iterable_type, IRStrType):
+            return f"{iterable_str}.chars().map(|c| c.to_string())"
+        elif is_direct_iter:
+            return iterable_str
+        else:
+            return f"{iterable_str}.clone().into_iter()"
 
     def _gen_comp_target(self, target) -> str:
         if isinstance(target, IRName):

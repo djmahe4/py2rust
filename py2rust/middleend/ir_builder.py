@@ -186,7 +186,7 @@ def _to_ir_type(t):
     if t is None:
         return IRUnitType()
     # If already an IR type, return as is
-    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType, IRExternalPythonType, IROptionType, IRSumType, IRIteratorType, IRIterableType, IRGeneratorType)):
+    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType, IRExternalPythonType, IROptionType, IRSumType, IRIteratorType, IRIterableType, IRGeneratorType, IRSetType, IRDequeType, IRHeapType)):
         return t
         
     if isinstance(t, IntType):

@@ -58,7 +58,8 @@ pub fn __py_main() -> Result<(), PyError> {
     let nums: Vec<i32> = vec![1, 2, 3, 4, 5, 6];
     let evens: Vec<i32> = {
         let mut __res = Vec::<i32>::new();
-        for &x in &nums {
+        for __tmp in nums.clone().into_iter() {
+            let x = __tmp;
             if (x % 2) == 0 {
                 __res.push(x);
             }
@@ -68,7 +69,8 @@ pub fn __py_main() -> Result<(), PyError> {
     println!("{:?}", evens);
     let squares: Vec<i32> = {
         let mut __res = Vec::<i32>::new();
-        for &x in &nums {
+        for __tmp in nums.clone().into_iter() {
+            let x = __tmp;
             __res.push((x * x));
         }
         __res
@@ -78,8 +80,10 @@ pub fn __py_main() -> Result<(), PyError> {
     let ys: Vec<i32> = vec![10, 20];
     let pairs: Vec<(i32, i32)> = {
         let mut __res = Vec::<(i32, i32)>::new();
-        for &x in &xs {
-            for &y in &ys {
+        for __tmp in xs.clone().into_iter() {
+            let x = __tmp;
+            for __tmp in ys.clone().into_iter() {
+                let y = __tmp;
                 __res.push((x, y));
             }
         }
@@ -88,7 +92,8 @@ pub fn __py_main() -> Result<(), PyError> {
     println!("{:?}", pairs);
     let unique_nums: HashSet<i32> = {
         let mut __res = HashSet::<i32>::new();
-        for &x in &nums {
+        for __tmp in nums.clone().into_iter() {
+            let x = __tmp;
             __res.insert((x % 3));
         }
         __res
@@ -96,7 +101,8 @@ pub fn __py_main() -> Result<(), PyError> {
     println!("{}", unique_nums.len() as i32);
     let mapping: HashMap<i32, i32> = {
         let mut __res = HashMap::<i32, i32>::new();
-        for &x in &nums {
+        for __tmp in nums.clone().into_iter() {
+            let x = __tmp;
             if x < 4 {
                 __res.insert(x, (x * 10));
             }
