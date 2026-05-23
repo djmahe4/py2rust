@@ -73,6 +73,28 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
 - **Virtual Environment (venv) support** with runtime `sys.path` injection
 - Mocking system to enable type checking of external library calls
 
+#### 🤖 Semantic Validation & Pattern Learning
+```mermaid
+graph TD
+    A[Python Input] --> B[py2rust Compiler]
+    B --> C[Rust Code Output]
+    C --> D[Semantic Equivalence Validator]
+    A --> D
+    D -->|Evaluate LLM| E{Verdict: PASS/FAIL?}
+    E -->|PASS| F[Validation Store JSONL]
+    E -->|FAIL| G[Validation Store JSONL]
+    G --> H[Pattern Extractor]
+    H -->|Generalize LLM| I[Pattern Store JSONL]
+    I --> J[Pattern Applicator]
+    C --> J
+    J -->|Interact / Suggest| K[GitHub-Style Markdown Fix Suggestions]
+```
+
+- **Closed-Loop Verification**: Empirically validates generated Rust translation output against input Python source using local LLM models (e.g. `deepseek-coder`).
+- **Platform-Aware Context Gathering**: Securely retrieves semantic and surrounding symbol context using native platforms (e.g. `rg`/`grep`) with recursive fallback parsing.
+- **Append-Only JSONL Storage**: Logs robust validation history (`.py2rust/validation_history.jsonl`) and Generalized Improvement Patterns (`.py2rust/patterns.jsonl`).
+- **Premium Suggestion Engine**: Recommends colorized, highly descriptive, interactive GitHub-style Markdown code modifications without altering user source code.
+
 ### ❌ Forbidden Features (raises `UnsupportedFeatureError`)
 
 #### Language Features
@@ -151,6 +173,18 @@ py2rust input.py -v
 
 # Disable rustfmt formatting
 py2rust input.py --no-format
+
+# Enable semantic equivalence validation
+py2rust input.py --validate
+
+# Enable strict equivalence validation (aborts compilation on failures)
+py2rust input.py --validate --strict-validation
+
+# Specify local Ollama model to use for checks (defaults to deepseek-coder)
+py2rust input.py --validate --ollama-model llama3
+
+# Enable active pattern learning and suggest fixes based on past failures
+py2rust input.py --validate --learn-patterns --apply-learned-patterns
 ```
 
 ### Environment Variables
@@ -393,7 +427,7 @@ py2rust/
 │   │   ├── logger.py        # Logging setup
 │   │   └── visitor.py       # Generic visitor pattern
 │   │
-│   └── tests/               # pytest test suite (151 tests)
+│   └── tests/               # pytest test suite (310 tests)
 │
 ├── examples/                # Input/output examples
 └── pyproject.toml

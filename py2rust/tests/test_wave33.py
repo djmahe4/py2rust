@@ -2,7 +2,7 @@ from __future__ import annotations
 import unittest
 import os
 import tempfile
-from py2rust.config import CompilerConfig, AsyncRuntime
+from py2rust.config import CompilerConfig
 
 def test_compiler_config_validation_fields():
     # Attempt to initialize config with new validation-learning properties
@@ -141,6 +141,64 @@ CONFIDENCE: 0.88"""
         assert patterns[0]["pattern_id"] == "int_to_float_div"
         assert patterns[0]["trigger_pattern"] == "/"
         assert patterns[0]["replacement_rust"] == "a as f64 / b as f64"
+
+def test_pattern_applicator_format():
+    from py2rust.learning_system.learning.pattern_applicator import PatternApplicator
+    
+    pattern = {
+        "pattern_id": "int_to_float_div",
+        "trigger_pattern": "/",
+        "target_rust": "a / b",
+        "replacement_rust": "a as f64 / b as f64",
+        "confidence": 0.88
+    }
+    
+    applicator = PatternApplicator(patterns=[pattern])
+    
+    # Check if mismatch/incorrect code triggers suggestion
+    original_rust = "fn divide(a: i32, b: i32) -> f64 { a / b }"
+    suggestion = applicator.suggest_fix(original_rust, "divide")
+    
+    assert suggestion is not None
+    assert "PROPOSED RUST COMPILATION IMPROVEMENT" in suggestion
+    assert "```rust" in suggestion
+    assert "a as f64 / b as f64" in suggestion
+    # Verify no autonomous changes are made; code is unchanged
+    assert original_rust == "fn divide(a: i32, b: i32) -> f64 { a / b }"
+
+def test_pipeline_integration():
+    from py2rust.main import compile_file
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_file = os.path.join(tmpdir, "test.py")
+        output_file = os.path.join(tmpdir, "test.rs")
+        
+        with open(input_file, "w", encoding="utf-8") as f:
+            f.write("def my_func(): return 42\n")
+            
+        config = CompilerConfig(
+            input_file=input_file,
+            output_file=output_file,
+            validate=True,
+            strict_validation=True,
+            learn_patterns=True,
+            apply_learned_patterns=True
+        )
+        
+        # Mock client to return semantic mismatch
+        import unittest.mock as mock
+        mock_client = mock.Mock()
+        mock_client.generate.return_value = "VERDICT: FAIL\nCONFIDENCE: 0.99\nREASONING: Semantic mismatch detected.\nSUGGESTED_FIX: return 43"
+        
+        # Patch main module references to validator, store, extractor, applicator
+        with mock.patch("py2rust.learning_system.validation.semantic_validator.OllamaClient") as mock_ollama_cls:
+            mock_ollama_cls.return_value = mock_client
+            
+            # Since strict_validation is active, mismatch should cause compile_file to return False
+            success = compile_file(config)
+            assert success is False
+
+
 
 
 

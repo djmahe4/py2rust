@@ -3,9 +3,11 @@ import shutil
 import os
 import sys
 
+from .ollama_client import OllamaClient
+
 class SemanticValidator:
-    def __init__(self, client=None):
-        self.client = client
+    def __init__(self, client=None, model="deepseek-coder"):
+        self.client = client or OllamaClient(model=model)
 
     def get_symbol_context(self, symbol_name: str, file_path: str = None) -> str:
         # Platform-aware context gathering checking for tools first
