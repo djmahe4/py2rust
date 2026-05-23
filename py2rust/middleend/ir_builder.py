@@ -532,11 +532,16 @@ class IRBuilder:
         return False
 
     def _build_method(self, class_name: str, func, defining_class: Optional[str] = None) -> IRFunction:
+        # Wave 28: detect @staticmethod desugared flag
+        is_static = getattr(func, "is_static", False)
+
         scope = getattr(func, "scope", None)
         self.st.enter_scope(f"{class_name}.{func.name}", scope_to_reuse=scope)
-        self.st.define("self", ClassType(name=class_name))
-        if hasattr(self.st.current_scope, "_declared_in_ir"):
-            self.st.current_scope._declared_in_ir.add("self")
+        if not is_static:
+            # Only inject 'self' for non-static methods
+            self.st.define("self", ClassType(name=class_name))
+            if hasattr(self.st.current_scope, "_declared_in_ir"):
+                self.st.current_scope._declared_in_ir.add("self")
 
         params = []
         for p in func.params:
@@ -553,7 +558,7 @@ class IRBuilder:
             n for n in [p.name for p in func.params] if self._is_param_mutated(body, n)
         )
 
-        if self._check_mutates_self(func.body):
+        if not is_static and self._check_mutates_self(func.body):
             self._mutating_methods.add((class_name, func.name, len(func.params)))
 
         self.st.exit_scope()
@@ -565,6 +570,7 @@ class IRBuilder:
             mutated_params=mutated_params,
             is_async=func.is_async,
             is_method=True,
+            is_static=is_static,
             defining_class=defining_class or class_name
         )
 

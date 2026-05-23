@@ -1171,8 +1171,13 @@ class RustCodegen:
         self._mutated_vars = _collect_mutated_vars(func.body)
         decls, pre_declare = _collect_decls(func.body, self._uses_python_wrappers)
 
+        # Wave 28: static methods have no self receiver
+        is_static = getattr(func, "is_static", False)
+
         if is_init:
             param_strs = []
+        elif is_static:
+            param_strs = []  # no &self for @staticmethod
         elif "self" in self._mutated_vars:
             param_strs = ["&mut self"]
         else:

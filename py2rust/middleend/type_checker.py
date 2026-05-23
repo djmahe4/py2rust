@@ -468,7 +468,9 @@ class TypeChecker:
         self._current_return_type = func.return_type
         old_async = self._within_async
         self._within_async = func.is_async
-        self.st.define("self", ClassType(name=class_name))
+        # Wave 28: @staticmethod methods have no 'self' receiver
+        if not getattr(func, "is_static", False):
+            self.st.define("self", ClassType(name=class_name))
 
         for param in func.params:
             self.st.define(param.name, param.type_annotation)

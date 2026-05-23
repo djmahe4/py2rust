@@ -650,6 +650,7 @@ class IRFunction:
     mutated_params: tuple = ()
     is_async: bool = False
     is_method: bool = False
+    is_static: bool = False   # Wave 28: @staticmethod desugared
     defining_class: Optional[str] = None
     type_params: tuple = ()
 

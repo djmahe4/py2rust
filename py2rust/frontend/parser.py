@@ -206,15 +206,47 @@ class Parser:
         self, node: Union[ast.FunctionDef, ast.AsyncFunctionDef], is_method: bool = False
     ) -> FunctionDef:
         is_async = isinstance(node, ast.AsyncFunctionDef)
-        if node.decorator_list:
-            raise self._err(
-                "Decorators are not supported", node, UnsupportedFeatureError
-            )
+
+        # Wave 28: collect decorator names; desugar known ones
+        decorator_names = []
+        is_static = False
+        is_classmethod = False
+        for deco in node.decorator_list:
+            if isinstance(deco, ast.Name):
+                dname = deco.id
+            elif isinstance(deco, ast.Attribute):
+                dname = deco.attr
+            else:
+                raise self._err(
+                    "Only simple name decorators are supported",
+                    deco,
+                    UnsupportedFeatureError,
+                )
+            if dname == "staticmethod":
+                is_static = True
+            elif dname == "classmethod":
+                is_classmethod = True
+            elif dname in ("property", "abstractmethod", "override"):
+                # Silently accepted; stored for future use
+                decorator_names.append(dname)
+            else:
+                raise self._err(
+                    f"Unsupported decorator '@{dname}'",
+                    deco,
+                    UnsupportedFeatureError,
+                    suggestion="Supported decorators: @staticmethod, @classmethod, @property, @abstractmethod, @override",
+                )
 
         params = []
         args = list(node.args.args)
         start_idx = 0
-        if is_method and args and args[0].arg == "self":
+        # For regular methods strip 'self'; for classmethods strip 'cls';
+        # for staticmethods there is no implicit first arg.
+        if is_static:
+            start_idx = 0  # no implicit first param
+        elif is_classmethod and args and args[0].arg in ("cls", "klass"):
+            start_idx = 1  # drop cls
+        elif is_method and args and args[0].arg == "self":
             start_idx = 1
 
         for arg in args[start_idx:]:
@@ -274,6 +306,9 @@ class Parser:
             body=tuple(body),
             is_async=is_async,
             type_params=tuple(type_params),
+            decorator_list=tuple(decorator_names),
+            is_static=is_static,
+            is_classmethod=is_classmethod,
             line=node.lineno,
             col=node.col_offset + 1,
         )
@@ -298,6 +333,33 @@ class Parser:
                     elif isinstance(base_node.slice, ast.Name):
                         type_params.append(base_node.slice.id)
 
+        # Wave 28: collect class-level decorators
+        decorator_names = []
+        for deco in node.decorator_list:
+            if isinstance(deco, ast.Name):
+                dname = deco.id
+            elif isinstance(deco, ast.Attribute):
+                dname = deco.attr
+            elif isinstance(deco, ast.Call) and isinstance(deco.func, ast.Name):
+                dname = deco.func.id  # e.g. @dataclass(eq=False)
+            elif isinstance(deco, ast.Call) and isinstance(deco.func, ast.Attribute):
+                dname = deco.func.attr
+            else:
+                raise self._err(
+                    "Only simple name decorators are supported on classes",
+                    deco,
+                    UnsupportedFeatureError,
+                )
+            if dname in ("dataclass", "total_ordering", "functools.total_ordering"):
+                decorator_names.append(dname)
+            else:
+                raise self._err(
+                    f"Unsupported class decorator '@{dname}'",
+                    deco,
+                    UnsupportedFeatureError,
+                    suggestion="Supported class decorators: @dataclass",
+                )
+
         body = self._parse_class_body(node.body)
 
         return ClassDef(
@@ -305,6 +367,7 @@ class Parser:
             bases=tuple(bases),
             body=tuple(body),
             type_params=tuple(type_params),
+            decorator_list=tuple(decorator_names),
             line=node.lineno,
             col=node.col_offset + 1,
         )

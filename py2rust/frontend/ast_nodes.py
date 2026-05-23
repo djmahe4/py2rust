@@ -750,6 +750,9 @@ class FunctionDef:
     body: tuple
     is_async: bool = False
     type_params: tuple = ()
+    decorator_list: tuple = ()  # Wave 28: list of decorator name strings
+    is_static: bool = False      # Wave 28: desugared from @staticmethod
+    is_classmethod: bool = False # Wave 28: desugared from @classmethod
     line: int = 0
     col: int = 0
 
@@ -760,6 +763,7 @@ class ClassDef:
     bases: tuple = ()
     body: tuple = ()
     type_params: tuple = ()
+    decorator_list: tuple = ()  # Wave 28: list of decorator name strings
     line: int = 0
     col: int = 0
 
