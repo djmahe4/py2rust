@@ -135,6 +135,23 @@ graph TD
 | `dict[K, V]`   | `HashMap<K, V>`     |
 | `ClassName`    | `ClassName` (struct)|
 
+## Repository-Scale Stress Testing & Validation
+
+`py2rust` features a dedicated multi-module repository stress testing framework to ensure compiler robustness and fail-fast guarantees against invalid inputs.
+
+Supported stress test assertions include:
+- **Relative Import Boundary Violations**: Verifies boundary violations during relative imports.
+- **Undefined Import Symbols**: Catch unresolved cross-module symbol names immediately.
+- **Cross-Module Attribute and Function Validation**: Statically inspects attribute and method call namespaces across different modules.
+- **Cross-Module Constructor Arity Checking**: Ensures constructor arguments are validated against the defining class signature across modules.
+- **Circular Import Detection**: Gracefully detects and breaks infinite import loops.
+- **Alias Conflict Verification**: Confirms multiple identically named imports with unique aliases do not cause namespace collisions.
+
+Run stress tests:
+```bash
+pytest py2rust/tests/test_repo_stress.py -v
+```
+
 ## Installation
 
 ```bash
@@ -198,7 +215,7 @@ py2rust input.py --validate --learn-patterns --apply-learned-patterns
 
 To test examples:
 ```bash
-for f in examples/*.py; do echo "Processing $f..."; PYTHONPATH=. python3 -m py2rust.cli "$f" -o "${f%.py}.rs" --verify || { echo "FAILED: $f"; break; }; done
+python scripts/test_examples.py
 ```
 
 ### Simple Math

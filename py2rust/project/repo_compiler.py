@@ -52,7 +52,7 @@ def compile_repo(config: CompilerConfig) -> bool:
         sorted_modules = graph.topological_sort()
     except ValueError as e:
         print(f"Compilation failed: {str(e)}", file=sys.stderr)
-        return False
+        raise e
         
     compiled_modules: dict[str, str] = {}
     
@@ -165,7 +165,7 @@ def compile_repo(config: CompilerConfig) -> bool:
             print(f"Error compiling module '{mod_name}': {str(e)}", file=sys.stderr)
             import traceback
             traceback.print_exc()
-            return False
+            raise e
             
     # Write output to the workspace directory
     output_dir = Path(config.output_file or (repo_root / "dist")).resolve()

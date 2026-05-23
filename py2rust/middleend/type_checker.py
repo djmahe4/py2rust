@@ -965,7 +965,9 @@ class TypeChecker:
                     if isinstance(curr_type, ClassType):
                         cls_info = self.st.lookup_class(curr_type.name)
                         if cls_info:
-                            pass
+                            self._check_constructor_arity(cls_info, expr.args, expr.line, expr.col, curr_type.name)
+                            for arg in expr.args:
+                                self.check_expr(arg)
                     elif isinstance(curr_type, FunctionType):
                         self._propagate_call_lambda_types(expr.name, curr_type, expr.args, expr.keywords)
                         if len(expr.args) != len(curr_type.param_types):
@@ -988,14 +990,26 @@ class TypeChecker:
                         for arg in expr.args:
                             self.check_expr(arg)
                     elif isinstance(curr_type, ExternalPythonType):
-                        # Always valid for external types (resolved at runtime)
-                        self._propagate_call_lambda_types(expr.name, curr_type, expr.args, expr.keywords)
+                        is_class = False
+                        if curr_type.is_local and self.st.cross_module_table:
+                            cls_info = self.st.cross_module_table.lookup_symbol(curr_type.module, curr_type.name or expr.name, "classes")
+                            if cls_info:
+                                is_class = True
+                                self._check_constructor_arity(cls_info, expr.args, expr.line, expr.col, curr_type.name or expr.name)
+                                for arg in expr.args:
+                                    self.check_expr(arg)
+                        if not is_class:
+                            # Always valid for external types (resolved at runtime)
+                            self._propagate_call_lambda_types(expr.name, curr_type, expr.args, expr.keywords)
+                            for arg in expr.args:
+                                self.check_expr(arg)
+                            for kw in expr.keywords:
+                                self.check_expr(kw.value)
+                    elif self.st.lookup_class(expr.name):
+                        cls_info = self.st.lookup_class(expr.name)
+                        self._check_constructor_arity(cls_info, expr.args, expr.line, expr.col, expr.name)
                         for arg in expr.args:
                             self.check_expr(arg)
-                        for kw in expr.keywords:
-                            self.check_expr(kw.value)
-                    elif self.st.lookup_class(expr.name):
-                        pass
                     else:
                         raise self._err(
                             f"Undefined function: '{expr.name}'",
@@ -1502,3 +1516,38 @@ class TypeChecker:
                 # Default fallback
                 for t in target.elements:
                     self._bind_target(t, UnknownType())
+
+    def _check_constructor_arity(self, cls_info, expr_args, expr_line, expr_col, class_name):
+        valid_arities = self._get_constructor_arities(cls_info)
+        if not valid_arities:
+            # Default constructor takes 0 arguments
+            valid_arities.add(0)
+            
+        call_arity = len(expr_args)
+        if call_arity not in valid_arities:
+            raise self._sem_err(
+                f"Class '{class_name}' constructor expects arities {sorted(list(valid_arities))}, got {call_arity}",
+                expr_line,
+                expr_col,
+            )
+
+    def _get_constructor_arities(self, cls_info) -> set[int]:
+        valid_arities = set()
+        if cls_info.constructors:
+            for c_arity, c_def in cls_info.constructors.items():
+                if c_def.params and c_def.params[0].name == "self":
+                    valid_arities.add(c_arity - 1)
+                else:
+                    valid_arities.add(c_arity)
+        else:
+            for base in cls_info.bases:
+                base_cls = self.st.lookup_class(base)
+                if not base_cls and self.st.cross_module_table:
+                    for mod_name, mod_st in self.st.cross_module_table.modules.items():
+                        if base in mod_st._classes:
+                            base_cls = mod_st._classes[base]
+                            break
+                if base_cls:
+                    valid_arities.update(self._get_constructor_arities(base_cls))
+        return valid_arities
+
