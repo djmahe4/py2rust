@@ -62,7 +62,7 @@ impl Container {
     }
     pub fn __getitem__(&self, idx: i32) -> Result<i32, PyError> {
         return Ok({
-            let __coll = &(self.items);
+            let __coll = &(self.items.clone());
             let __idx_raw = idx;
             let actual_idx = if __idx_raw < 0 {
                 (__idx_raw + (__coll.len() as i32) as i32) as usize
@@ -73,7 +73,7 @@ impl Container {
         });
     }
     pub fn __setitem__(&mut self, idx: i32, val: i32) -> Result<(), PyError> {
-        self.items[idx as usize] = val;
+        self.items.clone()[idx as usize] = val;
         Ok(())
     }
 }

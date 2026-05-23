@@ -11,6 +11,7 @@ class ProjectConfig:
     entry_point: str | None = None
     package_dir: str | None = None
     exclude: list[str] = field(default_factory=list)
+    sys_path: list[str] = field(default_factory=list)
 
     @classmethod
     def load_from_toml(cls, toml_path: Path) -> ProjectConfig:
@@ -29,6 +30,7 @@ class ProjectConfig:
         entry_point = None
         package_dir = None
         exclude = []
+        sys_path = []
 
         # Parse standard [project] table
         if "project" in data:
@@ -52,6 +54,8 @@ class ProjectConfig:
                     dependencies.update(tool_cfg["dependencies"])
                 if "exclude" in tool_cfg and isinstance(tool_cfg["exclude"], list):
                     exclude = [str(x) for x in tool_cfg["exclude"]]
+                if "sys_path" in tool_cfg and isinstance(tool_cfg["sys_path"], list):
+                    sys_path = [str(x) for x in tool_cfg["sys_path"]]
 
         return cls(
             name=name,
@@ -59,5 +63,6 @@ class ProjectConfig:
             dependencies=dependencies,
             entry_point=entry_point,
             package_dir=package_dir,
-            exclude=exclude
+            exclude=exclude,
+            sys_path=sys_path
         )

@@ -36,8 +36,21 @@ def compile_repo(config: CompilerConfig) -> bool:
     if package_dir:
         config.package_dir = package_dir
         
+    from py2rust.utils.errors import SemanticError
+    sys_path_resolved = []
+    for p in proj_config.sys_path:
+        p_path = Path(p)
+        if not p_path.is_absolute():
+            p_path = (repo_root / p_path).resolve()
+        else:
+            p_path = p_path.resolve()
+        if not p_path.exists():
+            raise SemanticError(f"sys_path directory does not exist: '{p}'")
+        sys_path_resolved.append(p_path)
+
     resolver = ImportResolver(
         repo_root=repo_root,
+        sys_path=sys_path_resolved,
         package_dir=package_dir,
         exclude_patterns=proj_config.exclude
     )

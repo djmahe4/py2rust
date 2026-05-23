@@ -334,3 +334,205 @@ def test_stress_duplicate_name_conflict():
         run_res = run_cargo_cmd(out_dir, ["cargo", "run"])
         assert run_res.returncode == 0, f"Cargo run failed:\n{run_res.stderr}"
         assert "a: 100, b: 200" in run_res.stdout
+
+
+def test_stress_sys_path_mismatch():
+    """
+    Test 7: Sys Path Mismatch Rejection
+    Verify that an invalid, non-existent sys_path directory in pyproject.toml
+    causes the compiler to fail immediately with a SemanticError.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        
+        pkg_dir = tmp_path / "pkg_sys_path_err"
+        pkg_dir.mkdir()
+        
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "main.py").write_text(
+            "def main() -> None:\n"
+            "    pass\n"
+        )
+        
+        # Configure a completely invalid directory in sys_path
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\n"
+            "name = \"pkg_sys_path_err\"\n"
+            "version = \"0.1.0\"\n"
+            "\n"
+            "[tool.py2rust]\n"
+            "package_dir = \"pkg_sys_path_err\"\n"
+            "entry_point = \"pkg_sys_path_err.main\"\n"
+            "sys_path = [\"/nonexistent/directory/path/here\"]\n"
+        )
+        
+        out_dir = tmp_path / "dist"
+        
+        config = CompilerConfig(
+            input_file=str(tmp_path),
+            output_file=str(out_dir),
+            verbose=True,
+            verify=False
+        )
+        
+        with pytest.raises(SemanticError) as exc_info:
+            compile_repo(config)
+            
+        assert "sys_path" in str(exc_info.value) and "does not exist" in str(exc_info.value)
+
+
+def test_stress_nested_import_name_error_propagation():
+    """
+    Test 8: Nested Import Name Error Propagation
+    Verify that a name error in a deeply nested import chain (main -> a -> b -> non_existent)
+    correctly propagates and raises a SemanticError.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        
+        pkg_dir = tmp_path / "pkg_nested_err"
+        pkg_dir.mkdir()
+        
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "b.py").write_text(
+            "from .c import nonexistent_func\n"
+            "def run_b() -> None:\n"
+            "    nonexistent_func()\n"
+        )
+        (pkg_dir / "c.py").write_text(
+            "def actual_func() -> None:\n"
+            "    pass\n"
+        )
+        (pkg_dir / "a.py").write_text(
+            "from .b import run_b\n"
+            "def run_a() -> None:\n"
+            "    run_b()\n"
+        )
+        (pkg_dir / "main.py").write_text(
+            "from .a import run_a\n"
+            "def main() -> None:\n"
+            "    run_a()\n"
+        )
+        
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\n"
+            "name = \"pkg_nested_err\"\n"
+            "version = \"0.1.0\"\n"
+            "\n"
+            "[tool.py2rust]\n"
+            "package_dir = \"pkg_nested_err\"\n"
+            "entry_point = \"pkg_nested_err.main\"\n"
+        )
+        
+        out_dir = tmp_path / "dist"
+        
+        config = CompilerConfig(
+            input_file=str(tmp_path),
+            output_file=str(out_dir),
+            verbose=True,
+            verify=False
+        )
+        
+        with pytest.raises(SemanticError) as exc_info:
+            compile_repo(config)
+            
+        assert "cannot import name 'nonexistent_func'" in str(exc_info.value)
+
+
+def test_stress_cross_module_type_cycle():
+    """
+    Test 9: Cross-Module and Intra-Module Circular Type Layout Rejection
+    Verify that circular struct field layouts (e.g. class A containing B, class B containing A)
+    are detected and rejected with a clear SemanticError.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        
+        pkg_dir = tmp_path / "pkg_type_cycle"
+        pkg_dir.mkdir()
+        
+        (pkg_dir / "__init__.py").write_text("")
+        
+        (pkg_dir / "main.py").write_text(
+            "class NodeA:\n"
+            "    next_node: NodeB = None\n"
+            "\n"
+            "class NodeB:\n"
+            "    prev_node: NodeA = None\n"
+            "\n"
+            "def main() -> None:\n"
+            "    pass\n"
+        )
+        
+        (tmp_path / "pyproject.toml").write_text(
+            "[project]\n"
+            "name = \"pkg_type_cycle\"\n"
+            "version = \"0.1.0\"\n"
+            "\n"
+            "[tool.py2rust]\n"
+            "package_dir = \"pkg_type_cycle\"\n"
+            "entry_point = \"pkg_type_cycle.main\"\n"
+        )
+        
+        out_dir = tmp_path / "dist"
+        
+        config = CompilerConfig(
+            input_file=str(tmp_path),
+            output_file=str(out_dir),
+            verbose=True,
+            verify=False
+        )
+        
+        with pytest.raises(SemanticError) as exc_info:
+            compile_repo(config)
+            
+        assert "Unsupported circular/recursive class field layout detected" in str(exc_info.value)
+
+
+def test_stress_missing_pyproject_toml_fallback():
+    """
+    Test 10: Fallback when pyproject.toml is missing
+    Verify that if a repository has no pyproject.toml file, py2rust will fall back
+    to default configurations, successfully parse, resolve local imports, and validate the types.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        
+        # We place our package directly in the tmp_path, acting as repo_root
+        pkg_dir = tmp_path / "pkg_no_toml"
+        pkg_dir.mkdir()
+        
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "helper.py").write_text(
+            "def get_number() -> int:\n"
+            "    return 123\n"
+        )
+        (pkg_dir / "main.py").write_text(
+            "from .helper import get_number\n"
+            "def main() -> None:\n"
+            "    x = get_number()\n"
+            "    print(f\"number: {x}\")\n"
+        )
+        
+        # Note: we explicitly do NOT write pyproject.toml here
+        
+        out_dir = tmp_path / "dist"
+        
+        config = CompilerConfig(
+            input_file=str(tmp_path),
+            output_file=str(out_dir),
+            verbose=True,
+            verify=False,
+            # Pass package_dir explicitly to let resolver locate local modules
+            package_dir="pkg_no_toml"
+        )
+        
+        success = compile_repo(config)
+        assert success is True
+        
+        # Verify it generates valid Rust that compiles
+        check_res = run_cargo_cmd(out_dir, ["cargo", "check"])
+        assert check_res.returncode == 0, f"Cargo check failed:\n{check_res.stderr}"
+
+
+

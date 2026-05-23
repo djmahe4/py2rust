@@ -247,8 +247,23 @@ class TypeChecker:
         repo_root = getattr(self.st.config, "repo_root", None)
         if repo_root:
             package_dir = getattr(self.st.config, "package_dir", None)
+            from py2rust.project.project_config import ProjectConfig
+            toml_path = Path(repo_root) / "pyproject.toml"
+            proj_config = ProjectConfig.load_from_toml(toml_path)
+            
+            sys_path_resolved = []
+            for p in proj_config.sys_path:
+                p_path = Path(p)
+                if not p_path.is_absolute():
+                    p_path = (Path(repo_root) / p_path).resolve()
+                else:
+                    p_path = p_path.resolve()
+                if p_path.exists():
+                    sys_path_resolved.append(p_path)
+
             resolver = ImportResolver(
                 repo_root=Path(repo_root),
+                sys_path=sys_path_resolved,
                 package_dir=package_dir
             )
 
@@ -444,6 +459,9 @@ class TypeChecker:
         # Pre-scan all protocols
         self._collect_all_protocols(module.classes)
         self._collect_all_protocols(module.functions)
+
+        # Check for circular class field layout cycles
+        self._check_class_field_cycles()
 
         # Register top-level classes in global scope
         for cls in module.classes:
@@ -1549,5 +1567,60 @@ class TypeChecker:
                             break
                 if base_cls:
                     valid_arities.update(self._get_constructor_arities(base_cls))
+            if not valid_arities:
+                valid_arities.add(0)
+                valid_arities.add(len(cls_info.fields))
         return valid_arities
+
+    def _extract_class_names(self, t) -> list[str]:
+        from ..frontend.ast_nodes import ClassType, OptionalType, UnionType, TupleType
+        from py2rust.middleend.symbol_table import ExternalPythonType
+        names = []
+        if isinstance(t, ClassType):
+            names.append(t.name)
+        elif isinstance(t, ExternalPythonType) and t.is_local:
+            if t.name:
+                names.append(t.name)
+        elif isinstance(t, OptionalType):
+            names.extend(self._extract_class_names(t.element_type))
+        elif isinstance(t, UnionType):
+            for et in t.types:
+                names.extend(self._extract_class_names(et))
+        elif isinstance(t, TupleType):
+            for et in t.element_types:
+                names.extend(self._extract_class_names(et))
+        return names
+
+    def _check_class_field_cycles(self):
+        for class_name, cls_info in list(self.st._classes.items()):
+            visited = set()
+            path = []
+            
+            def dfs(curr_cls_name, curr_cls_info):
+                if curr_cls_name in path:
+                    cycle = " -> ".join(path + [curr_cls_name])
+                    raise self._sem_err(
+                        f"Unsupported circular/recursive class field layout detected: {cycle}"
+                    )
+                if curr_cls_name in visited:
+                    return
+                
+                path.append(curr_cls_name)
+                for f_name, f_type in curr_cls_info.fields.items():
+                    target_names = self._extract_class_names(f_type)
+                    for target_cls_name in target_names:
+                        target_cls_info = self.st.lookup_class(target_cls_name)
+                        if not target_cls_info and self.st.cross_module_table:
+                            for mod_name, mod_st in self.st.cross_module_table.modules.items():
+                                if target_cls_name in mod_st._classes:
+                                    target_cls_info = mod_st._classes[target_cls_name]
+                                    break
+                        
+                        if target_cls_info:
+                            dfs(target_cls_name, target_cls_info)
+                
+                path.pop()
+                visited.add(curr_cls_name)
+
+            dfs(class_name, cls_info)
 
