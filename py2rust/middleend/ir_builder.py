@@ -1385,6 +1385,55 @@ class IRBuilder:
                     file=file_val, method=expr.method, args=tuple(ir_args)
                 )
             if isinstance(val_type, ExternalPythonType):
+                if val_type.is_local:
+                    if val_type.name is None:
+                        # E.g. models.Point(1.0) or math_utils.compute(2.0)
+                        if self.st.cross_module_table:
+                            cls = self.st.cross_module_table.lookup_symbol(val_type.module, expr.method, "classes")
+                            if cls:
+                                args = [self._build_expr(a) for a in expr.args]
+                                return IRNew(class_name=expr.method, args=tuple(args))
+                            
+                            sig = self.st.cross_module_table.lookup_symbol(val_type.module, expr.method, "functions")
+                            if sig:
+                                param_types, ret_type, _is_async, _type_params = sig
+                                ir_ret = _to_ir_type(ret_type)
+                                args = []
+                                for i, a in enumerate(expr.args):
+                                    pt = _to_ir_type(param_types[i]) if i < len(param_types) else None
+                                    args.append(self._build_expr(a, pt))
+                                return IRMethodCall(
+                                    value=val,
+                                    method=expr.method,
+                                    args=tuple(args),
+                                    result_type=ir_ret,
+                                    is_fallible=True,
+                                    mutates_self=False,
+                                )
+                    else:
+                        # E.g. p.get_x() where p has type ExternalPythonType(module="models", name="Point", is_local=True)
+                        method_info = self.st.lookup_method(val_type.name, expr.method, len(expr.args))
+                        if method_info:
+                            method, defining_class = method_info
+                            ir_args = []
+                            for i, arg in enumerate(expr.args):
+                                if i < len(method.params):
+                                    pt = _to_ir_type(method.params[i].type_annotation)
+                                    ir_args.append(self._build_expr(arg, pt))
+                                else:
+                                    ir_args.append(self._build_expr(arg))
+                            ir_ret = _to_ir_type(method.return_type)
+                            mutates_self = (val_type.name, expr.method, len(expr.args)) in self._mutating_methods
+                            if expr.method in {"append", "extend", "insert", "pop", "remove", "clear", "update"}:
+                                mutates_self = True
+                            return IRMethodCall(
+                                value=val,
+                                method=expr.method,
+                                args=tuple(ir_args),
+                                result_type=ir_ret,
+                                is_fallible=expr.method not in {"push", "insert", "remove", "clone", "to_string", "chars", "count", "extend", "append", "get", "next"},
+                                mutates_self=mutates_self,
+                            )
                 ir_ret = IRExternalPythonType(module=val_type.module, name=f"{val_type.name or ''}.{expr.method}()", is_local=val_type.is_local)
                 args = [self._build_expr(a) for a in expr.args]
                 return IRMethodCall(

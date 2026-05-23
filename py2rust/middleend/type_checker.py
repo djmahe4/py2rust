@@ -559,6 +559,34 @@ class TypeChecker:
             self.check_expr(expr.value)
         elif isinstance(expr, AttributeExpr):
             self.check_expr(expr.value)
+            val_type = self.inferencer.infer(expr.value)
+            if isinstance(val_type, ExternalPythonType) and val_type.is_local:
+                if val_type.name is None:
+                    if self.st.cross_module_table:
+                        sym = self.st.cross_module_table.lookup_symbol(val_type.module, expr.attr)
+                        if sym is None:
+                            raise self._sem_err(
+                                f"Module '{val_type.module}' has no attribute '{expr.attr}'",
+                                expr.line,
+                                expr.col,
+                            )
+                else:
+                    cls_info = self.st.lookup_class(val_type.name)
+                    if cls_info:
+                        has_field = self.st.get_field_type(val_type.name, expr.attr) is not None
+                        has_method = expr.attr in cls_info.methods
+                        if not has_method:
+                            for base_name in cls_info.bases:
+                                base_cls = self.st.lookup_class(base_name)
+                                if base_cls and expr.attr in base_cls.methods:
+                                    has_method = True
+                                    break
+                        if not has_field and not has_method:
+                            raise self._sem_err(
+                                f"Class '{val_type.name}' has no attribute '{expr.attr}'",
+                                expr.line,
+                                expr.col,
+                            )
         elif isinstance(expr, MethodCall):
             self.check_expr(expr.value)
             for arg in expr.args:
@@ -574,8 +602,42 @@ class TypeChecker:
                         expr.col,
                     )
             elif isinstance(val_type, ExternalPythonType):
-                # Always valid for external types (resolved at runtime)
-                pass
+                if val_type.is_local:
+                    if val_type.name is None:
+                        if self.st.cross_module_table:
+                            cls = self.st.cross_module_table.lookup_symbol(val_type.module, expr.method, "classes")
+                            sig = self.st.cross_module_table.lookup_symbol(val_type.module, expr.method, "functions")
+                            if cls is None and sig is None:
+                                raise self._sem_err(
+                                    f"Module '{val_type.module}' has no function or class '{expr.method}'",
+                                    expr.line,
+                                    expr.col,
+                                )
+                            if sig:
+                                param_types, ret_type, _is_async, _type_params = sig
+                                if len(expr.args) != len(param_types):
+                                    raise self._sem_err(
+                                        f"Function '{expr.method}' expects {len(param_types)} arguments, got {len(expr.args)}",
+                                        expr.line,
+                                        expr.col,
+                                    )
+                            elif cls:
+                                arity = len(expr.args)
+                                if arity not in cls.constructors:
+                                    raise self._sem_err(
+                                        f"Class '{expr.method}' constructor expects arities {list(cls.constructors.keys())}, got {arity}",
+                                        expr.line,
+                                        expr.col,
+                                    )
+                    else:
+                        arity = len(expr.args)
+                        method_info = self.st.lookup_method(val_type.name, expr.method, arity)
+                        if method_info is None:
+                            raise self._sem_err(
+                                f"Method '{expr.method}' with {arity} args not found in class '{val_type.name}'",
+                                expr.line,
+                                expr.col,
+                            )
         elif isinstance(expr, SelfExpr):
             if self.st.get_current_class() is None:
                 raise self._err(
@@ -916,7 +978,16 @@ class TypeChecker:
             if stmt.target == "_":
                 return
             if isinstance(stmt.target, tuple) and len(stmt.target) > 0 and stmt.target[0] == "attr":
-                 return
+                if len(stmt.target) == 3 and stmt.target[1] == "self":
+                    class_name = self.st.get_current_class()
+                    if class_name:
+                        cls = self.st.lookup_class(class_name)
+                        if cls and stmt.target[2] in cls.fields:
+                            if isinstance(cls.fields[stmt.target[2]], UnknownType):
+                                inferred = self.inferencer.infer(stmt.value)
+                                if inferred is not None and not isinstance(inferred, UnknownType):
+                                    cls.fields[stmt.target[2]] = inferred
+                return
             if isinstance(stmt.target, tuple):
                 val_t = self.inferencer.infer(stmt.value)
                 if isinstance(val_t, TupleType):

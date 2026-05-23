@@ -67,7 +67,6 @@ impl Circle {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub struct Square {
     pub side: i32,
@@ -82,19 +81,16 @@ impl Square {
     }
 }
 
-
 impl Drawable for Circle {
     fn draw(&self) -> Result<String, PyError> {
         return Ok(format!("Circle({})", self.radius));
     }
-
 }
 
 impl Drawable for Square {
     fn draw(&self) -> Result<String, PyError> {
         return Ok(format!("Square({})", self.side));
     }
-
 }
 
 pub fn render(items: Vec<Box<dyn Drawable>>) -> Result<(), PyError> {
@@ -110,7 +106,10 @@ pub fn render(items: Vec<Box<dyn Drawable>>) -> Result<(), PyError> {
 }
 
 pub fn __py_main() -> Result<(), PyError> {
-    let shapes: Vec<Box<dyn Drawable>> = vec![Box::new(Circle::new(5)?) as Box<dyn Drawable>, Box::new(Square::new(10)?) as Box<dyn Drawable>];
+    let shapes: Vec<Box<dyn Drawable>> = vec![
+        Box::new(Circle::new(5)?) as Box<dyn Drawable>,
+        Box::new(Square::new(10)?) as Box<dyn Drawable>,
+    ];
     render(shapes)?;
     Ok(())
 }

@@ -58,7 +58,10 @@ fn main() -> Result<(), PyError> {
 
     println!("{}", "This should be skipped".to_string());
 
-    println!("{}", "This should also be skipped because it follows main block".to_string());
+    println!(
+        "{}",
+        "This should also be skipped because it follows main block".to_string()
+    );
 
     Ok(())
 }

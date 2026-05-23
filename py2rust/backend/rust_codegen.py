@@ -55,7 +55,6 @@ from ..ir.ir_nodes import (
     IRBreak,
     IRContinue,
     IRDictDelete,
-    IRStructLit,
     IRStructAccess,
     IRMethodCall,
     IRNew,
@@ -100,7 +99,7 @@ from ..ir.ir_nodes import (
     IRIsInstance,
 )
 from ..config import CompilerConfig, AsyncRuntime
-
+from typing import Optional
 
 
 
@@ -2398,8 +2397,11 @@ class RustCodegen:
                 return f"{val}::{_mangle(expr.field)}"
             
             v_type = getattr(expr.value, "result_type", None)
-            if isinstance(v_type, IRExternalPythonType) and not v_type.is_local:
-                return f'{val}.getattr("{expr.field}")?'
+            if isinstance(v_type, IRExternalPythonType):
+                if not v_type.is_local:
+                    return f'{val}.getattr("{expr.field}")?'
+                elif v_type.name is None:
+                    return f"{val}::{_mangle(expr.field)}"
 
             return f"{val}.{_mangle(expr.field)}"
         elif isinstance(expr, IRMethodCall):
@@ -2407,28 +2409,35 @@ class RustCodegen:
             args = ", ".join(self._gen_expr(a) for a in expr.args)
             
             v_type = getattr(expr.value, "result_type", None)
-            if isinstance(v_type, IRExternalPythonType) and not v_type.is_local:
-                val_type = expr.value.result_type
-                if val_type.module == "heapq":
-                    if expr.method == "heappush":
-                        self._uses_heap = True
-                        heap = self._gen_expr(expr.args[0])
-                        item = self._gen_expr(expr.args[1])
-                        return f"{heap}.push(Reverse({item}))"
-                    if expr.method == "heappop":
-                        self._uses_heap = True
-                        heap = self._gen_expr(expr.args[0])
-                        return f"{heap}.pop().ok_or(PyError::IndexError(\"index out of range\".to_string()))?.0"
-                    if expr.method == "heapify":
-                        self._uses_heap = True
-                        lst = self._gen_expr(expr.args[0])
-                        return f"BinaryHeap::from({lst}.into_iter().map(Reverse).collect::<Vec<_>>())"
-
-                if not args:
-                    tuple_args = "()"
+            if isinstance(v_type, IRExternalPythonType):
+                if v_type.is_local:
+                    if v_type.name is None:
+                        res = f"{val}::{_mangle(expr.method)}({args})"
+                        if getattr(expr, "is_fallible", True):
+                            res += "?"
+                        return res
                 else:
-                    tuple_args = f"({args},)"
-                return f'{val}.call_method("{expr.method}", {tuple_args})?'
+                    val_type = expr.value.result_type
+                    if val_type.module == "heapq":
+                        if expr.method == "heappush":
+                            self._uses_heap = True
+                            heap = self._gen_expr(expr.args[0])
+                            item = self._gen_expr(expr.args[1])
+                            return f"{heap}.push(Reverse({item}))"
+                        if expr.method == "heappop":
+                            self._uses_heap = True
+                            heap = self._gen_expr(expr.args[0])
+                            return f"{heap}.pop().ok_or(PyError::IndexError(\"index out of range\".to_string()))?.0"
+                        if expr.method == "heapify":
+                            self._uses_heap = True
+                            lst = self._gen_expr(expr.args[0])
+                            return f"BinaryHeap::from({lst}.into_iter().map(Reverse).collect::<Vec<_>>())"
+
+                    if not args:
+                        tuple_args = "()"
+                    else:
+                        tuple_args = f"({args},)"
+                    return f'{val}.call_method("{expr.method}", {tuple_args})?'
 
             # Deque species methods
             if isinstance(getattr(expr, "value_type", getattr(expr.value, "result_type", None)), IRDequeType):

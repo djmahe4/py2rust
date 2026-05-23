@@ -130,7 +130,6 @@ impl PartialOrd<Point> for Point {
     }
 }
 
-
 pub fn __py_main() -> Result<(), PyError> {
     let p1: Point = Point::new(10, 20)?;
     let p2: Point = Point::new(5, 5)?;

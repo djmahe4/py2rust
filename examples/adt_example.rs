@@ -56,21 +56,20 @@ pub enum Color {
     BLUE,
 }
 
-
 pub fn describe_color(c: Color) -> Result<(), PyError> {
     match c {
         Color::RED => {
             println!("{}", "It is red".to_string());
-        },
+        }
         Color::GREEN => {
             println!("{}", "It is green".to_string());
-        },
+        }
         Color::BLUE => {
             println!("{}", "It is blue".to_string());
-        },
+        }
         _ => {
             println!("{}", "Unknown color".to_string());
-        },
+        }
     }
     Ok(())
 }
@@ -79,13 +78,13 @@ pub fn check_value(x: i32) -> Result<(), PyError> {
     match x {
         1 => {
             println!("{}", "One".to_string());
-        },
+        }
         2 => {
             println!("{}", "Two".to_string());
-        },
+        }
         y => {
             println!("{}", "Other value".to_string());
-        },
+        }
     }
     Ok(())
 }

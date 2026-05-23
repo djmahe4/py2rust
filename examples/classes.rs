@@ -71,13 +71,15 @@ impl Point {
     }
 }
 
-
 pub fn __py_main() -> Result<(), PyError> {
     let p: Point = Point::new(3, 4)?;
     let x: i32 = p.get_x()?;
     let y: i32 = p.get_y()?;
     let d: i32 = p.distance_to(0)?;
-    return Ok({ (x + y) + d; () });
+    return Ok({
+        (x + y) + d;
+        ()
+    });
 }
 fn main() -> Result<(), PyError> {
     __py_main()?;

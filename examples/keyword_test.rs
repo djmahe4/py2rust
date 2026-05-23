@@ -9,7 +9,7 @@
 //
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, BufRead, BufReader, Seek, SeekFrom};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 
 #[derive(Debug, Clone)]
 pub enum PyError {

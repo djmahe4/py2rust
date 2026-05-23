@@ -50,11 +50,11 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 pub fn __py_main() -> Result<(), PyError> {
-    let mut r: i32 = 0;
     let mut c: String = String::new();
-    let mut n: i32 = 0;
-    let mut d: i32 = 0;
     let mut i: i32 = 0;
+    let mut d: i32 = 0;
+    let mut r: i32 = 0;
+    let mut n: i32 = 0;
 
     let nums: Vec<i32> = vec![1, 2, 3];
     let chars: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string()];
@@ -76,7 +76,7 @@ pub fn __py_main() -> Result<(), PyError> {
             println!("{}", n);
         }
     }
-    let doubled: Vec<i32> = (&nums).iter().map(|x| { (x * 2) }).collect::<Vec<_>>();
+    let doubled: Vec<i32> = (&nums).iter().map(|x| (x * 2)).collect::<Vec<_>>();
     {
         '__loop_0: for __loop_val in &doubled {
             d = __loop_val.clone();

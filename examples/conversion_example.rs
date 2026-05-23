@@ -73,13 +73,14 @@ impl std::fmt::Display for Point {
     }
 }
 
-
 pub fn __py_main() -> Result<(), PyError> {
     let p: Point = Point::new(1, 2)?;
     let s: String = p.__str__()?;
     println!("{}", s);
     let num_str: String = "42".to_string();
-    let num: i32 = num_str.parse::<i32>().map_err(|e| PyError::ValueError(e.to_string()))?;
+    let num: i32 = num_str
+        .parse::<i32>()
+        .map_err(|e| PyError::ValueError(e.to_string()))?;
     println!("{}", num);
     Ok(())
 }

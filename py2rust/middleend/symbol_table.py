@@ -156,6 +156,10 @@ class SymbolTable:
         if isinstance(val, ExternalPythonType) and val.is_local:
             if val.name and self.cross_module_table:
                 return self.cross_module_table.lookup_symbol(val.module, val.name, "classes")
+        if self.cross_module_table:
+            for mod_st in self.cross_module_table.modules.values():
+                if name in mod_st._classes:
+                    return mod_st._classes[name]
         return None
 
     def define_enum(self, name: str, variants: dict) -> None:
@@ -168,6 +172,10 @@ class SymbolTable:
         if isinstance(val, ExternalPythonType) and val.is_local:
             if val.name and self.cross_module_table:
                 return self.cross_module_table.lookup_symbol(val.module, val.name, "enums")
+        if self.cross_module_table:
+            for mod_st in self.cross_module_table.modules.values():
+                if name in mod_st._enums:
+                    return mod_st._enums[name]
         return None
 
     def define_trait(self, name: str, bases: list, methods: dict) -> None:
@@ -180,6 +188,10 @@ class SymbolTable:
         if isinstance(val, ExternalPythonType) and val.is_local:
             if val.name and self.cross_module_table:
                 return self.cross_module_table.lookup_symbol(val.module, val.name, "traits")
+        if self.cross_module_table:
+            for mod_st in self.cross_module_table.modules.values():
+                if name in mod_st._traits:
+                    return mod_st._traits[name]
         return None
 
     def register_external_name(self, name: str, type_: ExternalPythonType) -> None:

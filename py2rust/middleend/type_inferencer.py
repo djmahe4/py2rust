@@ -45,7 +45,16 @@ class TypeInferencer:
             case "Name":
                 if expr.name == "None":
                     return UnitType()
-                return self.st.lookup(expr.name)
+                res = self.st.lookup(expr.name)
+                if isinstance(res, ExternalPythonType) and res.is_local:
+                    if res.name:
+                        cls = self.st.lookup_class(res.name)
+                        if cls:
+                            return ClassType(name=res.name)
+                        en = self.st.lookup_enum(res.name)
+                        if en:
+                            return EnumType(name=res.name)
+                return res
             case "BinOp":
                 return self._infer_binop(expr)
             case "UnaryOp":
@@ -327,8 +336,15 @@ class TypeInferencer:
             return sig[1]
         
         if isinstance(curr_type, ExternalPythonType):
-            # Calling an external object returns another external object/module
-            return ExternalPythonType(module=curr_type.module, name=f"{curr_type.name}()" if curr_type.name else f"{expr.name}()")
+            if curr_type.is_local:
+                target_name = curr_type.name or expr.name
+                cls = self.st.lookup_class(target_name)
+                if cls:
+                    return ClassType(name=target_name)
+                sig_local = self.st.lookup_function(target_name)
+                if sig_local:
+                    return sig_local[1]
+            return ExternalPythonType(module=curr_type.module, name=f"{curr_type.name}()" if curr_type.name else f"{expr.name}()", is_local=curr_type.is_local)
 
         cls = self.st.lookup_class(expr.name)
         if cls:
@@ -348,8 +364,25 @@ class TypeInferencer:
             if field_type:
                 return field_type
         if isinstance(val_type, ExternalPythonType):
+            if val_type.is_local:
+                if val_type.name is None:
+                    # E.g. models.Point or math_utils.global_var
+                    if self.st.cross_module_table:
+                        cls = self.st.cross_module_table.lookup_symbol(val_type.module, expr.attr, "classes")
+                        if cls:
+                            return ClassType(name=expr.attr)
+                        en = self.st.cross_module_table.lookup_symbol(val_type.module, expr.attr, "enums")
+                        if en:
+                            return EnumType(name=expr.attr)
+                        gl = self.st.cross_module_table.lookup_symbol(val_type.module, expr.attr, "globals")
+                        if gl:
+                            return gl
+                else:
+                    field_type = self.st.get_field_type(val_type.name, expr.attr)
+                    if field_type:
+                        return field_type
             # Getting attribute from an external Python module or object returns another external object/module
-            return ExternalPythonType(module=val_type.module, name=f"{val_type.name}.{expr.attr}" if val_type.name else expr.attr)
+            return ExternalPythonType(module=val_type.module, name=f"{val_type.name}.{expr.attr}" if val_type.name else expr.attr, is_local=val_type.is_local)
         return None
 
     def _infer_method_call(self, expr):
@@ -367,8 +400,24 @@ class TypeInferencer:
         if isinstance(val_type, FileType):
             return self.infer_file_method(expr.method)
         if isinstance(val_type, ExternalPythonType):
+            if val_type.is_local:
+                if val_type.name is None:
+                    # E.g. math_utils.compute() or math_utils.MathHelper()
+                    if self.st.cross_module_table:
+                        cls = self.st.cross_module_table.lookup_symbol(val_type.module, expr.method, "classes")
+                        if cls:
+                            return ClassType(name=expr.method)
+                        sig = self.st.cross_module_table.lookup_symbol(val_type.module, expr.method, "functions")
+                        if sig:
+                            return sig[1]
+                else:
+                    # E.g. p.get_x() where p is models.Point
+                    method_info = self.st.lookup_method(val_type.name, expr.method, len(expr.args))
+                    if method_info:
+                        method, _ = method_info
+                        return method.return_type
             # Calling a method on an external Python object returns an external object
-            return ExternalPythonType(module=val_type.module, name=f"{val_type.name}.{expr.method}()" if val_type.name else f"{expr.method}()")
+            return ExternalPythonType(module=val_type.module, name=f"{val_type.name}.{expr.method}()" if val_type.name else f"{expr.method}()", is_local=val_type.is_local)
         return None
 
     def _infer_self(self, expr):
