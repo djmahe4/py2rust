@@ -1,10 +1,11 @@
+import os
 import requests
 from typing import Optional
 
 class OllamaClient:
-    def __init__(self, model: str = "deepseek-coder", host: str = "http://localhost:11434"):
+    def __init__(self, model: str = "deepseek-coder", host: Optional[str] = None):
         self.model = model
-        self.host = host
+        self.host = host or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 
     def is_available(self) -> bool:
         try:

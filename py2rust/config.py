@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -23,7 +24,7 @@ class CompilerConfig:
     package_dir: str = ""
     validate: bool = False
     ollama_model: str = "deepseek-coder"
-    ollama_host: str = "http://localhost:11434"
+    ollama_host: str = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     strict_validation: bool = False
     learn_patterns: bool = False
     apply_learned_patterns: bool = False

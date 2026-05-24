@@ -1,4 +1,5 @@
 import os
+import re
 from py2rust.learning_system.learning.pattern_store import PatternStore
 
 class PatternExtractor:
@@ -44,28 +45,27 @@ CONFIDENCE: [0.0 to 1.0]
 
         response = self.client.generate(prompt) if self.client else "PATTERN_ID: default\nTRIGGER_PATTERN: default\nTARGET_RUST: default\nREPLACEMENT_RUST: default\nCONFIDENCE: 0.0"
         
-        # Parse fields
-        pattern_id = "unknown"
-        trigger_pattern = ""
-        target_rust = ""
-        replacement_rust = ""
-        confidence = 0.0
+        # Robust multi-line regex-based lookup using lookahead assertions
+        def extract_field(field_name: str, default: str) -> str:
+            pattern = re.compile(
+                rf"{field_name}:\s*(.*?)(?=\s*(?:PATTERN_ID|TRIGGER_PATTERN|TARGET_RUST|REPLACEMENT_RUST|CONFIDENCE):|$)",
+                re.IGNORECASE | re.DOTALL
+            )
+            match = pattern.search(response)
+            if match:
+                return match.group(1).strip()
+            return default
+
+        pattern_id = extract_field("PATTERN_ID", "unknown")
+        trigger_pattern = extract_field("TRIGGER_PATTERN", "")
+        target_rust = extract_field("TARGET_RUST", "")
+        replacement_rust = extract_field("REPLACEMENT_RUST", "")
         
-        for line in response.splitlines():
-            line = line.strip()
-            if line.startswith("PATTERN_ID:"):
-                pattern_id = line.split(":", 1)[1].strip()
-            elif line.startswith("TRIGGER_PATTERN:"):
-                trigger_pattern = line.split(":", 1)[1].strip()
-            elif line.startswith("TARGET_RUST:"):
-                target_rust = line.split(":", 1)[1].strip()
-            elif line.startswith("REPLACEMENT_RUST:"):
-                replacement_rust = line.split(":", 1)[1].strip()
-            elif line.startswith("CONFIDENCE:"):
-                try:
-                    confidence = float(line.split(":", 1)[1].strip())
-                except ValueError:
-                    pass
+        confidence_str = extract_field("CONFIDENCE", "0.0")
+        try:
+            confidence = float(confidence_str)
+        except ValueError:
+            confidence = 0.0
                     
         new_pattern = {
             "pattern_id": pattern_id,

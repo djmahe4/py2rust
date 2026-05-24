@@ -60,10 +60,13 @@ def test_semantic_validator_powershell_hardening(mock_run, mock_which):
     try:
         sys.platform = "win32"
         validator = SemanticValidator()
-        # Verify get_symbol_context constructs safe power shell cmd list
-        context = validator.get_symbol_context("vuln_func'; injection; '")
-        
-        # Verify mock_run was called with arguments
+
+        # Case 1: Unsafe symbol name should bypass subprocess shell tool execution and fall back safely
+        context_unsafe = validator.get_symbol_context("vuln_func'; injection; '")
+        assert not mock_run.called
+
+        # Case 2: Safe, valid symbol name should invoke powershell with parameterized arguments
+        context_safe = validator.get_symbol_context("safe_func")
         assert mock_run.called
         args, kwargs = mock_run.call_args
         cmd_list = args[0]
@@ -72,6 +75,6 @@ def test_semantic_validator_powershell_hardening(mock_run, mock_which):
         assert cmd_list[0] == "powershell"
         assert "-NoProfile" in cmd_list
         assert "& {param($p) Select-String -Pattern $p -Path * -Context 5}" in cmd_list
-        assert cmd_list[-1] == "def vuln_func'; injection; '"
+        assert cmd_list[-1] == "def safe_func"
     finally:
         sys.platform = original_platform

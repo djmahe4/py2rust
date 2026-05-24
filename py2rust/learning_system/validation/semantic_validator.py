@@ -34,19 +34,23 @@ class SemanticValidator:
         # 2. Check for 'rg' or 'grep' on Linux/Unix
         # 3. Fallback to native python-based text scanning to ensure zero tool errors
         
+        import re
+        is_safe = bool(re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", symbol_name))
+        
         # Determine platform commands
         cmd = None
-        if sys.platform == "win32":
-            # Check Select-String via powershell
-            if shutil.which("powershell"):
-                cmd = ["powershell", "-NoProfile", "-Command", "& {param($p) Select-String -Pattern $p -Path * -Context 5}", f"def {symbol_name}"]
-            elif shutil.which("findstr"):
-                cmd = ["findstr", f"def {symbol_name}", "*"]
-        else:
-            if shutil.which("rg"):
-                cmd = ["rg", "-C", "5", f"def {symbol_name}", "."]
-            elif shutil.which("grep"):
-                cmd = ["grep", "-C", "5", f"def {symbol_name}", "-r", "."]
+        if is_safe:
+            if sys.platform == "win32":
+                # Check Select-String via powershell
+                if shutil.which("powershell"):
+                    cmd = ["powershell", "-NoProfile", "-Command", "& {param($p) Select-String -Pattern $p -Path * -Context 5}", f"def {symbol_name}"]
+                elif shutil.which("findstr"):
+                    cmd = ["findstr", f"def {symbol_name}", "*"]
+            else:
+                if shutil.which("rg"):
+                    cmd = ["rg", "-C", "5", f"def {symbol_name}", "."]
+                elif shutil.which("grep"):
+                    cmd = ["grep", "-C", "5", f"def {symbol_name}", "-r", "."]
                 
         if cmd:
             try:

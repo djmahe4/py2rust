@@ -84,6 +84,31 @@ def extract_rust_fn(rust_code: str, func_name: str) -> str:
                 idx += 2
                 continue
                 
+        # Check start of raw strings
+        if char == 'r' and idx + 1 < code_len and (rust_code[idx + 1] == '"' or rust_code[idx + 1] == '#'):
+            hashes = 0
+            temp_idx = idx + 1
+            while temp_idx < code_len and rust_code[temp_idx] == '#':
+                hashes += 1
+                temp_idx += 1
+            if temp_idx < code_len and rust_code[temp_idx] == '"':
+                end_quote_idx = temp_idx + 1
+                found_match = False
+                while end_quote_idx < code_len:
+                    if rust_code[end_quote_idx] == '"':
+                        check_idx = end_quote_idx + 1
+                        match_hashes = 0
+                        while check_idx < code_len and rust_code[check_idx] == '#':
+                            match_hashes += 1
+                            check_idx += 1
+                        if match_hashes == hashes:
+                            idx = check_idx
+                            found_match = True
+                            break
+                    end_quote_idx += 1
+                if found_match:
+                    continue
+
         if char == '"':
             in_string = True
             idx += 1
