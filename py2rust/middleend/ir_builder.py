@@ -1014,11 +1014,10 @@ class IRBuilder:
             index_val = self._build_expr(stmt.index)
             value = self._build_expr(stmt.value)
             target_type = self.inferencer.infer(stmt.target)
+            trait_info = None
             if isinstance(target_type, ListType):
                 value_type = _to_ir_type(target_type.element_type)
-            target_type = self.inferencer.infer(stmt.target)
-            trait_info = None
-            if isinstance(target_type, DictType):
+            elif isinstance(target_type, DictType):
                 value_type = _to_ir_type(target_type.value_type)
             elif isinstance(target_type, StrType):
                 value_type = IRStrType()
@@ -1482,8 +1481,7 @@ class IRBuilder:
                         else:
                             ir_args.append(self._build_expr(arg))
                     ir_ret = _to_ir_type(method.return_type)
-                    non_fallible_methods = {"push", "insert", "remove", "clone", "to_string", "chars", "count", "extend", "append", "get", "next"}
-                    is_fallible = expr.method not in non_fallible_methods
+                    is_fallible = True
                     
                     # Check if it mutates self
                     mutates_self = (val_type.name, expr.method, arity) in self._mutating_methods

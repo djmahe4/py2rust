@@ -2,11 +2,7 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
-// csv = { version = "1.1" }
 // pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-// pythonize = { version = "0.20" }
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = { version = "1.0" }
 //
 
 use pyo3::prelude::*;
@@ -74,6 +70,12 @@ pub fn test_external() -> Result<(), PyError> {
         .call_method("dirname", (cwd,))?;
     println!("{}", parent);
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_external() {
+    test_external().unwrap();
 }
 fn main() -> Result<(), PyError> {
     test_external()?;

@@ -2,10 +2,6 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
-// csv = { version = "1.1" }
-// pythonize = { version = "0.20" }
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = { version = "1.0" }
 //
 
 #[derive(Debug, Clone)]
@@ -50,11 +46,11 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 pub fn __py_main() -> Result<(), PyError> {
-    let mut i: i32 = 0;
-    let mut r: i32 = 0;
-    let mut n: i32 = 0;
     let mut d: i32 = 0;
     let mut c: String = String::new();
+    let mut i: i32 = 0;
+    let mut n: i32 = 0;
+    let mut r: i32 = 0;
 
     let nums: Vec<i32> = vec![1, 2, 3];
     let chars: Vec<String> = vec!["a".to_string(), "b".to_string(), "c".to_string()];

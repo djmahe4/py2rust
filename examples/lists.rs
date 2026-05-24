@@ -2,10 +2,6 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
-// csv = { version = "1.1" }
-// pythonize = { version = "0.20" }
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = { version = "1.0" }
 //
 
 #[derive(Debug, Clone)]
@@ -50,8 +46,8 @@ impl From<std::num::ParseFloatError> for PyError {
 }
 
 pub fn sum_list(nums: Vec<i32>) -> Result<i32, PyError> {
-    let mut n: i32 = 0;
     let mut total: i32 = 0;
+    let mut n: i32 = 0;
 
     total = 0;
     {

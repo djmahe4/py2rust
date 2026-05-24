@@ -2,11 +2,7 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
-// csv = { version = "1.1" }
 // pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-// pythonize = { version = "0.20" }
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = { version = "1.0" }
 //
 
 use pyo3::prelude::*;
@@ -81,6 +77,12 @@ pub fn test_numpy() -> Result<(), PyError> {
     Ok(())
 }
 
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_numpy() {
+    test_numpy().unwrap();
+}
+
 pub fn test_opencv() -> Result<(), PyError> {
     println!("{}", "\nTesting OpenCV...".to_string());
     println!(
@@ -103,6 +105,12 @@ pub fn test_opencv() -> Result<(), PyError> {
     ExternalObject::load_module("cv2")?.call_method("destroyAllWindows", ())?;
     println!("{}", "OpenCV test complete.".to_string());
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_opencv() {
+    test_opencv().unwrap();
 }
 fn main() -> Result<(), PyError> {
     test_numpy()?;

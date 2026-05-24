@@ -2,10 +2,6 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
-// csv = { version = "1.1" }
-// pythonize = { version = "0.20" }
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = { version = "1.0" }
 //
 
 #[derive(Debug, Clone)]
@@ -137,6 +133,12 @@ pub fn test_return() -> Result<i32, PyError> {
         }
     }
     Ok(0)
+}
+
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_return() {
+    test_return().unwrap();
 }
 fn main() -> Result<(), PyError> {
     __py_main()?;

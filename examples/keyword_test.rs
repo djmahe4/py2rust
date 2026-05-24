@@ -2,10 +2,6 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
-// csv = { version = "1.1" }
-// pythonize = { version = "0.20" }
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = { version = "1.0" }
 //
 
 use std::fs::{File, OpenOptions};
@@ -108,6 +104,12 @@ pub fn test_assert() -> Result<(), PyError> {
     Ok(())
 }
 
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_assert() {
+    test_assert().unwrap();
+}
+
 pub fn test_with() -> Result<(), PyError> {
     {
         let mut f = FileHandle::open(&"test.txt".to_string(), &"w".to_string())?;
@@ -115,6 +117,12 @@ pub fn test_with() -> Result<(), PyError> {
     }
     println!("{}", "test_with passed".to_string());
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_with() {
+    test_with().unwrap();
 }
 
 pub fn __py_main() -> Result<(), PyError> {

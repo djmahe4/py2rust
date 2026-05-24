@@ -120,6 +120,12 @@ pub fn test_json() -> Result<(), PyError> {
     Ok(())
 }
 
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_json() {
+    test_json().unwrap();
+}
+
 pub fn test_csv() -> Result<(), PyError> {
     let mut row: ExternalObject = ExternalObject::default();
 
@@ -141,8 +147,20 @@ pub fn test_csv() -> Result<(), PyError> {
     Ok(())
 }
 
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_csv() {
+    test_csv().unwrap();
+}
+
 pub fn test_attr() -> Result<(), PyError> {
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_attr() {
+    test_attr().unwrap();
 }
 fn main() -> Result<(), PyError> {
     test_json()?;

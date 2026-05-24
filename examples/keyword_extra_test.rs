@@ -2,11 +2,7 @@
 //
 // Required dependencies for Cargo.toml:
 // [dependencies]
-// csv = { version = "1.1" }
 // pyo3 = { version = "0.20", features = ["abi3-py310", "extension-module"] }
-// pythonize = { version = "0.20" }
-// serde = { version = "1.0", features = ["derive"] }
-// serde_json = { version = "1.0" }
 //
 
 use pyo3::prelude::*;
@@ -71,12 +67,24 @@ pub fn test_as() -> Result<(), PyError> {
     Ok(())
 }
 
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_as() {
+    test_as().unwrap();
+}
+
 pub fn test_global_local() -> Result<(), PyError> {
     // WARNING: Python 'global' for [x] is not fully supported in Rust's ownership model.
     // It usually indicates shared state which should be handled via Arc<Mutex<T>> or passed as arguments.
     let x: i32 = 1;
     println!("{}", x);
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn _test_wrapper_test_global_local() {
+    test_global_local().unwrap();
 }
 
 pub fn __py_main() -> Result<(), PyError> {

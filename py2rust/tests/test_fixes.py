@@ -1487,3 +1487,53 @@ def main() -> int:
     assert code.endswith("\n")
     assert not code.endswith("\n\n")
 
+
+def test_subscript_assign_non_int_type():
+    src = """
+def main() -> int:
+    lst: list[str] = ["hello"]
+    lst[0] = "world"
+    return 0
+"""
+    code = _compile(src)
+    # The value_type of SubscriptAssign should be String (from list[str] element type), not i32
+    assert "lst[0 as usize] = \"world\".to_string();" in code
+
+
+def test_optional_union_type_checker_circular_dependency():
+    src = """
+from typing import Optional, Union
+
+class Node:
+    def __init__(self, val: int, next_node: Optional[Node], other: Union[Node, int]) -> None:
+        self.val = val
+        self.next_node = next_node
+        self.other = other
+
+def main() -> int:
+    n: Node = Node(1, None, 2)
+    return 0
+"""
+    # This should check successfully without raising AttributeError
+    m, st = _check(src)
+    assert "Node" in st._classes
+
+
+def test_user_defined_class_append_fallible():
+    src = """
+class MyList:
+    def __init__(self) -> None:
+        pass
+    def append(self, x: int) -> int:
+        return x
+
+def main() -> int:
+    lst: MyList = MyList()
+    res: int = lst.append(42)
+    return 0
+"""
+    code = _compile(src)
+    # Custom MyList.append() returns Result<i32, PyError>, so it must be compiled with the ? operator!
+    assert "lst.append(42)?;" in code
+
+

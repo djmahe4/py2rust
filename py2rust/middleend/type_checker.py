@@ -1582,9 +1582,9 @@ class TypeChecker:
             if t.name:
                 names.append(t.name)
         elif isinstance(t, OptionalType):
-            names.extend(self._extract_class_names(t.element_type))
+            names.extend(self._extract_class_names(t.inner_type))
         elif isinstance(t, UnionType):
-            for et in t.types:
+            for et in t.variants:
                 names.extend(self._extract_class_names(et))
         elif isinstance(t, TupleType):
             for et in t.element_types:

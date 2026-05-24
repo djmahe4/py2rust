@@ -1815,8 +1815,6 @@ self.__state = {cond_state};"""
             if func.is_async:
                 self._uses_async = True
             async_kw = "async " if func.is_async else ""
-            if func.name.startswith("test_") and not func.params:
-                self._emit("#[test]")
             self._emit(f"pub {async_kw}fn {func.name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
 
         self._indent += 1
@@ -1861,6 +1859,16 @@ self.__state = {cond_state};"""
 
         self._indent -= 1
         self._emit("}")
+
+        if not is_main and func.name.startswith("test_") and not func.params:
+            self._emit_blank()
+            self._emit("#[cfg(test)]")
+            self._emit("#[test]")
+            self._emit(f"fn _test_wrapper_{func.name}() {{")
+            self._indent += 1
+            self._emit(f"{func.name}().unwrap();")
+            self._indent -= 1
+            self._emit("}")
 
     def _default_value(self, ir_type) -> str:
         if isinstance(ir_type, IRUnitType):
