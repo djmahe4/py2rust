@@ -273,6 +273,7 @@ class IRBuilder:
     def __init__(self, filename: str = "<unknown>", source_lines: list = None, symbol_table: SymbolTable = None, config=None):
         self.filename = filename
         self.source_lines = source_lines or []
+        self.config = config
         self.st = symbol_table or SymbolTable(config=config)
         self.inferencer = TypeInferencer(self.st)
         self._loop_stack: list = []

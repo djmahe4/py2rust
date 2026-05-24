@@ -45,6 +45,9 @@ def extract_rust_fn(rust_code: str, func_name: str) -> str:
 
 
 def compile_file(config: CompilerConfig) -> bool:
+    from .learning_system.validation.translation_context import TranslationContext
+    config.translation_context = TranslationContext()
+
     source_path = Path(config.input_file)
     if source_path.exists() and source_path.is_dir():
         from .project.repo_compiler import compile_repo
@@ -122,42 +125,129 @@ def compile_file(config: CompilerConfig) -> bool:
                     rust_source_seg = extract_rust_fn(rust_code, func_name)
                     
                     if py_source_seg and rust_source_seg:
-                        logger.info(f"Validating equivalence for function: '{func_name}'")
-                        res = validator.validate_equivalence(py_source_seg, rust_source_seg, func_name)
-                        
-                        # Save validation record
-                        record = {
-                            "symbol_name": func_name,
-                            "python_source": py_source_seg,
-                            "generated_rust": rust_source_seg,
-                            "verdict": res["verdict"],
-                            "confidence": res["confidence"],
-                            "reasoning": res["reasoning"],
-                            "suggested_fix": res.get("suggested_fix", "")
-                        }
-                        val_store.save_validation(record)
+                        # SQLite cache check
+                        cached = val_store.get_cached_validation(py_source_seg, rust_source_seg)
+                        if cached and not config.force:
+                            logger.info(f"Cache hit for function: '{func_name}' with verdict {cached['verdict']}")
+                            res = {
+                                "verdict": cached["verdict"],
+                                "confidence": cached["confidence"],
+                                "reasoning": cached["reasoning"],
+                                "suggested_fix": cached.get("suggested_fix", "")
+                            }
+                        else:
+                            logger.info(f"Cache miss. Validating equivalence for function: '{func_name}'")
+                            res = validator.validate_equivalence(py_source_seg, rust_source_seg, func_name, config.translation_context)
+                            
+                            # Save validation record to SQLite cache
+                            record = {
+                                "symbol_name": func_name,
+                                "python_source": py_source_seg,
+                                "generated_rust": rust_source_seg,
+                                "verdict": res["verdict"],
+                                "confidence": res["confidence"],
+                                "reasoning": res["reasoning"],
+                                "suggested_fix": res.get("suggested_fix", "")
+                            }
+                            val_store.save_validation(record)
                         
                         if res["verdict"] == "FAIL":
-                            has_mismatch = True
-                            logger.warning(f"Equivalence validation failed for function '{func_name}'!")
-                            logger.warning(f"Reasoning: {res['reasoning']}")
+                            if config.review_failures:
+                                triage_loop = True
+                                while triage_loop:
+                                    print("\n" + "="*80)
+                                    print(f"TRIAGE: Equivalence validation FAILED for function '{func_name}'")
+                                    print("="*80)
+                                    print("\n--- PYTHON SOURCE ---")
+                                    print(py_source_seg)
+                                    print("\n--- GENERATED RUST ---")
+                                    print(rust_source_seg)
+                                    if config.translation_context:
+                                        print("\n" + config.translation_context.to_markdown())
+                                    if res.get("suggested_fix"):
+                                        print("\n--- LLM SUGGESTED FIX ---")
+                                        print(res["suggested_fix"])
+                                    print(f"\n--- REASONING ---\n{res['reasoning']}")
+                                    print("\nACTIONS:")
+                                    print("  [a] Accept Current Rust (Force PASS cache and proceed)")
+                                    print("  [e] Edit Python Source")
+                                    print("  [r] Retry Validation")
+                                    print("  [s] Skip function validation and proceed")
+                                    print("  [q] Quit compilation")
+                                    
+                                    try:
+                                        choice = input("\nEnter choice [a/e/r/s/q]: ").strip().lower()
+                                    except EOFError:
+                                        logger.warning("Standard input EOF reached. Skipping triage.")
+                                        choice = 's'
+                                        
+                                    if choice == 'a':
+                                        logger.info(f"Overriding verdict to PASS for '{func_name}'")
+                                        res["verdict"] = "PASS"
+                                        record = {
+                                            "symbol_name": func_name,
+                                            "python_source": py_source_seg,
+                                            "generated_rust": rust_source_seg,
+                                            "verdict": "PASS",
+                                            "confidence": 1.0,
+                                            "reasoning": "Manually approved by developer in Triage CLI",
+                                            "suggested_fix": ""
+                                        }
+                                        val_store.save_validation(record)
+                                        triage_loop = False
+                                    elif choice == 'e':
+                                        editor = os.environ.get("EDITOR", "nano")
+                                        import tempfile
+                                        with tempfile.NamedTemporaryFile(suffix=".py", mode="w+", delete=False, encoding="utf-8") as temp_py:
+                                            temp_py.write(py_source_seg)
+                                            temp_py_path = temp_py.name
+                                        try:
+                                            subprocess.run([editor, temp_py_path])
+                                            with open(temp_py_path, "r", encoding="utf-8") as f:
+                                                new_py = f.read()
+                                            if new_py != py_source_seg:
+                                                logger.info("Source code updated. Exiting compilation to allow recompile.")
+                                                sys.exit(0)
+                                        finally:
+                                            try:
+                                                os.unlink(temp_py_path)
+                                            except Exception:
+                                                pass
+                                    elif choice == 'r':
+                                        logger.info("Retrying semantic validation...")
+                                        res = validator.validate_equivalence(py_source_seg, rust_source_seg, func_name, config.translation_context)
+                                        if res["verdict"] == "PASS":
+                                            logger.info("Validation PASSED on retry!")
+                                            triage_loop = False
+                                    elif choice == 's':
+                                        logger.info(f"Skipped failure for function '{func_name}'")
+                                        res["verdict"] = "PASS"
+                                        triage_loop = False
+                                    elif choice == 'q':
+                                        sys.exit(1)
                             
-                            # Learn patterns if enabled
-                            if config.learn_patterns:
-                                logger.info("Generalizing compiler improvement patterns from validation failures...")
-                                all_vals = val_store.get_validations()
-                                failures = [v for v in all_vals if v["verdict"] == "FAIL" and v["symbol_name"] == func_name]
-                                extractor = PatternExtractor(pattern_store=pat_store, evidence_threshold=1, client=validator.client)
-                                extractor.extract_from_failures(failures)
+                            # Re-check verdict after potential manual triage approval
+                            if res["verdict"] == "FAIL":
+                                has_mismatch = True
+                                logger.warning(f"Equivalence validation failed for function '{func_name}'!")
+                                logger.warning(f"Reasoning: {res['reasoning']}")
                                 
-                            # Apply learned patterns if enabled
-                            if config.apply_learned_patterns:
-                                logger.info("Matching learned patterns for improvements...")
-                                patterns = pat_store.get_patterns()
-                                applicator = PatternApplicator(patterns=patterns)
-                                suggestion = applicator.suggest_fix(rust_source_seg, func_name)
-                                if suggestion:
-                                    print(suggestion)
+                                # Learn patterns if enabled
+                                if config.learn_patterns:
+                                    logger.info("Generalizing compiler improvement patterns from validation failures...")
+                                    all_vals = val_store.get_validations()
+                                    failures = [v for v in all_vals if v["verdict"] == "FAIL" and v["symbol_name"] == func_name]
+                                    extractor = PatternExtractor(pattern_store=pat_store, evidence_threshold=1, client=validator.client)
+                                    extractor.extract_from_failures(failures)
+                                    
+                                # Apply learned patterns if enabled
+                                if config.apply_learned_patterns:
+                                    logger.info("Matching learned patterns for improvements...")
+                                    patterns = pat_store.get_patterns()
+                                    applicator = PatternApplicator(patterns=patterns)
+                                    suggestion = applicator.suggest_fix(rust_source_seg, func_name)
+                                    if suggestion:
+                                        print(suggestion)
                                     
             if has_mismatch and config.strict_validation:
                 print("Strict validation failed: one or more semantic equivalence checks failed.", file=sys.stderr)

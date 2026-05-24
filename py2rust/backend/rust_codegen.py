@@ -616,6 +616,10 @@ class RustCodegen:
         # Reset state
         self._current_module = ir_mod
         self._lines = []
+        if hasattr(self.config, "translation_context") and self.config.translation_context:
+            self.config.translation_context.add_global_flow("All Python functions return Result<T, PyError> wrappers in Rust for safe error handling.")
+            self.config.translation_context.add_global_flow("Exception handling uses standard try/catch blocks translated to Rust Result matching / early return using the ? operator.")
+
         self._uses_hashmap = False
         self._uses_hashset = False
         self._uses_file_handle = False
@@ -1803,9 +1807,11 @@ self.__state = {cond_state};"""
         if is_main:
             ret_type_str = "()"
             self._current_fn_return_type = ret_type_str
-            # Always rename Python main to __py_main to avoid collision with Rust main entrypoint
             fn_name = "__py_main" 
+            if hasattr(self.config, "translation_context") and self.config.translation_context:
+                self.config.translation_context.add_name_mapping("main", "__py_main")
             async_kw = "async " if func.is_async else ""
+
             self._emit(f"pub {async_kw}fn {fn_name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
             if func.is_async:
                 self._uses_async = True
@@ -2563,12 +2569,18 @@ self.__state = {cond_state};"""
             return f'"{escaped}".to_string()'
         elif isinstance(expr, IRName):
             if hasattr(self, "_generator_fields") and self._generator_fields and expr.name in self._generator_fields:
-                return f"self.{_mangle(expr.name)}"
+                mangled = _mangle(expr.name)
+                if mangled != expr.name and hasattr(self.config, "translation_context") and self.config.translation_context:
+                    self.config.translation_context.add_name_mapping(expr.name, mangled)
+                return f"self.{mangled}"
             # Check if this name refers to an external python module/object
             if isinstance(expr.result_type, IRExternalPythonType) and not expr.result_type.is_local:
                  # If it's a local variable, field, or parameter, use the name directly
                  if expr.name in self._decl_types or expr.name == "self":
-                     return _mangle(expr.name)
+                     mangled = _mangle(expr.name)
+                     if mangled != expr.name and hasattr(self.config, "translation_context") and self.config.translation_context:
+                         self.config.translation_context.add_name_mapping(expr.name, mangled)
+                     return mangled
                      
                  if expr.result_type.name is None:
                      return f'ExternalObject::load_module("{expr.result_type.module}")?'
@@ -2577,7 +2589,10 @@ self.__state = {cond_state};"""
                      if clean_name.endswith("()"):
                          clean_name = clean_name[:-2]
                      return f'ExternalObject::from_module("{expr.result_type.module}", "{clean_name}")'
-            return _mangle(expr.name)
+            mangled = _mangle(expr.name)
+            if mangled != expr.name and hasattr(self.config, "translation_context") and self.config.translation_context:
+                self.config.translation_context.add_name_mapping(expr.name, mangled)
+            return mangled
         elif isinstance(expr, IRBinOp):
             return f"({self._gen_binop(expr)})"
         elif isinstance(expr, IRUnaryOpExpr):
@@ -3055,8 +3070,15 @@ self.__state = {cond_state};"""
                     return f"for __item in {args} {{ {val}.push_front(__item); }}"
 
             res = f"{val}.{_mangle(expr.method)}({args})"
-            if getattr(expr, "is_fallible", True):
+            is_fallible = getattr(expr, "is_fallible", True)
+            if is_fallible:
                 res += "?"
+            if hasattr(self.config, "translation_context") and self.config.translation_context:
+                py_sig = f".{expr.method}(...)"
+                rust_sig = f".{_mangle(expr.method)}(...)"
+                if is_fallible:
+                    rust_sig += "?"
+                self.config.translation_context.add_call_mapping(py_sig, rust_sig)
             return res
         elif isinstance(expr, IRNew):
             args = ", ".join(self._gen_expr(a) for a in expr.args)
