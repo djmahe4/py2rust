@@ -1815,6 +1815,8 @@ self.__state = {cond_state};"""
             if func.is_async:
                 self._uses_async = True
             async_kw = "async " if func.is_async else ""
+            if func.name.startswith("test_") and not func.params:
+                self._emit("#[test]")
             self._emit(f"pub {async_kw}fn {func.name}{t_params}({params}) -> Result<{ret_type_str}, PyError> {{")
 
         self._indent += 1

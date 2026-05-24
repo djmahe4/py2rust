@@ -216,3 +216,14 @@ def fib(n: int) -> int:
     code = _compile(src)
     assert "fn fib(n: i32) -> Result<i32, PyError> {" in code
     assert "while i <= n {" in code
+
+
+def test_codegen_test_annotations():
+    src = """
+def test_addition() -> None:
+    assert 1 + 1 == 2
+"""
+    code = _compile(src)
+    assert "#[test]" in code
+    assert "pub fn test_addition() -> Result<(), PyError> {" in code
+    assert "assert!((1 + 1) == 2);" in code
