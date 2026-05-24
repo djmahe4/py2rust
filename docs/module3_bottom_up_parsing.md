@@ -36,28 +36,24 @@ This module studies the theoretical machinery — handles, shift-reduce automata
 
 ## The Compiler Frontend in py2rust
 
-```
-Python Source File
-       │
-       ▼
-  [CPython pegen]         ← LALR(1) bottom-up parser (built into Python)
-       │  produces
-       ▼
-  Python AST (ast.Module)
-       │
-       ▼
-  py2rust Parser           ← py2rust/frontend/parser.py
-  (AST → py2rust AST)      Recursive-descent translator over CPython AST
-       │  produces
-       ▼
-  py2rust Module           ← py2rust/frontend/ast_nodes.py
-  (Module, FunctionDef, ClassDef, …)
-       │
-       ▼  IRBuilder
-  IRModule                 ← py2rust/ir/ir_nodes.py
-       │
-       ▼  RustCodegen
-  Rust Source Code
+```mermaid
+flowchart TD
+    subgraph CPythonFrontEnd ["CPython Frontend (LALR/PEG Hybrid)"]
+        Src[Python Source File] -->|pegen Parser| CPyAST[Python AST ast.Module]
+    end
+
+    subgraph py2rustFrontEnd ["py2rust Frontend (Translation Pass)"]
+        CPyAST -->|parser.py Recursive Descent Translator| Py2RustAST[py2rust AST ast_nodes.py]
+    end
+
+    subgraph CompilerBackEnd ["py2rust Backend (Synthesis)"]
+        Py2RustAST -->|IRBuilder| IRMod[IRModule ir_nodes.py]
+        IRMod -->|RustCodegen| RustSrc[Rust Source Code]
+    end
+
+    style CPythonFrontEnd fill:#efebe9,stroke:#5d4037,stroke-width:2px;
+    style py2rustFrontEnd fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+    style CompilerBackEnd fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
 ```
 
 > [!IMPORTANT]
@@ -156,6 +152,51 @@ A **shift-reduce parser** uses a stack and an input buffer. At each step it choo
 | **Error** | No valid action — syntax error |
 
 The parser is guided by a **goto/action table** built from the grammar's LR automaton.
+
+#### Bottom-Up Parse Tree Reduction (Handle Pruning)
+
+```mermaid
+graph BT
+    %% Token row (leaves of the tree)
+    T_with[with]:::token
+    T_open[open]:::token
+    T_lparen["("]:::token
+    T_a["'a'"]:::token
+    T_rparen[")"]:::token
+    T_as[as]:::token
+    T_f[f]:::token
+    T_colon[:]:::token
+    T_pass[pass]:::token
+
+    %% First-level Reductions (Handles to Non-terminals)
+    Atom_open[atom: open]:::expr --> T_open
+    Atom_a[atom: 'a']:::expr --> T_a
+    
+    %% Higher-level expression reductions
+    Call[expr: call]:::expr --> Atom_open
+    Call --> T_lparen
+    Call --> Atom_a
+    Call --> T_rparen
+    
+    %% With statement parts
+    With_var[with_item]:::stmt --> Call
+    With_var --> T_as
+    With_var --> T_f
+    
+    Pass_stmt[pass_stmt]:::stmt --> T_pass
+    Block[suite: block]:::stmt --> Pass_stmt
+    
+    %% Root reduction
+    With_stmt[with_stmt]:::stmt --> T_with
+    With_stmt --> With_var
+    With_stmt --> T_colon
+    With_stmt --> Block
+
+    %% Styling
+    classDef token fill:#eceff1,stroke:#607d8b,stroke-width:1px,font-style:italic;
+    classDef expr fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px;
+    classDef stmt fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+```
 
 ### Conflicts
 
@@ -406,8 +447,73 @@ Grammar classes (power hierarchy):
 | Lookahead source | FOLLOW(A) | Per-item propagation | Per-item exact |
 | State count | Small | Small | Large |
 | Conflicts | More | Fewer | Fewest in LR class |
-| Tool examples | Simple parsers | yacc, bison, CPython pegen | GLR, Elkhound |
 | Grammar coverage | Moderate | Most practical languages | Maximum |
+
+### 4.6 Lookahead Propagation in Advanced Grammars: `with`, `as`, `yield`, and `yield from`
+
+To understand how bottom-up LALR(1) parsers avoid shift-reduce or reduce-reduce conflicts in complex Python structures, we analyze lookahead propagation for these constructs:
+
+#### 1. Context Managers (`with` / `as`)
+The optional binding `as target` in a `with_item` presents a potential shift-reduce conflict. Consider the grammar rules:
+```
+WithStmt     → 'with' WithItemList ':' Suite
+WithItemList → WithItem | WithItem ',' WithItemList
+WithItem     → Expr | Expr 'as' Target
+```
+When the parser has shifted an expression `Expr` and the lookahead token is `as`, `','`, or `':'`, the LALR(1) lookahead sets guide the action table:
+*   **Case 1: Lookahead is `as`**: The parser shifts `as` and proceeds to parse `Target`. This corresponds to advancing the dot: `WithItem → Expr • 'as' Target`.
+*   **Case 2: Lookahead is `','` or `':'`**: Since `as` is not present, the parser reduces `WithItem → Expr` (empty binding). This corresponds to: `WithItem → Expr • , [',', ':']`.
+
+The LALR(1) lookahead sets resolve this deterministically:
+*   `LOOKAHEAD(WithItem → Expr •) = {',', ':'}`
+*   `LOOKAHEAD(WithItem → Expr • 'as' Target) = {',', ':'}`
+
+Since the shift item expects `as` and the reduce items expect `','` or `':'`, there is **no overlap**, preventing shift-reduce conflicts.
+
+#### 2. Generators (`yield` / `yield from`)
+Python generators support both plain `yield` (with optional expression) and delegation `yield from expr`. This introduces a lookahead-dependent decision boundary:
+```
+YieldExpr → 'yield'
+          | 'yield' Expr
+          | 'yield' 'from' Expr
+```
+When the parser shifts `yield` and the lookahead is `from`, the LALR(1) parser must choose between shifting `from` or parsing `from` as an identifier expression `Expr`.
+*   Because `from` is a reserved keyword in this specific position within a statement, the parser lookahead set resolves the path:
+    *   If lookahead is `from`, the parser shifts `from`, pursuing: `YieldExpr → 'yield' 'from' • Expr`.
+    *   If lookahead is any other token starting an expression (e.g., identifiers, literals), the parser shifts that token and reduces to `Expr` later, pursuing: `YieldExpr → 'yield' Expr •`.
+
+#### LALR(1) Lookahead Decision Diagram for `with` and `yield`
+```mermaid
+flowchart TD
+    %% Node definitions
+    State0[Parser State: after shifting expression in WithStmt]
+    LookWith{Lookahead Token?}
+    ShiftAs[Shift 'as' - pursuing WithItem -> Expr 'as' • Target]
+    ReduceWith[Reduce WithItem -> Expr]
+    
+    StateY[Parser State: after shifting keyword 'yield']
+    LookYield{Lookahead Token?}
+    ShiftFrom[Shift 'from' - pursuing YieldExpr -> 'yield' 'from' • Expr]
+    ParseExpr[Parse following expression - pursuing YieldExpr -> 'yield' Expr •]
+
+    %% Transitions
+    State0 --> LookWith
+    LookWith -->|'as'| ShiftAs
+    LookWith -->|',' or ':'| ReduceWith
+
+    StateY --> LookYield
+    LookYield -->|'from'| ShiftFrom
+    LookYield -->|identifier, literal, etc.| ParseExpr
+
+    %% Styling
+    classDef state fill:#f5f5f5,stroke:#333,stroke-width:1px;
+    classDef decision fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+    classDef action fill:#e8f5e9,stroke:#2e7d32;
+
+    class State0,StateY state;
+    class LookWith,LookYield decision;
+    class ShiftAs,ReduceWith,ShiftFrom,ParseExpr action;
+```
 
 ---
 

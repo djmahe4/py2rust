@@ -51,17 +51,18 @@ The syntax analyser (parser) has three jobs:
 
 The parser is positioned between the lexer (tokeniser) and the semantic analyser:
 
-```
-Source Text
-    │
-    ▼  Lexer
-Token Stream
-    │
-    ▼  Parser (Syntax Analyser)
-Parse Tree / AST
-    │
-    ▼  Semantic Analyser
-Annotated AST / IR
+```mermaid
+flowchart LR
+    src[Source Text] -->|Lexical Scanning| tokens(Token Stream)
+    tokens -->|Syntax Analysis: ast.parse| cpy_ast(CPython AST)
+    cpy_ast -->|Translation: frontend/parser.py| custom_ast(py2rust AST)
+    custom_ast -->|Semantic Analysis: middleend/| annotated_ast(Annotated AST / IR)
+
+    style src fill:#fafafa,stroke:#333;
+    style tokens fill:#fff3e0,stroke:#f57c00;
+    style cpy_ast fill:#e1f5fe,stroke:#0288d1;
+    style custom_ast fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    style annotated_ast fill:#ede7f6,stroke:#5e35b1;
 ```
 
 ### Syntax Error Handling in py2rust
@@ -386,6 +387,39 @@ Top-down parsing builds the parse tree **from root to leaves**, expanding non-te
 
 **Recursive descent** is the most intuitive top-down strategy: write one procedure per non-terminal, where each procedure tries to match its production(s) against the input.
 
+#### py2rust Recursive Descent Call Graph
+
+```mermaid
+flowchart TD
+    %% Base styling
+    classDef default fill:#fafafa,stroke:#333,stroke-width:1px;
+    classDef entry fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+    classDef dispatch fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef parser fill:#fff8e1,stroke:#ffb300,stroke-width:1px;
+    
+    parse[parse / Module Entry]:::entry --> parse_stmt[_parse_stmt / Statement Selector]:::dispatch
+    
+    parse_stmt --> parse_funcdef[_parse_funcdef / Function Defs]:::parser
+    parse_stmt --> parse_classdef[_parse_classdef / Struct & Trait Defs]:::parser
+    parse_stmt --> parse_return[_parse_return]:::parser
+    parse_stmt --> parse_for[_parse_for]:::parser
+    parse_stmt --> parse_with[_parse_with / Context Managers]:::parser
+    parse_stmt --> parse_expr_stmt[_parse_expr / Expression Selector]:::dispatch
+
+    parse_funcdef --> parse_type[_parse_type / Type Recognizer]:::parser
+    parse_funcdef --> parse_stmt
+    
+    parse_classdef --> parse_decorator[_parse_decorator / Class Decorators]:::parser
+    parse_classdef --> parse_funcdef
+    parse_classdef --> parse_type
+    
+    parse_expr_stmt --> parse_yield[_parse_yield / Generators]:::parser
+    parse_expr_stmt --> parse_comprehension[_parse_comprehension]:::parser
+    parse_expr_stmt --> parse_type
+    
+    parse_type --> parse_type_generic[_parse_type recursively for generics]:::parser
+```
+
 ```
 procedure E():
     T()
@@ -468,7 +502,54 @@ def _parse_for(self, node: ast.For):
 
 The lookahead here is the **type of `node.iter`**: if it's a `range()` call, take one production; otherwise take another.
 
+#### Concrete Example — Parsing a Context Manager (`with` / `async with`)
+
+The production for a context manager statement:
+```
+WithStmt → 'with' with_item (',' with_item)* ':' body
+         | 'async' 'with' with_item (',' with_item)* ':' body
+```
+
+In `py2rust`, the hand-written parser maps both `ast.With` and `ast.AsyncWith` AST nodes to our internal `WithStmt` AST node via recursive dispatch on sub-expressions:
+```python
+# parser.py:1328-1348
+def _parse_with(self, node: Union[ast.With, ast.AsyncWith]) -> WithStmt:
+    is_async = isinstance(node, ast.AsyncWith)
+    items = []
+    for item in node.items:
+        vars_ = self._parse_expr(item.optional_vars) if item.optional_vars else None
+        items.append(
+            WithItem(
+                context_expr=self._parse_expr(item.context_expr), # recurse context expression
+                optional_vars=vars_,                            # recurse optional binding
+                line=item.context_expr.lineno,
+                col=item.context_expr.col_offset + 1,
+            )
+        )
+    body = tuple(self._parse_stmts(node.body))                  # recurse block statements
+    return WithStmt(
+        items=tuple(items),
+        body=body,
+        is_async=is_async,
+        line=node.lineno,
+        col=node.col_offset + 1,
+    )
+```
+
+#### Concrete Example — Early Rejection of Ternary Expressions (`ast.IfExp`)
+
+To enforce readable and structured control flow, the transpiler rejects ternary conditional expressions. When the expression-dispatch routine `_parse_expr` encounters an `ast.IfExp` node, it immediately raises an error without further tree traversal, preventing subsequent synthesis phases:
+```python
+# parser.py:1117-1120
+if isinstance(node, ast.IfExp):
+    raise self._err(
+        "Ternary expressions are not supported", node, UnsupportedFeatureError
+    )
+```
+This serves as a classical **early syntax-directed translation reject state**, where syntactic checks halt processing before semantic verification can begin.
+
 ### Predictive Parsing
+
 
 **Predictive parsing** is recursive descent without backtracking. The parser looks at the next input token (the **lookahead**) and **deterministically** chooses a production.
 
@@ -478,6 +559,37 @@ The parser is driven by a **predictive parsing table** `M[A, a]` where:
 - `A` is the current non-terminal to expand
 - `a` is the current lookahead token
 - `M[A, a]` gives the production to use, or ERROR
+
+#### LL(1) Predictive Parsing Decision Tree
+
+```mermaid
+graph TD
+    %% Node definitions
+    Start[ast.stmt Node] --> TypeCheck{isinstance node, ...?}
+    
+    %% Branches
+    TypeCheck -->|ast.Return| Return[return self._parse_return node]
+    TypeCheck -->|ast.Match| Match[return self._parse_match node]
+    TypeCheck -->|ast.ClassDef| ClassDef{Has @dataclass?}
+    TypeCheck -->|ast.FunctionDef| FuncDef{Has @generator / yields?}
+    TypeCheck -->|ast.With| With[return self._parse_with node]
+    TypeCheck -->|ast.Assign| Assign[return self._parse_assign node]
+    TypeCheck -->|Other| Unsupported[raise UnsupportedFeatureError]
+    
+    %% Nested decisions
+    ClassDef -->|Yes| DataClass[Parse Struct with auto Traits]
+    ClassDef -->|No| StdClass[Parse standard Rust Struct]
+    
+    FuncDef -->|Yes| GenParser[Parse as Generator / Iterator Pattern]
+    FuncDef -->|No| StdFunc[Parse as standard Rust Function]
+
+    %% Styling
+    style Start fill:#f9f9f9,stroke:#333;
+    style TypeCheck fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+    style Unsupported fill:#ffebee,stroke:#c62828,stroke-width:1px;
+    style Return fill:#e8f5e9,stroke:#2e7d32;
+    style Match fill:#e8f5e9,stroke:#2e7d32;
+```
 
 #### py2rust's `_parse_stmt` — A Predictive Dispatch Table
 

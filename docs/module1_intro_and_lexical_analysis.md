@@ -55,22 +55,23 @@ The **analysis** phase breaks the source into its constituent parts and extracts
 
 **py2rust maps directly onto this model:**
 
-```
-Analysis Phase                    Synthesis Phase
-─────────────────────────────     ─────────────────────────────
-Python source                     IR module
-    │                                 │
-    ▼  Lexer (CPython tokenize)       ▼  RustCodegen
-Token stream                      Rust source code
-    │
-    ▼  Parser (frontend/parser.py)
-py2rust AST (frontend/ast_nodes.py)
-    │
-    ▼  IRBuilder (middleend/ir_builder.py)
-IR nodes (ir/ir_nodes.py)
-    │
-    ▼  TypeChecker (middleend/type_checker.py)
-Type-annotated IR
+```mermaid
+flowchart TD
+    subgraph FrontEnd ["Analysis Phase (Front-end)"]
+        direction TB
+        A[Python Source File] -->|Lexer: CPython tokenize| B(Token Stream)
+        B -->|Parser: frontend/parser.py| C(py2rust AST: ast_nodes.py)
+        C -->|TypeChecker & TypeInferencer| D(Type-Annotated AST)
+    end
+    subgraph BackEnd ["Synthesis Phase (Back-end)"]
+        direction TB
+        D -->|IRBuilder: middleend/ir_builder.py| E(IR Nodes: ir_nodes.py)
+        E -->|Mut & Hoisting Analyzers| F(Optimized IR Module)
+        F -->|RustCodegen: backend/rust_codegen.py| G[Rust Source Code]
+    end
+
+    style FrontEnd fill:#f4f9ff,stroke:#0288d1,stroke-width:2px;
+    style BackEnd fill:#f3fbf4,stroke:#2e7d32,stroke-width:2px;
 ```
 
 ### Phases of a Compiler
@@ -131,7 +132,21 @@ if config.format_output:
 output_path.write_text(rust_code)         # emit target program
 ```
 
+#### Supported Decorators and Meta-programming Constructs
+The `py2rust` compiler maps Python's structural decorator tags directly to corresponding idiomatic Rust semantic constructs:
+*   `@staticmethod`: Lowered to Rust **associated functions** defined within the type's implementation block (`impl TypeName`) lacking the `self` parameter context.
+*   `@dataclass`: Lowers to a native Rust `struct` definition with direct parameterization, automatic creation of constructor functions, and clean data layouts.
+*   `@abstractmethod`: Represents abstract class boundaries, translating Python classes acting as interfaces directly into Rust `trait` specifications.
+
+#### Explicitly Rejected Features
+For semantic clarity and translation determinism, `py2rust` enforces a strict subset of Python, rejecting structures that break clean Rust-equivalent type mappings:
+1.  **Ternary Expressions (`x if cond else y`)**: Disallowed to enforce structured, explicit branch definitions. Encountering `ast.IfExp` at the parser boundary triggers an early compiler termination by throwing an `UnsupportedFeatureError`:
+    > [!IMPORTANT]
+    > `UnsupportedFeatureError(..., "Ternary expressions are not supported in py2rust. Use standard if-else blocks instead.")`
+2.  **Multiple Structural Inheritance / Custom Metaclasses**: Rejected to ensure a clean, deterministic single-trait interface matching Rust's object model.
+
 ---
+
 
 ## 2. Compiler Writing Tools
 
@@ -421,13 +436,31 @@ A **finite automaton (FA)** is the machine that implements regex-based token rec
 
 **Example: recognising `int` or `in` as keywords vs `identifier`**
 
-```
-NFA:
-     i ──→ n ──→ t ──→ [accept: "int"]
-     │
-     └──→ n ──→ [accept: "in"]
-     │
-     └──→ [a-z]* ──→ [accept: identifier]
+```mermaid
+stateDiagram-v2
+    [*] --> Start
+    Start --> i_state : 'i'
+    i_state --> in_state : 'n'
+    in_state --> int_state : 't'
+    in_state --> accept_in : [Other / End of Word]
+    int_state --> accept_int : [Other / End of Word]
+    
+    Start --> ident_state : [a-zA-hj-z_]
+    i_state --> ident_state : [a-mop-z_]
+    in_state --> ident_state : [a-su-z_]
+    
+    ident_state --> ident_state : [a-zA-Z0-9_]
+    ident_state --> accept_ident : [Other / End of Word]
+    
+    state accept_in {
+        [*] --> InKeyword : accept "in" (KW_IN)
+    }
+    state accept_int {
+        [*] --> IntKeyword : accept "int" (KW_INT)
+    }
+    state accept_ident {
+        [*] --> Identifier : accept identifier (IDENT)
+    }
 ```
 
 After subset construction, one DFA handles all three patterns simultaneously. The DFA returns the **longest match** (maximal munch rule).
@@ -488,41 +521,67 @@ This is a **pattern-matching DFA**: each `isinstance` check is a transition; eac
 
 ## py2rust: Complete Phase Map
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         py2rust Compiler                             │
-│                                                                       │
-│  INPUT: Python source file  (.py)                                    │
-│     │                                                                 │
-│     ▼  Phase 1: Lexical Analysis                                     │
-│  Python tokenizer (inside ast.parse)                                 │
-│  Tokens: NAME, INT, FLOAT, STR, OP, KEYWORD, INDENT, DEDENT, ...   │
-│     │                                                                 │
-│     ▼  Phase 2: Syntax Analysis                                      │
-│  CPython pegen LALR(1) parser → ast.Module                          │
-│  py2rust Parser (frontend/parser.py) → py2rust Module               │
-│     │                                                                 │
-│     ▼  Phase 3: Semantic Analysis                                    │
-│  TypeChecker + TypeInferencer (middleend/)                           │
-│  SymbolTable (middleend/symbol_table.py)                            │
-│     │                                                                 │
-│     ▼  Phase 4: IR Generation                                        │
-│  IRBuilder (middleend/ir_builder.py) → IRModule                     │
-│  IR nodes defined in ir/ir_nodes.py                                  │
-│     │                                                                 │
-│     ▼  Phase 5: Optimization                                         │
-│  _collect_mutated_vars, _collect_decls, _strip_parens               │
-│  (in backend/rust_codegen.py)                                        │
-│     │                                                                 │
-│     ▼  Phase 6: Code Generation                                      │
-│  RustCodegen (backend/rust_codegen.py)                               │
-│     │                                                                 │
-│     ▼  Post-processing                                               │
-│  rustfmt (backend/rust_formatter.py)                                 │
-│  cargo check (verification, main.py)                                 │
-│                                                                       │
-│  OUTPUT: Rust source file (.rs)                                      │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    %% Base styling
+    classDef default fill:#f9f9f9,stroke:#333,stroke-width:1px;
+    classDef phase fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,font-weight:bold;
+    classDef data fill:#fff3e0,stroke:#f57c00,stroke-width:1px,stroke-dasharray: 2 2;
+    classDef check fill:#efebe9,stroke:#5d4037,stroke-width:2px;
+    classDef validation fill:#ede7f6,stroke:#5e35b1,stroke-width:2px;
+
+    %% Nodes
+    PySrc[/"Python Source File (.py)"/]:::data
+    
+    subgraph FrontEnd ["Frontend (Lexical & Syntax Analysis)"]
+        Parser[Parser / frontend/parser.py]:::phase
+        AST[py2rust AST / frontend/ast_nodes.py]:::data
+        
+        PySrc -->|ast.parse / CPython Lexer & Parser| Parser
+        Parser -->|_parse_stmt / _parse_expr / _parse_type| AST
+    end
+
+    subgraph MiddleEnd ["Middle-end (Semantic Analysis & Type Checking)"]
+        ImportRes[ImportResolver / sys.path Boundary Enforcement]:::check
+        CycleDet[Circular Dependency & Struct Cycle Detection]:::check
+        SymTable[(CrossModuleSymbolTable)]
+        TypeInf[TypeInferencer / type_inferencer.py]:::phase
+        TypeChk[TypeChecker / type_checker.py]:::phase
+        TypedAST[Type-Annotated Custom AST]:::data
+        
+        AST --> ImportRes
+        ImportRes -->|Cross-Module Resolution| SymTable
+        SymTable --> TypeInf
+        TypeInf --> CycleDet
+        CycleDet --> TypeChk
+        TypeChk --> TypedAST
+    end
+
+    subgraph BackEnd ["Backend (IR Generation & Code Generation)"]
+        IRBuilder[IRBuilder / middleend/ir_builder.py]:::phase
+        IRNodes[IR Nodes / ir/ir_nodes.py]:::data
+        MutTracker[Mutability & Decls Collector]:::check
+        RustGen[RustCodegen / backend/rust_codegen.py]:::phase
+        RawRust[/"Raw Rust Source code (.rs)"/]:::data
+        
+        TypedAST --> IRBuilder
+        IRBuilder --> IRNodes
+        IRNodes --> MutTracker
+        MutTracker -->|let mut / hoisting analysis| RustGen
+        RustGen --> RawRust
+    end
+
+    subgraph Post ["Verification & Post-Processing"]
+        RustFmt[rustfmt Formatting]:::phase
+        CargoChk[cargo check Compilation Validator]:::phase
+        EquivVal[Semantic Equivalence Validator / Ollama / patterns.jsonl]:::validation
+        RustOut[/"Final Certified Rust Executable / Library (.rs)"/]:::data
+        
+        RawRust --> RustFmt
+        RustFmt --> CargoChk
+        CargoChk -->|Pass| EquivVal
+        EquivVal -->|Learn Patterns & Certify| RustOut
+    end
 ```
 
 ---

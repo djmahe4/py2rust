@@ -197,6 +197,20 @@ def _strip_parens(self, s: str) -> str:
     return s
 ```
 
+#### Peephole Optimization: Redundant Parenthesis Reduction Window
+
+```mermaid
+graph TD
+    subgraph SlidingWindow ["Local Peephole Window Reduction"]
+        Raw["Raw Code: return Ok(((x + y)))"] -->|Peephole 1: Match balanced outer parens| Red1["Ok((x + y))"]
+        Red1 -->|Peephole 2: Match balanced outer parens| Red2["Ok(x + y)"]
+        Red2 -->|Peephole 3: Outer check fail| Final["Emitted: return Ok(x + y);"]
+    end
+    
+    style Raw fill:#ffebee,stroke:#c62828;
+    style Final fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+```
+
 This corrected the `return Ok((x + y));` (extra parens) bug in Wave 19, changing it to `return Ok(x + y);`.
 
 #### 4.3 Algebraic Simplification (Local)
@@ -306,20 +320,37 @@ The code generator receives an **Intermediate Representation (IR)** — a langua
 - `IREnumDef` nodes — one per enum
 - Expression trees: `IRBinOp`, `IRFunctionCall`, `IRSome`, `IRSumWrap`, etc.
 
-```
-Python Source
-    │
-    ▼
-Frontend (Parser) → AST
-    │
-    ▼
-Middle-End (IRBuilder + TypeChecker) → IRModule
-    │
-    ▼
-Backend (RustCodegen) → Rust Source
-    │
-    ▼
-rustc + LLVM → Machine Code
+```mermaid
+flowchart TD
+    %% Source
+    PySource[Python Source Code] -->|Parser & AST Builder| PyAST[Python AST]
+    
+    %% Middle-end
+    subgraph MiddleEnd ["Middle-End / Translation & Verification"]
+        PyAST -->|TypeChecker & IRBuilder| IRMod[Typed IRModule]
+    end
+    
+    %% Backend
+    subgraph Backend ["Backend / Code Generator Design (rust_codegen.py)"]
+        IRMod -->|Pass 1: AST Walk & Scope Analysis| P1[Analyze Scopes & Track Features]
+        P1 -->|Detect mutations globally| MutVars[_collect_mutated_vars]
+        P1 -->|Find block scopes needing hoisting| HoistDecls[_collect_decls]
+        
+        MutVars -->|Write to memory buffers| Buffers[(Buffers: Traits, Classes, Functions)]
+        HoistDecls -->|Write to memory buffers| Buffers
+        
+        Buffers -->|Pass 2: Sorted Header Assembly| Header[Final Code Assembly]
+    end
+    
+    %% Output
+    Header -->|Emits target source| RustSource[Generated Rust Code]
+    RustSource -->|rustc Compiler + LLVM Optimizer| Bin[Optimized Native Binary]
+
+    %% Styling
+    style PySource fill:#ffebee,stroke:#c62828;
+    style IRMod fill:#fff3e0,stroke:#f57c00;
+    style Buffers fill:#ede7f6,stroke:#5e35b1,stroke-width:2px;
+    style Bin fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
 ```
 
 #### 6.2 Target Program Memory Model
@@ -594,6 +625,83 @@ fn describe_number(x: Option<i32>) -> Result<String, PyError> {
 
 ---
 
+### 9. Advanced Scoped and State-Machine Lowering
+
+In modern translation systems, high-level control-flow and resource-management abstractions do not map 1:1 to target assembly instructions, requiring the synthesis phase to perform advanced lowering transformations. Two prime examples in `py2rust` are **RAII Scoped Resource Lowering** (for `with`/`async with` blocks) and **State-Machine Coroutine Lowering** (for `yield`/`yield from`).
+
+#### 9.1 RAII Scoped Resource Lowering (Context Managers)
+In Python, context managers (`with` and `async with`) rely on explicit runtime try-finally block structures (`__enter__` and `__exit__`). In Rust, the compiler lowers context managers to **lexical blocks `{ ... }` leveraging RAII (Resource Acquisition Is Initialization)**. When a resource is bound inside a block scope, Rust guarantees its destructor is invoked when control leaves that block, ensuring safe deterministic cleanup (such as releasing locks or closing files).
+
+The code generator maps these using specialized handlers per context manager type:
+- **File kind**: Generates `let mut <var> = FileHandle::open(...)?;`. The underlying file descriptor is closed when the lexical block `{}` ends.
+- **Mutex kind**: Translates to `let <guard> = <mutex>.lock().unwrap();`. This locks the mutex and leverages Rust's `MutexGuard` drop semantics to unlock when leaving the scope.
+- **Generic kind**: Enforces entry via `let <var> = <ctx_expr>;` and tracks cleanups automatically when the block finishes.
+
+##### Flow of Scoped RAII lowering for `with lock:`:
+```mermaid
+graph TD
+    subgraph Python ["Python Source Scope"]
+        With["with lock as guard:<br># critical section"]
+    end
+
+    subgraph Rust ["Rust Target RAII Scope"]
+        BlockStart["{ // Block Scope Start"]
+        LockGuard["let guard = lock.lock().unwrap();"]
+        Critical["// critical section"]
+        BlockEnd["} // Block Scope End (Drop guard & release Lock)"]
+    end
+
+    With -->|Lowering Phase| BlockStart
+    BlockStart --> LockGuard
+    LockGuard --> Critical
+    Critical --> BlockEnd
+```
+
+---
+
+#### 9.2 State-Machine Coroutine Lowering (`yield` and `yield from`)
+Python generators dynamically suspend and resume execution when `yield` is encountered. Because standard Rust functions execute to completion on a continuous activation stack frame, the compiler must perform a **State-Machine Coroutine Lowering** transformation.
+
+The generator function is converted into:
+1. A custom **State Struct** (`XGenerator`) holding all local variable storage, parameters, and an internal state counter (`__state: i32`).
+2. An implementation of the `Iterator` trait where `fn next(&mut self) -> Option<Self::Item>` runs a `loop` enclosing a `match self.__state` block.
+3. Lowering of each `yield val` statement into:
+   ```rust
+   self.__state = <next_state_id>;
+   return Some(val);
+   ```
+4. Lowering of `yield from iter` into a sub-iterator pointer state checking:
+   ```rust
+   if self.__sub_iter.is_none() {
+       self.__sub_iter = Some(Box::new((iter).into_iter()));
+   }
+   if let Some(ref mut sub) = self.__sub_iter {
+       if let Some(val) = sub.next() {
+           return Some(val);
+       }
+   }
+   self.__sub_iter = None;
+   self.__state = <next_state_id>;
+   ```
+
+##### State-Transition Control Flow Diagram:
+```mermaid
+stateDiagram-v2
+    [*] --> State_0 : new() Initialized
+    
+    state "State 0: Function Start" as State_0
+    state "State 1: Suspend at Yield 1" as State_1
+    state "State 2: Suspend at Yield 2" as State_2
+    state "State_999999: Finished" as State_Finished
+
+    State_0 --> State_1 : next() -> returns Some(val1)
+    State_1 --> State_2 : next() -> returns Some(val2)
+    State_2 --> State_Finished : next() -> returns None
+    State_Finished --> [*]
+```
+
+---
+
 ## py2rust: Connecting Theory to Practice
 
 The following table maps every major theoretical concept from Module 5 to its concrete implementation in py2rust:
@@ -613,6 +721,8 @@ The following table maps every major theoretical concept from Module 5 to its co
 | Memory model — null safety | `rust_codegen.py:1870` `IRSome → Some(val)` | Maps Python's `Optional[T]` to Rust's `Option<T>` |
 | Memory model — error handling | `rust_codegen.py:680-734` PyError boilerplate | All functions return `Result<T, PyError>` |
 | Strength reduction | `rust_codegen.py` floor-division handling | `a // b → (a as f64 / b as f64).floor() as i32` |
+| RAII Scoped Resource Lowering | `rust_codegen.py:2448` `_gen_with` | Lowers `with` statement blocks to RAII-managed scoped blocks `{}` |
+| State-Machine Coroutine Lowering | `rust_codegen.py:1597` `_gen_generator_struct` | Lowers generator functions (`yield`/`yield from`) into custom `Iterator` state machines |
 
 ---
 
@@ -652,3 +762,5 @@ The following table maps every major theoretical concept from Module 5 to its co
 | `_mangle` | py2rust function that escapes Python identifiers that are Rust keywords |
 | `RustCodegen` | py2rust's backend class; implements the simple recursive code generator |
 | `IRSome` | IR node representing wrapping a value into `Option<T>` (mapped to `Some(val)`) |
+| **RAII Scoped Resource Lowering** | Lowers dynamic resource blocks (`with`) to Rust scoped blocks `{}` leveraging RAII drop semantics for automatic cleanup. |
+| **State-Machine Coroutine Lowering** | Lowers generators/coroutines by synthesizing state-management structs, saving function context across suspension (`yield`) points. |

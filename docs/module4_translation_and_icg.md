@@ -52,6 +52,31 @@ def _build_expr(self, expr, expected_type=None):
     return self._build_expr_internal(expr, expected_type)
 ```
 
+#### SDT Attribute Evaluation Tree for `5 + 3` with `expected_type=int`
+
+```mermaid
+graph TD
+    %% Nodes
+    BinOp[BinOp Node: Add]:::parent
+    Left[Constant Node: 5]:::child
+    Right[Constant Node: 3]:::child
+    
+    %% Attributes
+    BinOp ---|Inherits: expected_type = int| BinOp
+    BinOp -->|Propagates expected_type| Left
+    BinOp -->|Propagates expected_type| Right
+    
+    Left -->|Synthesizes: IRConstant 5, int| BinOp
+    Right -->|Synthesizes: IRConstant 3, int| BinOp
+    
+    BinOp -->|Synthesizes Final IR: IRBinOp Add, int| Final[IRBinOp Add]:::final
+
+    %% Styling
+    classDef parent fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+    classDef child fill:#fff3e0,stroke:#f57c00;
+    classDef final fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+```
+
 ---
 
 ### 2. S-attributed vs L-attributed Definitions
@@ -107,6 +132,24 @@ def _get_rust_type(self, ir_type) -> str:
     # ...
 ```
 
+#### Detailed Type Translation and Semantic Mapping Table
+
+To bridge the gap between Python's dynamic runtime environment and Rust's strict static storage constraints, the synthesis phase implements a deterministic type translation map:
+
+| Python Type | IR Node | Rust Target Type | Memory Strategy & Rationale |
+|-------------|---------|------------------|-----------------------------|
+| `int` | `IRIntType` | `i32` or `i64` | **Stack-allocated**: Maps to fixed-size native machine primitives for high-performance arithmetic. |
+| `float` | `IRFloatType` | `f64` | **Stack-allocated**: Double-precision floating-point format matching IEEE 754 standards. |
+| `str` | `IRStrType` | `String` | **Heap-allocated**: Owned dynamic string buffer, allowing safe growth and mutation. |
+| `bool` | `IRBoolType` | `bool` | **Stack-allocated**: Standard single-byte binary flag. |
+| `list[T]` | `IRListType` | `Vec<T>` | **Heap-allocated**: Contiguous, dynamically resizable vector. |
+| `dict[K, V]` | `IRDictType` | `HashMap<K, V>` | **Heap-allocated**: Key-value hash map; automatically emits standard library imports. |
+| `set[T]` | `IRSetType` | `HashSet<T>` | **Heap-allocated**: Unique element set; automatically emits standard library imports. |
+| `deque[T]` | `IRDequeType` | `VecDeque<T>` | **Heap-allocated**: Double-ended queue for efficient double-ended pushes and pops. |
+| `heap` (via `heapq`) | `IRHeapType` | `BinaryHeap<Reverse<T>>` | **Heap-allocated**: Uses standard `std::collections::BinaryHeap` wrapped with `std::cmp::Reverse` to emulate Python's min-heap semantics. |
+| `Optional[T]` | `IROptionalType` | `Option<T>` | **Stack-allocated** (typically): Pure algebraic sum-type representation of nullability (`Some`/`None`), eliminating pointer-chasing overhead. |
+| `Generator[Y, S, R]` | `IRGeneratorType` | `Box<dyn Iterator<Item = Y>>` / `XGenerator` | **Heap-allocated**: Lowered into a bespoke struct representing a generator's state machine, optionally boxed for dynamic traits. |
+
 ---
 
 ### 5. Storage-Allocation Strategies
@@ -143,6 +186,35 @@ class IRAssign(IRStmt):
     target: str
     value: IRExpr
     target_type: IRType  # This 'attribute' makes it an IR node, not just AST
+```
+
+#### Multi-Module Environment & Cross-Module Type Resolution Flowchart
+
+```mermaid
+flowchart TD
+    %% Config & Resolver
+    PC[ProjectConfig] -->|Defines sys.path & Entrypoints| IR[ImportResolver]
+    IR -->|Scans imports & resolves modules| CMS[(CrossModuleSymbolTable)]
+    
+    %% Tables & Modules
+    subgraph ModuleTable ["Cross-Module Symbol Table Architecture"]
+        CMS -->|Tracks symbol scopes| M1[Module: math_utils]
+        CMS -->|Tracks symbol scopes| M2[Module: main]
+        
+        M1 -->|Exports| SymF[Function: add_ints]
+        SymF -->|Has inferred type| EType[ExternalPythonType: Fn int, int -> int]
+        
+        M2 -->|Imports add_ints| ImportNode[ImportRef: math_utils.add_ints]
+        ImportNode -->|Resolves signature| EType
+    end
+
+    %% IR Builder
+    IRBuilder[IRBuilder / ir_builder.py] -->|Queries resolved types| CMS
+    IRBuilder -->|Constructs| TypedIR[Type-Annotated IRModule]
+
+    style CMS fill:#ede7f6,stroke:#5e35b1,stroke-width:2px;
+    style EType fill:#fff3e0,stroke:#f57c00;
+    style TypedIR fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
 ```
 
 ---

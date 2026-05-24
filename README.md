@@ -12,6 +12,16 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
     → Type Checking & Inference → High-Level IR → Rust Code Generation → Formatted Rust
 ```
 
+## 📖 Documentation
+
+*   **📘 [Developer & User Guide](docs/user_guide.md)** — A clean, clear, and comprehensive developer guide covering installation, CLI usage, valid syntax subsets, interop plugins, and error troubleshooting.
+*   **🎓 Academic Reference Modules**:
+    *   **[Module 1: Lexical Analysis & Subset Definition](docs/module1_intro_and_lexical_analysis.md)** — Explores the compiler phase model, token specifications, and explicitly rejected syntax.
+    *   **[Module 2: Syntax Analysis & Recursive Descent Parsing](docs/module2_syntax_analysis.md)** — Covers custom AST hierarchy, error recovery strategies, and recursive descent dispatch tables.
+    *   **[Module 3: Bottom-Up LALR(1) Parsing Alternatives](docs/module3_bottom_up_parsing.md)** — Analyzes grammar transformation, shift-reduce conflicts, and lookahead propagation.
+    *   **[Module 4: Translation, Symbol Tables & ICG](docs/module4_translation_and_icg.md)** — Details type checking, bidirectional type inference, collections mapping, and multi-module scopes.
+    *   **[Module 5: Optimization & Idiomatic Rust Codegen](docs/module5_code_optimization_and_generation.md)** — Documents code optimization, RAII scoped resource lowering, and suspended coroutine state machines.
+
 ## Supported Python Subset
 
 ### ✅ Supported Features
