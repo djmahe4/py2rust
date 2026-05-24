@@ -20,8 +20,6 @@ class CSVPlugin(BasePlugin):
         # csv.reader(f) -> ExternalObject
         st.define_function("__py2rust_native_csv_reader", [UnknownType()], ClassType("ExternalObject"))
 
-        if hasattr(st, "dependency_manager") and st.dependency_manager:
-            st.dependency_manager.add_dependency("csv", version="1.1")
 
     def transform_ast(self, node, checker):
         from ..frontend.ast_nodes import FunctionCall, MethodCall, Name, ExternalPythonType

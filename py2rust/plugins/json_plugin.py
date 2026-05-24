@@ -23,11 +23,6 @@ class JSONPlugin(BasePlugin):
         # json.dumps(obj) -> str
         st.define_function("__py2rust_native_json_dumps", [UnknownType()], StrType())
 
-        # Access the dependency manager if available on the symbol table
-        if hasattr(st, "dependency_manager") and st.dependency_manager:
-            st.dependency_manager.add_dependency("serde", version="1.0", features=["derive"])
-            st.dependency_manager.add_dependency("serde_json", version="1.0")
-            st.dependency_manager.add_dependency("pythonize", version="0.20")
 
     def transform_ast(self, node, checker):
         from ..frontend.ast_nodes import FunctionCall, MethodCall, Name, ExternalPythonType

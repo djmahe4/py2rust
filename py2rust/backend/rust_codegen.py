@@ -734,6 +734,14 @@ class RustCodegen:
         if self.dependency_manager:
             if self._uses_python_wrappers:
                 self.dependency_manager.add_dependency("pyo3", version="0.20", features=["extension-module", "abi3-py310"])
+            if self._uses_serde_json or self._uses_pythonize:
+                self.dependency_manager.add_dependency("serde", version="1.0", features=["derive"])
+            if self._uses_serde_json:
+                self.dependency_manager.add_dependency("serde_json", version="1.0")
+            if self._uses_pythonize:
+                self.dependency_manager.add_dependency("pythonize", version="0.20")
+            if self._uses_csv:
+                self.dependency_manager.add_dependency("csv", version="1.1")
             final_lines.append("//")
             final_lines.append("// Required dependencies for Cargo.toml:")
             for line in self.dependency_manager.get_cargo_dependencies().splitlines():
