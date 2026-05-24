@@ -6,6 +6,13 @@ class OllamaClient:
         self.model = model
         self.host = host
 
+    def is_available(self) -> bool:
+        try:
+            res = requests.get(self.host, timeout=2)
+            return res.status_code == 200
+        except Exception:
+            return False
+
     def generate(self, prompt: str, timeout: int = 30) -> str:
         try:
             url = f"{self.host}/api/generate"

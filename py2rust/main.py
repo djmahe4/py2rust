@@ -44,6 +44,98 @@ def extract_rust_fn(rust_code: str, func_name: str) -> str:
 
 
 
+def _handle_py2rust_compiler_error(e: CompilerError, source: str, config: CompilerConfig, logger) -> None:
+    if not config.validate:
+        return
+        
+    from .learning_system.validation.semantic_validator import SemanticValidator
+    import os
+    import sys
+    import subprocess
+    
+    validator = SemanticValidator(model=config.ollama_model)
+    if not validator.client.is_available():
+        return
+        
+    prompt = f"""TASK: Analyze a py2rust compilation error and suggest an alternative implementation in Python.
+
+PYTHON SOURCE CODE:
+{source}
+
+COMPILER ERROR DIAGNOSTICS:
+{str(e)}
+
+Please provide:
+1. An explanation of what went wrong in the static subset compilation (e.g. dynamic typing, unsupported libraries, complex scopes, etc.).
+2. A suggested alternative Python implementation that accomplishes the same logic but complies with the statically-typed py2rust subset requirements.
+
+Format your response exactly as:
+EXPLANATION: [detailed reasoning]
+SUGGESTED_FIX: [compliant Python code snippet]
+"""
+    
+    llm_res = validator.client.generate(prompt)
+    explanation = "Unable to analyze"
+    suggested_fix = ""
+    for line in llm_res.splitlines():
+        if line.startswith("EXPLANATION:"):
+            explanation = line.split(":", 1)[1].strip()
+        elif line.startswith("SUGGESTED_FIX:"):
+            suggested_fix = line.split(":", 1)[1].strip()
+            
+    print("\n" + "="*80, file=sys.stderr)
+    print("LLM COMPILER ERROR ANALYSIS:", file=sys.stderr)
+    print(f"Explanation: {explanation}", file=sys.stderr)
+    if suggested_fix:
+        print(f"Suggested Python Fix:\n{suggested_fix}", file=sys.stderr)
+    print("="*80 + "\n", file=sys.stderr)
+    
+    if config.review_failures:
+        triage_loop = True
+        while triage_loop:
+            print("\n" + "="*80)
+            print("TRIAGE: py2rust Compilation FAILED")
+            print("="*80)
+            print("\n--- PYTHON SOURCE ---")
+            print(source)
+            print(f"\n--- COMPILER DIAGNOSTICS ---\n{str(e)}")
+            print(f"\n--- LLM ANALYSIS ---\n{explanation}")
+            if suggested_fix:
+                print(f"\n--- SUGGESTED REFACTOR ---\n{suggested_fix}")
+            print("\nACTIONS:")
+            print("  [e] Edit Python Source")
+            print("  [s] Skip and exit")
+            print("  [q] Quit compilation")
+            
+            try:
+                choice = input("\nEnter choice [e/s/q]: ").strip().lower()
+            except EOFError:
+                choice = 's'
+                
+            if choice == 'e':
+                editor = os.environ.get("EDITOR", "nano")
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".py", mode="w+", delete=False, encoding="utf-8") as temp_py:
+                    temp_py.write(source)
+                    temp_py_path = temp_py.name
+                try:
+                    subprocess.run([editor, temp_py_path])
+                    with open(temp_py_path, "r", encoding="utf-8") as f:
+                        new_py = f.read()
+                    if new_py != source:
+                        logger.info("Source code updated. Exiting compilation to allow recompile.")
+                        sys.exit(0)
+                finally:
+                    try:
+                        os.unlink(temp_py_path)
+                    except Exception:
+                        pass
+            elif choice == 's':
+                triage_loop = False
+            elif choice == 'q':
+                sys.exit(1)
+
+
 def compile_file(config: CompilerConfig) -> bool:
     from .learning_system.validation.translation_context import TranslationContext
     config.translation_context = TranslationContext()
@@ -69,6 +161,7 @@ def compile_file(config: CompilerConfig) -> bool:
         module = parse(source, filename)
     except CompilerError as e:
         print(str(e), file=sys.stderr)
+        _handle_py2rust_compiler_error(e, source, config, logger)
         return False
 
     if config.emit_ast:
@@ -79,6 +172,7 @@ def compile_file(config: CompilerConfig) -> bool:
         ir_module = build_ir(module, filename, source_lines, config, dependency_manager=dep_manager)
     except CompilerError as e:
         print(str(e), file=sys.stderr)
+        _handle_py2rust_compiler_error(e, source, config, logger)
         return False
 
     if config.emit_ir:
@@ -304,6 +398,93 @@ def compile_file(config: CompilerConfig) -> bool:
                     # Also print stdout if stderr is empty or for more context
                     if not result.stderr.strip() and result.stdout.strip():
                          print(result.stdout, file=sys.stderr)
+                         
+                    if config.validate:
+                        from .learning_system.validation.semantic_validator import SemanticValidator
+                        validator = SemanticValidator(model=config.ollama_model)
+                        if validator.client.is_available():
+                            prompt = f"""TASK: Analyze Rust compilation failure and suggest a fix.
+
+PYTHON SOURCE CODE:
+{source}
+
+GENERATED RUST CODE:
+{rust_code}
+
+COMPILER ERROR FROM CARGO:
+{result.stderr}
+
+Please provide:
+1. A concise explanation of why the compilation failed (lifetime, borrow check, type mismatch, etc.).
+2. A suggested fix or pattern correction for the generated Rust code.
+
+Format your response exactly as:
+EXPLANATION: [detailed reason]
+SUGGESTED_FIX: [fix snippet]
+"""
+                            llm_res = validator.client.generate(prompt)
+                            explanation = "Unable to analyze"
+                            suggested_fix = ""
+                            for line in llm_res.splitlines():
+                                if line.startswith("EXPLANATION:"):
+                                    explanation = line.split(":", 1)[1].strip()
+                                elif line.startswith("SUGGESTED_FIX:"):
+                                    suggested_fix = line.split(":", 1)[1].strip()
+                            
+                            print("\n" + "="*80, file=sys.stderr)
+                            print("LLM COMPILER ERROR ANALYSIS:", file=sys.stderr)
+                            print(f"Explanation: {explanation}", file=sys.stderr)
+                            if suggested_fix:
+                                print(f"Suggested Fix:\n{suggested_fix}", file=sys.stderr)
+                            print("="*80 + "\n", file=sys.stderr)
+                            
+                            if config.review_failures:
+                                triage_loop = True
+                                while triage_loop:
+                                    print("\n" + "="*80)
+                                    print("TRIAGE: Rust Compilation (cargo check) FAILED")
+                                    print("="*80)
+                                    print("\n--- PYTHON SOURCE ---")
+                                    print(source)
+                                    print("\n--- GENERATED RUST ---")
+                                    print(rust_code)
+                                    print(f"\n--- CARGO COMPILER ERROR ---\n{result.stderr}")
+                                    print(f"\n--- LLM ANALYSIS ---\n{explanation}")
+                                    if suggested_fix:
+                                        print(f"\n--- SUGGESTED RUST FIX ---\n{suggested_fix}")
+                                    print("\nACTIONS:")
+                                    print("  [e] Edit Python Source")
+                                    print("  [s] Skip and exit")
+                                    print("  [q] Quit compilation")
+                                    
+                                    try:
+                                        choice = input("\nEnter choice [e/s/q]: ").strip().lower()
+                                    except EOFError:
+                                        choice = 's'
+                                        
+                                    if choice == 'e':
+                                        editor = os.environ.get("EDITOR", "nano")
+                                        import tempfile
+                                        with tempfile.NamedTemporaryFile(suffix=".py", mode="w+", delete=False, encoding="utf-8") as temp_py:
+                                            temp_py.write(source)
+                                            temp_py_path = temp_py.name
+                                        try:
+                                            subprocess.run([editor, temp_py_path])
+                                            with open(temp_py_path, "r", encoding="utf-8") as f:
+                                                new_py = f.read()
+                                            if new_py != source:
+                                                logger.info("Source code updated. Exiting compilation to allow recompile.")
+                                                sys.exit(0)
+                                        finally:
+                                            try:
+                                                os.unlink(temp_py_path)
+                                            except Exception:
+                                                pass
+                                    elif choice == 's':
+                                        triage_loop = False
+                                    elif choice == 'q':
+                                        sys.exit(1)
+                                        
                     return False
                 
                 logger.info("Cargo verification passed")
