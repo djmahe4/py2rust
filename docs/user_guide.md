@@ -238,15 +238,36 @@ cargo run
 
 ## 🤖 LLM Validator & Pattern Learning System
 
-To ensure that your generated Rust matches the exact semantics of your input Python, `py2rust` offers a **Closed-Loop Equivalence Validator**.
+To ensure that your generated Rust matches the exact semantics of your input Python, `py2rust` offers an advanced **Closed-Loop Equivalence Validator** backed by local LLM orchestration, AST analysis, and interactive developer feedback.
 
 ```bash
-py2rust input.py -o output.rs --validate --learn-patterns --apply-learned-patterns
+py2rust input.py -o output.rs --validate --learn-patterns --apply-learned-patterns --review-failures
 ```
 
-1.  **Semantic Equivalence Validation**: Uses a local Ollama LLM model (defaulting to `deepseek-coder`) to test the behavior of the output Rust against the source Python.
-2.  **Pattern Extraction**: If semantic mismatches are discovered, the compiler generalizes the mistake, logging it to `.py2rust/patterns.jsonl`.
-3.  **Active Suggestion Engine**: Proposes colorized, high-end Markdown diff recommendations directly in your terminal, advising you on how to optimize your source code or annotations without modifying your files silently.
+### 1. High-Performance SQLite Validation Cache (`validations.db`)
+Equivalence checks on complex functions using LLMs can introduce latency. To prevent this, `py2rust` automatically maintains a durable SQLite database at `.py2rust/validations.db`.
+* **Compound Hashing Strategy**: Instantly resolves hits by computing a compound SHA-256 hash from three inputs:
+  $$\text{id} = \text{SHA-256}(\text{SHA-256}(\text{python\_source}) + \text{SHA-256}(\text{generated\_rust}) + \text{SHA-256}(\text{compiler\_config}))$$
+* **High-Concurrency Modes**: Employs Write-Ahead Logging (WAL) journal mode to ensure thread-safe, fast cache queries and concurrent compilation steps.
+* **Force Recompilation**: You can bypass the cache entirely to force a live LLM re-evaluation using the `--force` / `-f` CLI flag.
+
+### 2. Neo Reasoning Patterns (`Qname`, `Qglobal_flow`, `Qcall`)
+During lowered compilation, Python names are mangled, helper variables are added, and functions are adapted to support Rust’s ownership rules (e.g. `Result`-wrapping). To prevent the validator from flagging these safe transformations as errors, `py2rust` extracts AST-based metadata from your source code and injects steering patterns:
+* `Qname(variable)`: Identifies variable references inside scopes to track rename mappings.
+* `Qglobal_flow(symbol)`: Outlines scope modifications, ensuring function bounds remain structurally equivalent.
+* `Qcall(function)`: Tracks function calls and signatures rewritten to match safe Rust implementations.
+
+These indicators guide the local validator model (e.g., `deepseek-coder`) to recognize planned, correct modifications.
+
+### 3. Human-in-the-Loop (HITL) Triage Dashboard
+If a function fails semantic validation, the compiler can guide you through a live terminal dashboard to review the discrepancy and decide how to proceed. To activate it, pass the `--review-failures` flag during validation.
+
+#### Available Actions:
+* **`[a] Accept`**: Manually overrides and approves the current Rust code. It writes the result to the SQLite validation database with a special `is_hitl = 1` flag, preventing the compiler from flagging or asking about this function again in future builds.
+* **`[e] Edit`**: Opens your system's default text editor (configured via `EDITOR`, e.g. `nano` or `vim`) with a temporary copy of the function segment so you can fix annotations or source logic immediately without terminating the pipeline.
+* **`[r] Retry`**: Instantly triggers a fresh, live semantic evaluation from the validation model.
+* **`[s] Skip`**: Safely bypasses the warning and proceeds with compilation.
+* **`[q] Quit`**: Immediately terminates the compilation process.
 
 ---
 
