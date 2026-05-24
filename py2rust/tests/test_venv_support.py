@@ -40,7 +40,8 @@ def test_big_lib_compilation():
     
     assert result.returncode == 0
     # The message "[INFO] Written: ..." goes to stderr
-    assert "Written: examples/big_lib_test.rs" in result.stderr
+    expected_path = os.path.normpath("examples/big_lib_test.rs")
+    assert f"Written: {expected_path}" in result.stderr
     
     with open(output_path, "r") as f:
         content = f.read()
