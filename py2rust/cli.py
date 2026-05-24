@@ -25,6 +25,7 @@ def main():
     # Wave 33: Semantic validation and learning flags
     parser.add_argument("--validate", action="store_true", help="Enable semantic validation using local Ollama model")
     parser.add_argument("--ollama-model", default="deepseek-coder", help="Ollama model to use for validation (default: deepseek-coder)")
+    parser.add_argument("--ollama-host", default="http://localhost:11434", help="Ollama host URL (default: http://localhost:11434)")
     parser.add_argument("--strict-validation", action="store_true", help="Fail compilation if semantic validation fails")
     parser.add_argument("--learn-patterns", action="store_true", help="Extract and store architectural patterns from validation results")
     parser.add_argument("--apply-learned-patterns", action="store_true", help="Apply previously learned patterns during compilation")
@@ -48,6 +49,7 @@ def main():
         package_dir=args.package_dir,
         validate=args.validate,
         ollama_model=args.ollama_model,
+        ollama_host=args.ollama_host,
         strict_validation=args.strict_validation,
         learn_patterns=args.learn_patterns,
         apply_learned_patterns=args.apply_learned_patterns,

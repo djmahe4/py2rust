@@ -6,8 +6,8 @@ import sys
 from .ollama_client import OllamaClient
 
 class SemanticValidator:
-    def __init__(self, client=None, model="deepseek-coder", db_path=None):
-        self.client = client or OllamaClient(model=model)
+    def __init__(self, client=None, model="deepseek-coder", host="http://localhost:11434", db_path=None):
+        self.client = client or OllamaClient(model=model, host=host)
         self.db_path = db_path
         self.store = None
         if db_path:
@@ -25,7 +25,7 @@ class SemanticValidator:
         if sys.platform == "win32":
             # Check Select-String via powershell
             if shutil.which("powershell"):
-                cmd = ["powershell", "-Command", f"Select-String -Pattern 'def {symbol_name}' -Path * -Context 5"]
+                cmd = ["powershell", "-NoProfile", "-Command", "& {param($p) Select-String -Pattern $p -Path * -Context 5}", f"def {symbol_name}"]
             elif shutil.which("findstr"):
                 cmd = ["findstr", f"def {symbol_name}", "*"]
         else:

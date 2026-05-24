@@ -23,6 +23,7 @@ class CompilerConfig:
     package_dir: str = ""
     validate: bool = False
     ollama_model: str = "deepseek-coder"
+    ollama_host: str = "http://localhost:11434"
     strict_validation: bool = False
     learn_patterns: bool = False
     apply_learned_patterns: bool = False

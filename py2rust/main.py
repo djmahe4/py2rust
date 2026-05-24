@@ -22,12 +22,78 @@ def extract_rust_fn(rust_code: str, func_name: str) -> str:
         return None
     start_idx = match.start()
     
-    # Simple brace matching from start_idx
+    # Robust state tracking scanner to skip comments/literals
     brace_count = 0
     started = False
-    end_idx = start_idx
-    for idx in range(start_idx, len(rust_code)):
+    in_string = False
+    in_char = False
+    in_line_comment = False
+    in_block_comment = False
+    escaped = False
+    
+    idx = start_idx
+    code_len = len(rust_code)
+    end_idx = code_len
+    
+    while idx < code_len:
         char = rust_code[idx]
+        
+        if escaped:
+            escaped = False
+            idx += 1
+            continue
+            
+        if in_block_comment:
+            if char == '*' and idx + 1 < code_len and rust_code[idx + 1] == '/':
+                in_block_comment = False
+                idx += 2
+            else:
+                idx += 1
+            continue
+            
+        if in_line_comment:
+            if char == '\n':
+                in_line_comment = False
+            idx += 1
+            continue
+            
+        if in_string:
+            if char == '\\':
+                escaped = True
+            elif char == '"':
+                in_string = False
+            idx += 1
+            continue
+            
+        if in_char:
+            if char == '\\':
+                escaped = True
+            elif char == "'":
+                in_char = False
+            idx += 1
+            continue
+            
+        # Check start of comments, strings, or chars
+        if char == '/' and idx + 1 < code_len:
+            if rust_code[idx + 1] == '/':
+                in_line_comment = True
+                idx += 2
+                continue
+            elif rust_code[idx + 1] == '*':
+                in_block_comment = True
+                idx += 2
+                continue
+                
+        if char == '"':
+            in_string = True
+            idx += 1
+            continue
+            
+        if char == "'":
+            in_char = True
+            idx += 1
+            continue
+            
         if char == '{':
             brace_count += 1
             started = True
@@ -37,8 +103,8 @@ def extract_rust_fn(rust_code: str, func_name: str) -> str:
         if started and brace_count == 0:
             end_idx = idx + 1
             break
-    else:
-        end_idx = len(rust_code)
+            
+        idx += 1
         
     return rust_code[start_idx:end_idx]
 
@@ -53,7 +119,7 @@ def _handle_py2rust_compiler_error(e: CompilerError, source: str, config: Compil
     import sys
     import subprocess
     
-    validator = SemanticValidator(model=config.ollama_model)
+    validator = SemanticValidator(model=config.ollama_model, host=config.ollama_host)
     if not validator.client.is_available():
         return
         
@@ -203,7 +269,7 @@ def compile_file(config: CompilerConfig) -> bool:
         from .learning_system.learning.pattern_extractor import PatternExtractor
         from .learning_system.learning.pattern_applicator import PatternApplicator
 
-        validator = SemanticValidator(model=config.ollama_model)
+        validator = SemanticValidator(model=config.ollama_model, host=config.ollama_host)
         val_store = ValidationStore()
         pat_store = PatternStore()
 
@@ -401,7 +467,7 @@ def compile_file(config: CompilerConfig) -> bool:
                          
                     if config.validate:
                         from .learning_system.validation.semantic_validator import SemanticValidator
-                        validator = SemanticValidator(model=config.ollama_model)
+                        validator = SemanticValidator(model=config.ollama_model, host=config.ollama_host)
                         if validator.client.is_available():
                             prompt = f"""TASK: Analyze Rust compilation failure and suggest a fix.
 

@@ -56,6 +56,10 @@ Clone the repository and install it in editable/developer mode:
 # From the root of the py2rust project
 pip install -e .
 ```
+OR
+```bash
+pip install py2rust
+```
 
 To verify the installation:
 ```bash
@@ -83,6 +87,9 @@ The `py2rust` command-line utility provides rich parameters for debugging, optim
 | `--apply-learned-patterns` | | Automatically applies learned pattern suggestions to output. | `py2rust main.py --apply-learned-patterns` |
 | `--review-failures` | | Halts compilation on errors to present a detailed LLM-backed terminal dashboard. | `py2rust main.py --validate --review-failures` |
 | `--verbose` | `-v` | Enables detailed logging of semantic and compilation phases. | `py2rust main.py -v` |
+| `--ollama-model` | | Sets the Ollama model used for semantic validation. Default is `deepseek-coder`. | `py2rust main.py --validate --ollama-model codellama` |
+| `--ollama-host` | | Sets the Ollama host URL. Default is `http://localhost:11434`. | `py2rust main.py --validate --ollama-host http://[IP_ADDRESS]` |
+| `--force` | `-f` | Force recompile all modules, bypassing the build cache. | `py2rust main.py --force` |
 
 ---
 
