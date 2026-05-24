@@ -81,6 +81,7 @@ The `py2rust` command-line utility provides rich parameters for debugging, optim
 | `--strict-validation` | | Aborts compiler process immediately if LLM validation fails. | `py2rust main.py --validate --strict-validation` |
 | `--learn-patterns` | | Extracts and learns patterns from semantic validation failures. | `py2rust main.py --validate --learn-patterns` |
 | `--apply-learned-patterns` | | Automatically applies learned pattern suggestions to output. | `py2rust main.py --apply-learned-patterns` |
+| `--review-failures` | | Halts compilation on errors to present a detailed LLM-backed terminal dashboard. | `py2rust main.py --validate --review-failures` |
 | `--verbose` | `-v` | Enables detailed logging of semantic and compilation phases. | `py2rust main.py -v` |
 
 ---
@@ -268,6 +269,13 @@ If a function fails semantic validation, the compiler can guide you through a li
 * **`[r] Retry`**: Instantly triggers a fresh, live semantic evaluation from the validation model.
 * **`[s] Skip`**: Safely bypasses the warning and proceeds with compilation.
 * **`[q] Quit`**: Immediately terminates the compilation process.
+
+### 4. 🛠️ Compiler & Cargo Error Recovery with Ollama Analysis
+To assist developers during compilation and downstream verification, `py2rust` features robust, automated error recovery and semantic diagnostics analyzing systems when `--review-failures` is enabled and Ollama is available.
+
+* **Downstream Cargo Check Failures**: If the generated Rust code fails `cargo check` validation (e.g. lifetime borrowing mismatch or syntax errors), the compiler intercepts `stderr`, packages the source and rust output, and queries Ollama. The local LLM explains the root cause in simple terms and provides a suggested Rust fix snippet.
+* **Frontend Compilation Failures**: If `py2rust` encounters parsing, semantic validation, or type unification errors (`CompilerError`), the compiler intercepts the exception, gets the context, and queries the local LLM. Ollama suggests a valid, statically-compliant Python alternative to bypass the subset restriction.
+* **Active Triage Console**: On interception, compilation halts and prints a clear markdown card with the LLM analysis, prompting you to either open `$EDITOR` on the fly to correct the python code (`[e] Edit`), retry the compilation step (`[r] Retry`), or exit.
 
 ---
 

@@ -700,6 +700,29 @@ stateDiagram-v2
     State_Finished --> [*]
 ```
 
+### 9.3 Target Compilation Verification & AI-Guided Cargo Error Recovery
+
+After the backend code generator finishes Pass 2 (Final Assembly) and writes the target `.rs` code, the compiler enters the **Target Verification Phase** by invoking the downstream target compiler (`cargo build`). 
+
+To handle semantic edge-cases or type mismatches that bypass static type-checking, **py2rust** implements a **Semantic Cargo Error Recovery Loop**:
+
+1. **Failure Interception**:
+   If `cargo build` exits with a non-zero code, the compiler intercepts the standard error and parses `cargo`'s structured JSON diagnostics.
+2. **Context Gathering**:
+   The recovery system extracts:
+   - The exact compiler error code (e.g., `E0308`, `E0277`).
+   - The file, line, and column offsets of the failure.
+   - The surrounding source code context (the target Rust snippet).
+   - The corresponding original Python source block.
+3. **Semantic Diagnostic Reasoner**:
+   Under `--review-failures`, the gathered context is transmitted to the local Ollama/Gemini validation model. The model analyzes the mismatched structural assumptions (such as ownership borrowing violations, missing standard imports, or mismatched type bounds).
+4. **Interactive Auto-Healing and HITL Triage**:
+   - The compiler suspends and prompts the user in the **Triage Console**.
+   - The developer can choose to let the model **Auto-Heal** the code (generating a corrected patch), manually edit the file (`[e]`), retry the build (`[r]`), or accept/quit.
+   - This iterative loop continues until the downstream target compiler validates the output with a clean build.
+
+This target compilation recovery ensures that even when the primary compiler's assumptions are slightly misaligned with Rust's strict safety guarantees, the target program is automatically healed before output.
+
 ---
 
 ## py2rust: Connecting Theory to Practice

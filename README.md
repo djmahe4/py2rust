@@ -109,6 +109,8 @@ graph TD
 - **Platform-Aware Context Gathering**: Securely retrieves semantic and surrounding symbol context using native platforms (e.g. `rg`/`grep`) with recursive fallback parsing.
 - **Append-Only JSONL Storage**: Logs robust validation history (`.py2rust/validation_history.jsonl`) and Generalized Improvement Patterns (`.py2rust/patterns.jsonl`).
 - **Premium Suggestion Engine**: Recommends colorized, highly descriptive, interactive GitHub-style Markdown code modifications without altering user source code.
+- **🛠️ Compiler & Cargo Error Recovery**: Automatically intercepts downstream `cargo check` compile errors (lifetime, borrowing, syntax) and py2rust frontend compilation exceptions (`CompilerError`), leveraging local Ollama/Gemini validation models to semantically explain the error and suggest fixes.
+- **💻 Interactive HITL Triage Dashboard**: Halts compilation on errors when `--review-failures` is enabled, presenting an interactive console triage dashboard to inspect diagnostics, view explanations, modify source code on the fly (`[e] Edit`), retry compilation (`[r] Retry`), or skip/abort.
 
 ### ❌ Forbidden Features (raises `UnsupportedFeatureError`)
 
@@ -226,6 +228,9 @@ py2rust input.py --validate --ollama-model llama3
 
 # Enable active pattern learning and suggest fixes based on past failures
 py2rust input.py --validate --learn-patterns --apply-learned-patterns
+
+# Enable interactive error recovery and triage dashboard on compiler/cargo failure
+py2rust input.py --validate --review-failures
 ```
 
 ### Environment Variables

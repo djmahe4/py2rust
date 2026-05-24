@@ -519,6 +519,27 @@ This is a **pattern-matching DFA**: each `isinstance` check is a transition; eac
 
 ---
 
+## 5. Closed-Loop Validation, SQLite Caching, and Interactive Error Recovery
+
+Beyond classic frontend and backend phases, `py2rust` introduces an advanced **post-processing verification and feedback pipeline** ensuring semantic correctness and resilient compilation.
+
+### Closed-Loop Semantic Equivalence
+*   **LLM Verification**: Compares Python input source logic against generated Rust code using local LLM models (e.g. `deepseek-coder`) to verify functional equivalence.
+*   **Context Steered Reasoning**: Employs structural name mapping context (`Qname`, `Qglobal_flow`, `Qcall`) gathered from AST inspection to steer validator models, eliminating false negatives on intentional lowering alterations.
+
+### Durable SQLite Caching (`validations.db`)
+*   To minimize equivalence verification latency on large codebases, results are cached in a local SQLite database (`.py2rust/validations.db`).
+*   **Compound SHA-256 Signature**: Resolves cache queries instantly by looking up a compound SHA-256 fingerprint:
+    $$\text{signature} = \text{SHA-256}(\text{python\_source} + \text{rust\_source} + \text{compiler\_config})$$
+*   **WAL Mode Concurrency**: Uses WAL (Write-Ahead Logging) journal mode for fast, high-concurrency read-write operations during incremental compiling.
+
+### Cargo & Compiler Error Recovery
+*   **Dynamic Interception**: Automatically intercepts frontend compiler exceptions (`CompilerError`) and downstream Rust linter failures (`cargo check` stderr).
+*   **LLM Diagnostics Explainer**: When `--review-failures` is enabled and Ollama is online, it translates complex lifetime, borrow-checker, or syntax errors into straightforward markdown explanations and suggests direct, actionable fixes.
+*   **Human-in-the-Loop (HITL) Interactive Console**: Suspends compilation on error to present a console triage dashboard, letting developers accept a verified state with a persistent `is_hitl = 1` flag, edit the source code on the fly (`[e] Edit`), retry (`[r] Retry`), or skip.
+
+---
+
 ## py2rust: Complete Phase Map
 
 ```mermaid

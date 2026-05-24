@@ -18,6 +18,7 @@
 4. [Part C: Intermediate Code Generation (ICG)](#part-c-intermediate-code-generation)
    - [Intermediate Languages and Graphical Representations](#6-intermediate-languages)
    - [Alternative Representations (TAC, Quadruples, Triples)](#7-alternative-representations)
+   - [Syntax-Directed Validation and Validation Caching](#74-syntax-directed-validation-equivalency-verification-and-validation-caching)
 5. [py2rust: Connecting Theory to Practice](#py2rust-connecting-theory-to-practice)
 6. [Summary Table](#summary-table)
 
@@ -236,6 +237,37 @@ A structure with three fields: `(op, arg1, arg2)`. The result is implicitly the 
 > [!NOTE]
 > **Why py2rust uses Tree IR over TAC?**  
 > For source-to-source translation (Python → Rust), a Tree IR preserves the high-level control structures (`if`, `while`, `match`) which Rust supports natively. Flattening to TAC would lose the "idiomatic" nature of the generated Rust code.
+
+### 7.4 Syntax-Directed Validation, Equivalency Verification, and Validation Caching
+
+Translating source code via a transpiler is an attribute-driven semantic mapping process. However, to guarantee that the synthesized Rust target is semantically equivalent to the Python source, **py2rust** introduces a syntax-directed verification pipeline equipped with SQLite-backed validation caching:
+
+1. **Semantic Attribute Extraction (Neo Patterns)**:
+   During AST-to-IR lowering, the compiler extracts synthesized semantic context:
+   - `Qname`: The fully-qualified name paths of classes and methods.
+   - `Qglobal_flow`: Global resource operations or external module access.
+   - `Qcall`: Call sites and dynamic arguments.
+   
+2. **Compound Fingerprint Generation**:
+   A deterministic SHA-256 validation fingerprint is generated using:
+   - The original Python source code segment.
+   - The compiled Rust target code segment.
+   - The translation configuration options (e.g., target compilation flags, type annotation strategies).
+   
+   $$\text{validation\_fingerprint} = \text{SHA-256}(\text{python\_source} + \text{generated\_rust} + \text{compiler\_config})$$
+
+3. **Validation Cache Strategy (`validations.db`)**:
+   - The compiler maintains a lightweight `validations.db` database inside the app directory.
+   - If a matching `validation_fingerprint` exists in the cache and has been verified or manually approved, the validation step is bypassed completely, enabling instant incremental compilation.
+   - If a mismatch or cache-miss occurs, the equivalence checker executes a semantic analysis validation.
+
+4. **Human-in-the-Loop (HITL) Triage & Manual Certification**:
+   - When automated semantic validation fails (due to highly dynamic behaviors, complex loops, or lookahead anomalies), and `--review-failures` is active, compilation suspends.
+   - The compiler enters the **Interactive HITL Triage Console**.
+   - The developer can choose to **manually certify** that the translation is semantically correct.
+   - Upon certification, an override entry is written to `validations.db` setting `is_hitl = 1`. This permanently flags the specific compilation fingerprint as valid, preventing future verification stalls.
+
+This architectural integration guarantees compiler safety without compromising incremental build speeds.
 
 ---
 

@@ -137,6 +137,21 @@ if arg.annotation is None:
     )
 ```
 
+#### Modern AI-Assisted Syntax Error Recovery & Interactive Triage
+
+While classic compilers rely on rigid phrase-level or panic-mode recovery, `py2rust` implements an **AI-Assisted Syntax and Semantic Error Recovery Engine** (Wave 33 extension). When the compiler encounters an unsupported syntax construct, a type mismatch, or a parser exception:
+
+1. **Interception**: The compiler intercepts the raised `CompilerError` (such as `UnsupportedFeatureError` or `ParseError`).
+2. **Context-Rich Diagnostics**: If `--review-failures` is enabled and Ollama/Gemini is online, the compiler gathers the surrounding source context and queries the LLM to:
+   - Provide a clear, natural-language explanation of the grammar mismatch or subset constraint.
+   - Suggest a statically compliant, semantically equivalent Python alternative to bypass the limitation.
+3. **Interactive HITL Triage Console**: Compilation is temporarily suspended, presenting a developer dashboard in the terminal. The developer can choose to:
+   - **`[e] Edit`**: Open their system `$EDITOR` (e.g. `nano`, `vim`) to immediately modify the source Python code on the fly.
+   - **`[r] Retry`**: Re-invoke the parser to immediately test the edited code.
+   - **`[q] Quit`**: Abort the compilation immediately.
+
+This merges classical static syntax analysis with dynamic, human-in-the-loop recovery, converting hard compiler aborts into interactive, cooperative alignment sessions.
+
 ---
 
 ## 2. Review of Context-Free Grammars
@@ -779,3 +794,5 @@ Each `_parse_X()` call corresponds to expanding a non-terminal in py2rust's gram
 | **`_parse_stmt`** | py2rust's predictive dispatch method — the LL(1) table in code |
 | **`_parse_type`** | py2rust's left-factored type-annotation parser |
 | **`_get_attr_parts`** | py2rust's recursive chain collector — equivalent to right-recursive grammar |
+| **Interactive Triage Console** | Interactive shell menu prompting user intervention on compiler warning or check failures. Supports `[e] Edit`, `[r] Retry`, `[s] Skip`, `[q] Quit`. |
+| **CompilerError Recovery** | The mechanism by which frontend compilation issues (`UnsupportedFeatureError`, `ParseError`) are captured and analyzed by Ollama/Gemini to suggest statically compliant Python alternatives. |

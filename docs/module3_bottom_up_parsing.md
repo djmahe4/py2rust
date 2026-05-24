@@ -515,6 +515,21 @@ flowchart TD
     class ShiftAs,ReduceWith,ShiftFrom,ParseExpr action;
 ```
 
+### Modern AI-Guided Parsing Diagnostics & Mismatch Analysis
+
+In classical bottom-up LALR(1) or PEG parsers, when a syntax error is hit, the parsing table transition maps to an `error` state. The parser halts and raises a syntax exception, or attempts panic-mode recovery.
+
+In `py2rust`'s validation and error recovery architecture, we supplement CPython's bottom-up parser errors and py2rust frontend compiler exceptions (`CompilerError`) with an **AI-Guided Parsing Mismatch and Diagnostic Engine**:
+
+1. **Interception**: If the front-end parser encounters a structural mismatch (e.g., lookahead violations in complex context managers `with/as` or state-machine generator expressions `yield`), it throws a subclass of `CompilerError`.
+2. **Contextual Analysis**: Under `--review-failures`, the parser packages the failed source code segment and the specific location markers (mismatch line/column offset).
+3. **Semantic Guidance**: The local Ollama/Gemini validation model leverages structural syntax-directed knowledge to explain:
+   - Why the bottom-up lookahead structure rejected the syntax pattern.
+   - How to refactor the complex block (like splitting a multi-clause nested context manager or rewriting a custom iterator state machine) into a statically parseable and lowered Python subset.
+4. **Interactive Dashboard**: Suspends compilation, giving the developer direct choices (`[e] Edit` source in a temp file, `[r] Retry` parser pass, or `[q] Quit`).
+
+This bridges the gap between mathematically rigid lookahead sets and friendly, developer-cooperative compilation workflows.
+
 ---
 
 ## py2rust Frontend: Where Bottom-Up Theory Is Applied
