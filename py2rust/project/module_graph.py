@@ -73,84 +73,85 @@ class ModuleGraph:
         If a cycle of length <= 2 is detected, raises ValueError.
         If a cycle of length > 2 is detected, logs/warns and breaks it, continuing topological sort.
         """
-        # First, construct in-degree map and adj list of active nodes
-        adj: Dict[str, Set[str]] = {node: set() for node in self.modules}
-        in_degree: Dict[str, int] = {node: 0 for node in self.modules}
+        while True:
+            # First, construct in-degree map and adj list of active nodes
+            adj: Dict[str, Set[str]] = {node: set() for node in self.modules}
+            in_degree: Dict[str, int] = {node: 0 for node in self.modules}
 
-        # For topological sort, if 'u' imports 'v', then 'v' must come BEFORE 'u'.
-        # So we have a directed edge v -> u.
-        # in_degree[u] increases.
-        for u, neighbors in self.dependencies.items():
-            for v in neighbors:
-                if v in self.modules and v != u:
-                    if u not in adj[v]:
-                        adj[v].add(u)
-                        in_degree[u] += 1
+            # For topological sort, if 'u' imports 'v', then 'v' must come BEFORE 'u'.
+            # So we have a directed edge v -> u.
+            # in_degree[u] increases.
+            for u, neighbors in self.dependencies.items():
+                for v in neighbors:
+                    if v in self.modules and v != u:
+                        if u not in adj[v]:
+                            adj[v].add(u)
+                            in_degree[u] += 1
 
-        # Kahn's algorithm
-        # Find all nodes with in_degree 0
-        queue = [node for node in self.modules if in_degree[node] == 0]
-        # Sort queue for determinism
-        queue.sort()
-
-        order = []
-        while queue:
+            # Kahn's algorithm
+            # Find all nodes with in_degree 0
+            queue = [node for node in self.modules if in_degree[node] == 0]
+            # Sort queue for determinism
             queue.sort()
-            u = queue.pop(0)
-            order.append(u)
 
-            for v in sorted(adj[u]):
-                in_degree[v] -= 1
-                if in_degree[v] == 0:
-                    queue.append(v)
+            order = []
+            while queue:
+                queue.sort()
+                u = queue.pop(0)
+                order.append(u)
 
-        if len(order) == len(self.modules):
-            return order
+                for v in sorted(adj[u]):
+                    in_degree[v] -= 1
+                    if in_degree[v] == 0:
+                        queue.append(v)
 
-        # There is a cycle!
-        remaining_nodes = [node for node in self.modules if node not in order]
-        
-        # DFS to find a cycle among remaining nodes
-        visited: Dict[str, int] = {} # 0=unvisited, 1=visiting, 2=visited
-        cycle_path: List[str] = []
+            if len(order) == len(self.modules):
+                return order
 
-        def dfs(node: str) -> List[str] | None:
-            visited[node] = 1
-            cycle_path.append(node)
-            for dep in sorted(self.dependencies.get(node, set())):
-                if dep in remaining_nodes:
-                    if visited.get(dep, 0) == 1:
-                        cycle_path.append(dep)
-                        start_idx = cycle_path.index(dep)
-                        return cycle_path[start_idx:]
-                    elif visited.get(dep, 0) == 0:
-                        res = dfs(dep)
-                        if res:
-                            return res
-            cycle_path.pop()
-            visited[node] = 2
-            return None
+            # There is a cycle!
+            remaining_nodes = [node for node in self.modules if node not in order]
+            
+            # DFS to find a cycle among remaining nodes
+            visited: Dict[str, int] = {} # 0=unvisited, 1=visiting, 2=visited
+            cycle_path: List[str] = []
 
-        cycle = None
-        for node in sorted(remaining_nodes):
-            if visited.get(node, 0) == 0:
-                cycle = dfs(node)
-                if cycle:
-                    break
+            def dfs(node: str) -> List[str] | None:
+                visited[node] = 1
+                cycle_path.append(node)
+                for dep in sorted(self.dependencies.get(node, set())):
+                    if dep in remaining_nodes:
+                        if visited.get(dep, 0) == 1:
+                            cycle_path.append(dep)
+                            start_idx = cycle_path.index(dep)
+                            return cycle_path[start_idx:]
+                        elif visited.get(dep, 0) == 0:
+                            res = dfs(dep)
+                            if res:
+                                return res
+                cycle_path.pop()
+                visited[node] = 2
+                return None
 
-        if cycle:
-            unique_cycle = list(dict.fromkeys(cycle[:-1]))
-            if len(unique_cycle) <= 2:
-                cycle_str = " -> ".join(cycle)
-                raise ValueError(f"Circular dependency detected: {cycle_str}")
-            else:
-                # Cycle of length > 2 is broken!
-                # Break it by removing the edge between the first two elements of the cycle
-                u_mod = unique_cycle[0]
-                v_mod = unique_cycle[1]
-                if v_mod in self.dependencies[u_mod]:
-                    self.dependencies[u_mod].remove(v_mod)
-                # Recursively re-run topological sort
-                return self.topological_sort()
+            cycle = None
+            for node in sorted(remaining_nodes):
+                if visited.get(node, 0) == 0:
+                    cycle = dfs(node)
+                    if cycle:
+                        break
 
-        raise ValueError("Module graph contains cycles that could not be resolved.")
+            if cycle:
+                unique_cycle = list(dict.fromkeys(cycle[:-1]))
+                if len(unique_cycle) <= 2:
+                    cycle_str = " -> ".join(cycle)
+                    raise ValueError(f"Circular dependency detected: {cycle_str}")
+                else:
+                    # Cycle of length > 2 is broken!
+                    # Break it by removing the edge between the first two elements of the cycle
+                    u_mod = unique_cycle[0]
+                    v_mod = unique_cycle[1]
+                    if v_mod in self.dependencies[u_mod]:
+                        self.dependencies[u_mod].remove(v_mod)
+                    # Loop continues iteratively
+                    continue
+
+            raise ValueError("Module graph contains cycles that could not be resolved.")

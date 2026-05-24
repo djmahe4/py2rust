@@ -16,10 +16,34 @@ class ValidationStore:
             
         self.db_path = db_path
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.conn = None
+        self._get_conn()
         self._init_db()
 
+    def _get_conn(self):
+        if self.conn is None:
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        return self.conn
+
+    def close(self):
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
     def _init_db(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             with conn:
                 conn.execute("PRAGMA journal_mode = WAL;")
@@ -44,8 +68,8 @@ class ValidationStore:
                     CREATE INDEX IF NOT EXISTS idx_hashes 
                     ON validation_cache (python_hash, rust_hash, compiler_hash);
                 """)
-        finally:
-            conn.close()
+        except Exception:
+            pass
 
     def save_validation(self, record: dict):
         py_src = record.get("python_source") or record.get("python_code") or ""
@@ -64,23 +88,20 @@ class ValidationStore:
         
         ts = record.get("timestamp", datetime.now(timezone.utc).isoformat())
         
-        conn = sqlite3.connect(self.db_path)
-        try:
-            with conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO validation_cache 
-                    (id, symbol_name, python_hash, rust_hash, compiler_hash, verdict, confidence, reasoning, suggested_fix, timestamp, python_source, generated_rust, is_hitl)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (comp_id, symbol, py_hash, rust_hash, comp_hash, verdict, confidence, reasoning, suggested_fix, ts, py_src, rust_src, is_hitl))
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        with conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO validation_cache 
+                (id, symbol_name, python_hash, rust_hash, compiler_hash, verdict, confidence, reasoning, suggested_fix, timestamp, python_source, generated_rust, is_hitl)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (comp_id, symbol, py_hash, rust_hash, comp_hash, verdict, confidence, reasoning, suggested_fix, ts, py_src, rust_src, is_hitl))
 
     def get_cached_validation(self, python_source: str, generated_rust: str, compiler_config_str: str = "default") -> Optional[dict]:
         py_hash = hashlib.sha256(python_source.encode("utf-8")).hexdigest()
         rust_hash = hashlib.sha256(generated_rust.encode("utf-8")).hexdigest()
         comp_hash = hashlib.sha256(compiler_config_str.encode("utf-8")).hexdigest()
         
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("""
@@ -92,15 +113,13 @@ class ValidationStore:
                 return dict(row)
         except Exception:
             pass
-        finally:
-            conn.close()
         return None
 
     def get_validations(self) -> list[dict]:
         records = []
         if not os.path.exists(self.db_path):
             return []
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
         try:
             conn.row_factory = sqlite3.Row
             cursor = conn.execute("SELECT * FROM validation_cache ORDER BY timestamp DESC")
@@ -108,6 +127,5 @@ class ValidationStore:
                 records.append(dict(row))
         except Exception:
             pass
-        finally:
-            conn.close()
         return records
+

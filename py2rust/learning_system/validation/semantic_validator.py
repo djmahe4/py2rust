@@ -14,6 +14,20 @@ class SemanticValidator:
             from .validation_store import ValidationStore
             self.store = ValidationStore(db_path)
 
+    def close(self):
+        if self.store:
+            self.store.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
+
     def get_symbol_context(self, symbol_name: str, file_path: str = None) -> str:
         # Platform-aware context gathering checking for tools first
         # 1. On Windows, check for PowerShell 'Select-String' or findstr
