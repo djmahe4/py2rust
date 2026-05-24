@@ -1,5 +1,12 @@
 # py2rust
 
+[![PyPI version](https://img.shields.io/pypi/v/py2rust.svg)](https://pypi.org/project/py2rust/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/py2rust.svg)](https://pypi.org/project/py2rust/)
+[![Python versions](https://img.shields.io/pypi/pyversions/py2rust.svg)](https://pypi.org/project/py2rust/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg)](https://www.rust-lang.org)
+[![CI](https://github.com/djmahe4/py2rust/workflows/CI/badge.svg)](https://github.com/djmahe4/py2rust/actions)
+
 A **Python-to-Rust subset compiler** built following formal compiler design principles: frontend, middle-end, and backend, with clear separation of concerns.
 
 ## Overview
@@ -181,6 +188,8 @@ pytest py2rust/tests/test_repo_stress.py -v
 ## Installation
 
 ```bash
+git clone https://github.com/djmahe4/py2rust.git
+cd py2rust
 pip install -e .
 ```
 

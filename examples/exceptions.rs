@@ -60,8 +60,8 @@ pub fn divide(a: i32, b: i32) -> Result<i32, PyError> {
 }
 
 pub fn __py_main() -> Result<(), PyError> {
-    let mut x: i32 = 0;
     let mut y: i32 = 0;
+    let mut x: i32 = 0;
 
     {
         let __result = (|| -> Result<TryResult<()>, PyError> {
