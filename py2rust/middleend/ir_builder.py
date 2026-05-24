@@ -1574,7 +1574,7 @@ class IRBuilder:
                                 method=expr.method,
                                 args=tuple(ir_args),
                                 result_type=ir_ret,
-                                is_fallible=expr.method not in {"push", "insert", "remove", "clone", "to_string", "chars", "count", "extend", "append", "get", "next"},
+                                is_fallible=True,
                                 mutates_self=mutates_self,
                             )
                 ir_ret = IRExternalPythonType(module=val_type.module, name=f"{val_type.name or ''}.{expr.method}()", is_local=val_type.is_local)

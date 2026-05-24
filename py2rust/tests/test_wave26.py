@@ -171,4 +171,4 @@ def test_workspace_reexports_and_mod_decls():
         # 4. Verify src/a/b/c.rs is generated correctly
         c_file = output_path / "src" / "a" / "b" / "c.rs"
         assert c_file.exists()
-        assert c_file.read_text() == "// c rust code"
+        assert c_file.read_text() == "#![allow(warnings)]\n#![allow(clippy::all)]\n// c rust code"

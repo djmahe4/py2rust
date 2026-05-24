@@ -122,7 +122,7 @@ class WorkspaceGenerator:
             ""
         ])
 
-        (src_dir / "errors.rs").write_text("\n".join(errors_content))
+        (src_dir / "errors.rs").write_text("#![allow(warnings)]\n#![allow(clippy::all)]\n" + "\n".join(errors_content))
 
         # Identify all logical module paths and create respective files
         module_structure: dict[tuple[str, ...], str] = {}
@@ -154,7 +154,7 @@ class WorkspaceGenerator:
                 # This is a top-level module that is NOT the entry point.
                 # It must be written to its own file, e.g. src/math_utils.rs
                 mod_file = src_dir / f"{parts[0]}.rs"
-                mod_file.write_text(code)
+                mod_file.write_text("#![allow(warnings)]\n#![allow(clippy::all)]\n" + code)
                 continue
                 
             # Nested module, e.g. (foo, bar, baz)
@@ -163,7 +163,7 @@ class WorkspaceGenerator:
             
             # Write nested module file, e.g. src/foo/bar/baz.rs
             mod_file = parent_dir / f"{parts[-1]}.rs"
-            mod_file.write_text(code)
+            mod_file.write_text("#![allow(warnings)]\n#![allow(clippy::all)]\n" + code)
 
         # Build parent declarations dynamically.
         # Include all intermediate module paths to make sure empty parent modules still exist and declare children.
@@ -179,7 +179,7 @@ class WorkspaceGenerator:
             mod_decls = "\n".join(f"pub mod {child};\npub use {child}::*;" for child in sorted(children)) + "\n"
             
             parent_code = module_structure.get(parent_parts, "")
-            combined_code = mod_decls + "\n" + parent_code
+            combined_code = "#![allow(warnings)]\n#![allow(clippy::all)]\n" + mod_decls + "\n" + parent_code
             
             # Write to parent file, e.g. src/foo/bar.rs
             parent_file = src_dir.joinpath(*parent_parts).with_suffix(".rs")
@@ -198,7 +198,7 @@ class WorkspaceGenerator:
         if matched_entry_key:
             entry_code = module_structure[matched_entry_key]
             
-        combined_entry = top_level_decls + "\n" + top_level_reexports + "\n" + entry_code
+        combined_entry = "#![allow(warnings)]\n#![allow(clippy::all)]\n" + top_level_decls + "\n" + top_level_reexports + "\n" + entry_code
         
         # Decide lib.rs vs main.rs based on entry_point or presence of a main-like function
         is_bin = bool(entry_point) or "fn main(" in combined_entry or "pub fn main(" in combined_entry
