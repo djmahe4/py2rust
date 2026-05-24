@@ -25,6 +25,8 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
 - f-strings: `f"Value: {val:.2f}"` mapped to Rust `format!` macro
 - `pass` statements and `...` (Ellipsis)
 - Limited imports: `typing` and `enum` modules are ignored to support standard Python type declarations
+- **Repository-Scale Imports**: Full support for absolute and relative cross-module imports (e.g. `from .module import symbol` or `import module`)
+- **`sys.path` Resolution**: Custom search paths (injectable via `ProjectConfig` or CLI flags) prioritizing search scopes for absolute imports
 
 #### Primitive Types
 - `int` → `i32`
@@ -41,8 +43,10 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
 #### Control Flow
 - `if` / `elif` / `else`
 - `while` loops
-- `for` loops in `range(start, stop)` or `range(start, stop, step)` form
+- General iterable iteration (e.g. `for x in collection:`) and `range()`-based iteration
 - `break` and `continue`
+- Generators via `yield` and `yield from` (desugared to state-machine `dyn Iterator` structs)
+- Context managers via `with` and `async with` (lowered to scoped blocks with RAII-based automatic resource cleanup/unlocking)
 
 #### Collections
 - Homogeneous lists: `list[int]`, `list[float]`, etc. → `Vec<T>`
@@ -65,6 +69,7 @@ Python Source → Python AST → Custom AST → Symbol Table + Semantic Analysis
 - Protocols: `typing.Protocol` mapped to Rust `trait`
 - Method overloading by argument count
 - Automatic structural matching for trait implementations
+- Decorators on classes/methods: `@staticmethod`, `@classmethod`, `@property`, `@abstractmethod`, `@override`, `@dataclass`
 
 #### Python Interoperability (Plugins)
 - Call external Python libraries (NumPy, OpenCV, PyTorch, etc.) via `ExternalObject` wrapper
@@ -101,39 +106,45 @@ graph TD
 - Missing type hints on function parameters/returns
 - Dynamic typing, `Any`, `typing.Any`
 - `eval`, `exec`, `globals`, `locals`
-- Decorators
-- Generators, `yield`
-- Custom module imports (only `typing` and `enum` are ignored)
-- Context managers (`with`)
+- Arbitrary/Custom decorators (except supported ones like `@staticmethod`, `@classmethod`, `@property`, `@abstractmethod`, `@override`, `@dataclass`)
+- Third-party imports without wrappers or mocking (only local workspace/sys_path modules, or mocked packages are resolved)
 - Ternary expressions (`x if cond else y`)
-- Multiple inheritance
+- Multiple inheritance (discovery and member flattening are supported, but arbitrary nested dynamic base structures are restricted)
+- **Circular/Recursive import cycles** (raises `ValueError` via Module Graph cycle detection)
+- **Circular/Recursive struct/class field layouts without indirection** (raises `SemanticError` in type checking to prevent un-sized/infinite Rust types)
 
 #### Class Features
 - `self` without type annotation on first parameter (Python requirement)
-- Property decorators
-- Class methods (`@classmethod`)
-- Static methods (`@staticmethod`)
 - `__new__` constructor
-- Multiple constructors with same arity
+- Multiple constructors with same arity (method overloading by argument count is supported, but arities must be distinct)
 - Keyword arguments in function/method calls
 
 #### Syntax Restrictions
-- Only single-target assignments
-- Only `range()` in for loops
-- Only simple comparisons (no chained comparisons)
+- Only single-target assignments (multiple assignments like `a = b = c` are not supported, but tuple/list unpacking destructuring like `x, y = z` is supported)
+- Only simple comparisons (no chained comparisons like `a < b < c`)
 - No walrus operator (`:=`)
 
 ## Type Mapping
 
-| Python         | Rust                |
-|----------------|---------------------|
-| `int`          | `i32`               |
-| `float`        | `f64`               |
-| `bool`         | `bool`              |
-| `str`          | `String`            |
-| `list[T]`      | `Vec<T>`            |
-| `dict[K, V]`   | `HashMap<K, V>`     |
-| `ClassName`    | `ClassName` (struct)|
+| Python | Rust | Description |
+|---|---|---|
+| `None` / `NoneType` | `()` | Unit type |
+| `int` | `i32` | 32-bit signed integer |
+| `float` | `f64` | 64-bit float |
+| `bool` | `bool` | Boolean |
+| `str` | `String` | Owned string |
+| `list[T]` | `Vec<T>` | Dynamic array |
+| `dict[K, V]` | `HashMap<K, V>` | Hash map |
+| `set[T]` | `HashSet<T>` | Hash set |
+| `tuple[T1, T2]` | `(T1, T2)` | Fixed-size tuple |
+| `Optional[T]` / `T \| None` | `Option<T>` | Option type |
+| `Union[A, B]` / `A \| B` | Custom `enum` | Custom algebraic data type |
+| `deque[T]` | `VecDeque<T>` | Double-ended queue |
+| `heap[T]` / `heapq` | `BinaryHeap<Reverse<T>>` | Min-heap wrapper |
+| `Iterator[T]` / `Iterable[T]` | `Box<dyn Iterator<Item = T>>` | Trait object iterator |
+| `Generator[Y, S, R]` | `Box<dyn Iterator<Item = Y>>` | State-machine iterator |
+| `open` (File) | `FileHandle` | Scoped file handle |
+| `ClassName` | `ClassName` | Custom struct/class |
 
 ## Repository-Scale Stress Testing & Validation
 
@@ -146,6 +157,9 @@ Supported stress test assertions include:
 - **Cross-Module Constructor Arity Checking**: Ensures constructor arguments are validated against the defining class signature across modules.
 - **Circular Import Detection**: Gracefully detects and breaks infinite import loops.
 - **Alias Conflict Verification**: Confirms multiple identically named imports with unique aliases do not cause namespace collisions.
+- **`sys.path` Mismatches**: Asserts that absolute imports referencing invalid paths outside of specified search scopes fail.
+- **Nested Import Name Error Propagation**: Verifies that transitive import errors inside deep dependencies bubble up cleanly.
+- **Circular Struct Field Layouts**: Rejects infinite-size recursive definitions at type checking time.
 
 Run stress tests:
 ```bash
@@ -431,6 +445,18 @@ py2rust/
 │   ├── ir/
 │   │   └── ir_nodes.py      # Strongly-typed IR nodes (frozen dataclasses)
 │   │
+│   ├── project/             # Repository-scale multi-module compilation
+│   │   ├── project_config.py # Multi-module project compiler config (sys_path)
+│   │   ├── repo_compiler.py # Core repository compiler driver
+│   │   ├── module_graph.py  # Module dependency graph with cycle detection
+│   │   ├── import_resolver.py # Absolute/relative import resolver with sys_path
+│   │   ├── package_scanner.py # Discovers all python files in workspace
+│   │   └── build_cache.py   # Caches metadata for incremental compilation
+│   │
+│   ├── learning_system/     # Closed-loop semantic pattern learning system
+│   │   ├── validation/      # Validates semantic equivalent output using LLM
+│   │   └── learning/        # Pattern generalizations & interactive markdown suggestions
+│   │
 │   ├── plugins/
 │   │   ├── __init__.py
 │   │   └── python_wrapper_plugin.py # Interop logic for external libs
@@ -444,7 +470,7 @@ py2rust/
 │   │   ├── logger.py        # Logging setup
 │   │   └── visitor.py       # Generic visitor pattern
 │   │
-│   └── tests/               # pytest test suite (310 tests)
+│   └── tests/               # pytest test suite (328 tests)
 │
 ├── examples/                # Input/output examples
 └── pyproject.toml
