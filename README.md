@@ -187,10 +187,18 @@ pytest py2rust/tests/test_repo_stress.py -v
 
 ## Installation
 
+## Installation
+
+You can install py2rust directly from PyPI:
+
 ```bash
-git clone https://github.com/djmahe4/py2rust.git
-cd py2rust
-pip install -e .
+pip install py2rust
+```
+
+Or, to get the latest development version directly from GitHub:
+
+```bash
+pip install git+https://github.com/djmahe4/py2rust.git
 ```
 
 Requires Python ≥ 3.11 and Rust/`rustc` (stable) for `--verify`.

@@ -8,6 +8,10 @@ on:
       - "copilot/**"
     tags:
       - 'v*'
+    paths:
+      - '**'
+      - '!**.md'
+      - '!docs/**'
   # pull_request:
   #   branches:
   #     - main

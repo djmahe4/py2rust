@@ -54,7 +54,7 @@ fn main() -> i32 {
 Clone the repository and install it in editable/developer mode:
 ```bash
 # From the root of the py2rust project
-pip install -e .
+pip install git+https://github.com/djmahe4/py2rust.git
 ```
 OR
 ```bash
