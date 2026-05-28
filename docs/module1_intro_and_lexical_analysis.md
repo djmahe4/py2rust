@@ -103,12 +103,12 @@ Translates the annotated AST into an **Intermediate Representation** — a simpl
 #### Phase 5: Code Optimization
 Improves the IR for performance (speed, size) without changing semantics.
 
-**py2rust:** Structural optimisations in `rust_codegen.py` (e.g., `_collect_mutated_vars` for `mut` elision, `_strip_parens` for clean output). Heavy machine-code optimization delegated to `rustc`/LLVM.
+**py2rust:** Structural optimisations in the codegen backend (e.g., `_collect_mutated_vars` in `codegen_helpers.py` for `mut` elision, `_strip_parens` in `rust_codegen.py` for clean output). Heavy machine-code optimization delegated to `rustc`/LLVM.
 
 #### Phase 6: Code Generation
 Translates the (optimized) IR into the target language.
 
-**py2rust:** `py2rust/backend/rust_codegen.py` — 2 800-line `RustCodegen` class that emits idiomatic Rust source text.
+**py2rust:** `py2rust/backend/rust_codegen.py` — a decoupled `RustCodegen` orchestrator class (inheriting from `ExprCodegenMixin` and `GeneratorCodegenMixin`) that works in tandem with helper modules (`expr_codegen.py`, `generator_codegen.py`, `codegen_helpers.py`) to emit idiomatic Rust source text.
 
 #### The compile_file Pipeline
 
@@ -176,7 +176,7 @@ py2rust is itself built with compiler writing tools — it just uses **Python-na
 **`ast` as a compiler writing tool:**
 
 ```python
-# py2rust/frontend/parser.py:151-161
+# py2rust/frontend/parser.py:158-168
 def parse(self) -> Module:
     try:
         tree = ast.parse(self.source, filename=self.filename)  # ← compiler tool
@@ -395,7 +395,7 @@ Tokens are specified using **regular expressions**. A regular expression describ
 Although py2rust does not write its own regex-based tokenizer, its **operator maps** are the functional equivalent of a token specification table:
 
 ```python
-# py2rust/frontend/parser.py:92-119
+# py2rust/frontend/parser.py:99-126
 _BINOP_MAP = {
     ast.Add:      "+",    # regex: \+
     ast.Sub:      "-",    # regex: \-
@@ -484,7 +484,7 @@ Python has several lexical features that go beyond standard regular-language tok
 py2rust's `_parse_type` method is a **recursive token recognizer** for type annotations. It implements a DFA over AST node types rather than characters:
 
 ```python
-# parser.py:396-466 (condensed)
+# py2rust/frontend/parser.py:466-553 (condensed)
 def _parse_type(self, node):
     # State 0: What kind of node is this?
     if isinstance(node, ast.Name):

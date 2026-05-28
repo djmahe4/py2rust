@@ -57,7 +57,7 @@ flowchart TD
 ```
 
 > [!IMPORTANT]
-> CPython's `pegen` is an LR/PEG hybrid. When you write `ast.parse(source)` in `parser.py:153`, you are invoking a highly optimised bottom-up parser that has already handled all of Python's precedence, associativity, and shift-reduce conflicts for you.
+> CPython's `pegen` is an LR/PEG hybrid. When you write `ast.parse(source)` in `parser.py:160`, you are invoking a highly optimised bottom-up parser that has already handled all of Python's precedence, associativity, and shift-reduce conflicts for you.
 
 ---
 
@@ -125,7 +125,7 @@ ast.BinOp(
 )
 ```
 
-py2rust's `_parse_expr` at `parser.py:833` simply reads this already-reduced tree:
+py2rust's `_parse_expr` at `parser.py:906` simply reads this already-reduced tree:
 ```python
 if isinstance(node, ast.BinOp):
     op = _BINOP_MAP.get(type(node.op))   # {ast.Add: "+", ast.Mult: "*", ...}
@@ -224,7 +224,7 @@ The standard resolution (used by all practical parsers including CPython's) is:
 py2rust's `_parse_stmt` models the same resolution for Python's `if`/`elif`/`else` chains. The nested `orelse` attribute of `ast.If` encodes CPython's shift-preference: each `elif` is represented as a nested `ast.If` inside the outer `orelse`, mirroring how the LR parser shifted rather than reduced at each `elif` token.
 
 ```python
-# parser.py:589-620
+# py2rust/frontend/parser.py:675-693
 if isinstance(node, ast.If):
     cond      = self._parse_expr(node.test)
     then_body = tuple(self._parse_stmts(node.body))
@@ -278,7 +278,7 @@ The **precedence table** for arithmetic:
 The precedence of Python's binary operators is encoded in CPython's grammar productions themselves. py2rust only needs a flat **mapping** from CPython's already-precedence-resolved AST operator nodes to py2rust operator strings:
 
 ```python
-# parser.py:92-99
+# py2rust/frontend/parser.py:99-106
 _BINOP_MAP = {
     ast.Add:      "+",
     ast.Sub:      "-",
@@ -543,7 +543,7 @@ The py2rust `Parser` class sits one level *above* the LR machinery. But every st
 Because CPython's LALR(1) parser applied operator precedence during parsing, the `ast.BinOp` tree already encodes it. py2rust reads the pre-reduced tree:
 
 ```python
-# parser.py:833-845
+# py2rust/frontend/parser.py:935-947
 if isinstance(node, ast.BinOp):
     op = _BINOP_MAP.get(type(node.op))
     left  = self._parse_expr(node.left)   # deeper = higher precedence (reduced first)
@@ -556,7 +556,7 @@ if isinstance(node, ast.BinOp):
 The AST's nested `orelse` chain is the direct output of CPython's shift-reduce automaton:
 
 ```python
-# parser.py:595-609
+# py2rust/frontend/parser.py:680-693
 orelse = node.orelse
 while orelse:
     if len(orelse) == 1 and isinstance(orelse[0], ast.If):
@@ -570,7 +570,7 @@ while orelse:
 Type subscripts like `dict[str, list[int]]` are parsed as nested `ast.Subscript` nodes. py2rust handles this with a recursive descent that mirrors the structure produced by CPython's LR automaton:
 
 ```python
-# parser.py:411-445
+# py2rust/frontend/parser.py:481-509
 elif isinstance(node, ast.Subscript):
     if isinstance(node.value, ast.Name) and node.value.id in ("dict", "Dict"):
         if isinstance(node.slice, ast.Tuple):             # dict[K, V]
@@ -589,7 +589,7 @@ This recursive traversal is only possible because CPython's LALR parser already 
 py2rust propagates line and column numbers from CPython AST nodes into its own AST nodes — metadata that CPython's parser recorded during the bottom-up scan:
 
 ```python
-# parser.py:129-139
+# py2rust/frontend/parser.py:136-146
 def _err(self, msg, node, cls=ParseError, suggestion=None):
     line = getattr(node, "lineno", 0)        # line number from LR scan
     col  = getattr(node, "col_offset", 0) + 1

@@ -95,7 +95,7 @@ Remove computation whose result is never used. In the control-flow context, this
 
 **py2rust analogue:** After fixing the `IRSome` bug (Wave 19), the `describe_number` function no longer generated an unreachable `Ok(String::new())` below an exhaustive `if/else` — a structural decision that eliminated the `unreachable_code` warning triggered by `rustc`.
 
-See [`rust_codegen.py:1480-1491`](../py2rust/backend/rust_codegen.py#L1480) for `IRReturn` handling.
+See [`rust_codegen.py:1387-1415`](../py2rust/backend/rust_codegen.py#L1387) for `IRReturn` handling.
 
 #### 2.4 Copy Propagation
 
@@ -113,8 +113,8 @@ Replace expensive operations with cheaper equivalents.
 **py2rust analogue:** Python's `/` always produces `float`. Python's `//` is floor division. py2rust maps these using explicit strength reduction in `_gen_expr`:
 
 ```python
-# py2rust/backend/rust_codegen.py (IRBinOp handling)
-if op == "//":
+# py2rust/backend/expr_codegen.py (IRBinOp handling in _gen_binop)
+if expr.op == "//":
     # Strength-reduced: use floating-point floor then cast back
     return f"({left} as f64 / {right} as f64).floor() as i32"
 ```
@@ -144,7 +144,7 @@ For Rust specifically, `rustc` applies layout optimizations on `struct` types (f
 **py2rust analogue:** py2rust generates `#[derive(Clone, Debug)]` for all structs. When `serde_json` is detected, it also emits `#[derive(Serialize, Deserialize)]`. These derive macros influence LLVM code generation paths.
 
 ```python
-# py2rust/backend/rust_codegen.py:897-900
+# py2rust/backend/rust_codegen.py:736-739
 if self._uses_serde_json:
     self._emit(f"#[derive(Clone, Debug, Serialize, Deserialize)]")
 else:
@@ -182,7 +182,7 @@ Examine a small "window" (peephole) of consecutive instructions and replace with
 The `_strip_parens` method in `rust_codegen.py` is a local (peephole-like) optimization that removes redundant parentheses within a single expression:
 
 ```python
-# py2rust/backend/rust_codegen.py:545-558
+# py2rust/backend/rust_codegen.py:287-300
 def _strip_parens(self, s: str) -> str:
     """Strip outer parentheses from an expression string."""
     s = s.strip()
@@ -263,7 +263,7 @@ for i in range(n):
 py2rust performs a global `_collect_mutated_vars` pass over the entire function body before emitting any code. This is a form of global analysis that determines which variables need `mut` in Rust:
 
 ```python
-# py2rust/backend/rust_codegen.py:228-311
+# py2rust/backend/codegen_helpers.py:203-283
 def _collect_mutated_vars(stmts) -> set:
     """Recursively collect all variable names that are reassigned anywhere in the function."""
     mutated: set = set()
@@ -287,7 +287,7 @@ This global single-pass analysis is structurally equivalent to **live variable a
 Variables declared inside nested scopes (loops, `if` branches) are **hoisted** to the function's entry point. This models Python's function-scoped variables and ensures Rust's ownership rules are satisfied:
 
 ```python
-# py2rust/backend/rust_codegen.py:314-386 (_collect_decls)
+# py2rust/backend/codegen_helpers.py:286-355 (_collect_decls)
 def _collect_decls(stmts, ...) -> tuple[dict, set]:
     decls: dict = {}
     pre_declare: set = set()
@@ -368,7 +368,7 @@ The code generator must choose how source-language values map to target-language
 | `Union[A, B]` | Custom `enum AOrBUnion` | Tagged union (ADT) |
 | Python exception | `Result<T, PyError>` | Explicit error propagation |
 
-See [`rust_codegen.py:430-493`](../py2rust/backend/rust_codegen.py#L430) for `_get_rust_type()`.
+See [`rust_codegen.py:161-235`](../py2rust/backend/rust_codegen.py#L161) for `_get_rust_type()`.
 
 #### 6.3 Instruction Selection
 
@@ -379,7 +379,7 @@ For each IR node, the code generator must select appropriate target constructs. 
 A Python function call `describe_number(10)` where `x: Optional[int]` must emit `describe_number(Some(10))` in Rust, not just `describe_number(10)`. The `IRSome` node encodes this wrapping:
 
 ```python
-# py2rust/backend/rust_codegen.py:1870-1872
+# py2rust/backend/expr_codegen.py:71-73
 elif isinstance(expr, IRSome):
     val = self._gen_expr(expr.value)
     return f"Some({val})"   # Correct mapping for Option<T>
@@ -434,10 +434,11 @@ if x != 0 {  // Must be explicit
 py2rust's `_gen_expr` for `IRUnaryOpExpr` with `not` handles the `is_none()` special case:
 
 ```python
-# rust_codegen.py:1863-1866
-if isinstance(expr.operand_type, IROptionType):
-    return f"{operand}.is_none()"
-return f"(!({operand}))"
+# py2rust/backend/expr_codegen.py:64-67
+if expr.op == "not":
+    if isinstance(expr.operand.result_type, IROptionType):
+        return f"{operand}.is_none()"
+    return f"(!({operand}))"
 ```
 
 ---
@@ -460,13 +461,10 @@ The target language profoundly constrains the code generator's decisions. Rust's
 The `_mangle` function handles keyword conflicts:
 
 ```python
-# rust_codegen.py:153-162
-_RUST_KEYWORDS = frozenset({"as","async","await","break","const","continue","crate",
-    "dyn","else","enum","extern","false","fn","for","if","impl","in","let","loop",
-    "match","mod","move","mut","pub","ref","return","self","Self","static","struct",
-    "super","trait","true","type","union","unsafe","use","where","while"})
-
+# py2rust/backend/codegen_helpers.py:87-96
 def _mangle(name) -> str:
+    """Escape Python identifiers that collide with Rust keywords."""
+    ...
     return name + "_" if name in _RUST_KEYWORDS else name
 ```
 
@@ -480,7 +478,7 @@ py2rust uses a **two-pass** strategy to overcome a fundamental challenge: whethe
 `use` imports → `PyError` enum → boilerplate → traits → classes → functions → `fn main()`
 
 ```python
-# rust_codegen.py:560-855 (generate method)
+# py2rust/backend/rust_codegen.py:302-695 (generate method)
 # Pass 1: Build separate buffers
 trait_lines, class_lines, func_lines = [], [], []
 for func in ir_mod.functions:
@@ -551,7 +549,7 @@ def _gen_expr(self, expr) -> str:
 The function generation illustrates how a simple code generator handles the function calling convention:
 
 ```python
-# rust_codegen.py:1030-1200 (_gen_function)
+# py2rust/backend/rust_codegen.py:985-1097 (_gen_function)
 def _gen_function(self, func: IRFunction) -> None:
     # 1. Determine Rust signature
     params_str = ", ".join(f"{p.name}: {self._get_rust_type(p.type_)}" for p in func.params)
@@ -731,21 +729,21 @@ The following table maps every major theoretical concept from Module 5 to its co
 
 | Theory Concept | py2rust Location | Notes |
 |----------------|-----------------|-------|
-| Machine-independent optimization | `rust_codegen.py:545` `_strip_parens` | Peephole: removes redundant parens in emitted expressions |
-| Machine-independent optimization | `rust_codegen.py:228` `_collect_mutated_vars` | Global analysis: computes `mut` requirements before emission |
-| Machine-dependent optimization | `rust_codegen.py:897` `#[derive(...)]` macros | Target-specific: controls LLVM struct layout |
-| Local optimization | `rust_codegen.py:1482-1491` `_gen_return` | Removed double-wrap `Ok((val))` → `Ok(val)` in Wave 19 |
-| Global optimization | `rust_codegen.py:314` `_collect_decls` | Variable hoisting — global transformation, crosses basic blocks |
-| Instruction selection bugfix | `rust_codegen.py:1872` `IRSome` | `Ok(val)` → `Some(val)` for `Option<T>` types (Wave 19) |
-| Code generator design — two-pass | `rust_codegen.py:560-855` `generate()` | Pass 1 detects features; Pass 2 emits sorted header |
-| Target language — keyword collision | `rust_codegen.py:108-162` `_mangle` | Escapes Rust reserved keywords found in Python source |
-| Target language — type mapping | `rust_codegen.py:430-493` `_get_rust_type` | Complete Python→Rust type mapping table |
-| Simple code generator — tree walk | `rust_codegen.py` `_gen_stmt`, `_gen_expr` | Recursive descent generator |
-| Memory model — null safety | `rust_codegen.py:1870` `IRSome → Some(val)` | Maps Python's `Optional[T]` to Rust's `Option<T>` |
-| Memory model — error handling | `rust_codegen.py:680-734` PyError boilerplate | All functions return `Result<T, PyError>` |
-| Strength reduction | `rust_codegen.py` floor-division handling | `a // b → (a as f64 / b as f64).floor() as i32` |
-| RAII Scoped Resource Lowering | `rust_codegen.py:2448` `_gen_with` | Lowers `with` statement blocks to RAII-managed scoped blocks `{}` |
-| State-Machine Coroutine Lowering | `rust_codegen.py:1597` `_gen_generator_struct` | Lowers generator functions (`yield`/`yield from`) into custom `Iterator` state machines |
+| Machine-independent optimization | `rust_codegen.py:287` `_strip_parens` | Peephole: removes redundant parens in emitted expressions |
+| Machine-independent optimization | `codegen_helpers.py:203` `_collect_mutated_vars` | Global analysis: computes `mut` requirements before emission |
+| Machine-dependent optimization | `rust_codegen.py:737` `#[derive(...)]` macros | Target-specific: controls LLVM struct layout |
+| Local optimization | `rust_codegen.py:1387-1415` `_gen_return` | Removed double-wrap `Ok((val))` → `Ok(val)` in Wave 19 |
+| Global optimization | `codegen_helpers.py:286` `_collect_decls` | Variable hoisting — global transformation, crosses basic blocks |
+| Instruction selection bugfix | `expr_codegen.py:71` `IRSome` | `Ok(val)` → `Some(val)` for `Option<T>` types (Wave 19) |
+| Code generator design — two-pass | `rust_codegen.py:302-695` `generate()` | Pass 1 detects features; Pass 2 emits sorted header |
+| Target language — keyword collision | `codegen_helpers.py:87-96` `_mangle` | Escapes Rust reserved keywords found in Python source |
+| Target language — type mapping | `rust_codegen.py:161-235` `_get_rust_type` | Complete Python→Rust type mapping table |
+| Simple code generator — tree walk | `rust_codegen.py` and `expr_codegen.py` | Recursive descent generator |
+| Memory model — null safety | `expr_codegen.py:71` `IRSome → Some(val)` | Maps Python's `Optional[T]` to Rust's `Option<T>` |
+| Memory model — error handling | `codegen_helpers.py:363-563` PyError boilerplate | All functions return `Result<T, PyError>` |
+| Strength reduction | `expr_codegen.py:833` floor-division handling | `a // b → (a as f64 / b as f64).floor() as i32` |
+| RAII Scoped Resource Lowering | `rust_codegen.py:1691` `_gen_with` | Lowers `with` statement blocks to RAII-managed scoped blocks `{}` |
+| State-Machine Coroutine Lowering | `generator_codegen.py:322` `_gen_generator_struct` | Lowers generator functions (`yield`/`yield from`) into custom `Iterator` state machines |
 
 ---
 

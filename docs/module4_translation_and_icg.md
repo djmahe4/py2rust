@@ -126,7 +126,7 @@ During execution, the target program must organize memory. Python and Rust have 
 The compiler must select a storage layout in Rust that satisfies Python's semantics while respecting Rust's safety.
 
 ```python
-# py2rust/backend/rust_codegen.py:430
+# py2rust/backend/rust_codegen.py:161
 def _get_rust_type(self, ir_type) -> str:
     if isinstance(ir_type, IRIntType): return "i32" # Stack
     if isinstance(ir_type, IRStrType): return "String" # Heap
@@ -163,7 +163,7 @@ To bridge the gap between Python's dynamic runtime environment and Rust's strict
 To mimic Python's function scope in Rust's block scope, py2rust uses **pre-declaration hoisting**. This ensures storage is allocated at the start of the function, even if the variable is first assigned inside a loop.
 
 ```python
-# py2rust/backend/rust_codegen.py:314
+# py2rust/backend/codegen_helpers.py:286
 # _collect_decls determines which variables must be stack-allocated 
 # at the function entry point.
 ```

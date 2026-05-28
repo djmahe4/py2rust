@@ -127,7 +127,7 @@ UnsupportedFeatureError: example.py:3:5: Parameter 'x' is missing a type annotat
 py2rust favours **early error**: if a construct is not supported, it raises `UnsupportedFeatureError` immediately with a helpful `suggestion`, rather than attempting recovery.
 
 ```python
-# parser.py:205-243 (_parse_funcdef)
+# py2rust/frontend/parser.py:260-266 (_parse_funcdef)
 if arg.annotation is None:
     raise self._err(
         f"Parameter '{arg.arg}' is missing a type annotation",
@@ -254,7 +254,7 @@ Python's grammar (in CPython's `Grammar/python.gram`) eliminates ambiguity throu
 When py2rust calls `ast.parse(source)`, it receives an **unambiguous AST** — all ambiguity was resolved during CPython's parsing phase. The nesting depth of `BinOp` nodes encodes precedence; py2rust reads it faithfully:
 
 ```python
-# parser.py:833-845
+# py2rust/frontend/parser.py:935-947
 if isinstance(node, ast.BinOp):
     op    = _BINOP_MAP.get(type(node.op))
     left  = self._parse_expr(node.left)   # deeper = higher precedence
@@ -267,7 +267,7 @@ if isinstance(node, ast.BinOp):
 py2rust enforces determinism in its own type-annotation grammar through explicit structural checks:
 
 ```python
-# parser.py:416-445
+# py2rust/frontend/parser.py:485-509
 if node.value.id in ("dict", "Dict"):
     if isinstance(node.slice, ast.Tuple):     # dict[K, V] — two args
         key_type   = self._parse_type(node.slice.elts[0])
@@ -322,7 +322,7 @@ For example, Python's `expr_stmt` production handles chained attribute access (`
 In py2rust's `_get_attr_parts`, this chain is recovered by recursive descent over the already-flattened `ast.Attribute` nesting:
 
 ```python
-# parser.py:141-149
+# py2rust/frontend/parser.py:148-156
 def _get_attr_parts(self, attr_node):
     """Recursively extract a.b.c chain — right-to-left in the AST."""
     if isinstance(attr_node, ast.Name):
@@ -359,7 +359,7 @@ type → list[T]  |  dict[K,V]  |  tuple[T...]  |  Optional[T]  |  Union[T,...] 
 All of these are `ast.Subscript` nodes — same "prefix." py2rust left-factors by examining the `value.id` next:
 
 ```python
-# parser.py:411-446
+# py2rust/frontend/parser.py:481-515
 elif isinstance(node, ast.Subscript):
     # ↑ common prefix "it's a subscript" → now factor by inner name
     if isinstance(node.value, ast.Name) and node.value.id in ("list", "List"):
@@ -377,7 +377,7 @@ This is mechanically identical to left factoring: the `isinstance(node, ast.Subs
 Similarly, the `|` (pipe) binary-or syntax for union types needs to be distinguished from arithmetic `|`:
 
 ```python
-# parser.py:447-457
+# py2rust/frontend/parser.py:533-543
 elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
     # Python 3.10+ "int | str" union syntax — same token "|", different grammar rule
     left  = self._parse_type(node.left)
@@ -498,7 +498,7 @@ ForStmt → 'for' target 'in' iterable ':' body
 
 py2rust's `_parse_for` method mirrors this:
 ```python
-# parser.py:754-803
+# py2rust/frontend/parser.py:856-904
 def _parse_for(self, node: ast.For):
     # Detect `for x in range(...)` (ForRange) vs `for x in iterable:` (ForIter)
     if (isinstance(node.iter, ast.Call) and
@@ -527,7 +527,7 @@ WithStmt → 'with' with_item (',' with_item)* ':' body
 
 In `py2rust`, the hand-written parser maps both `ast.With` and `ast.AsyncWith` AST nodes to our internal `WithStmt` AST node via recursive dispatch on sub-expressions:
 ```python
-# parser.py:1328-1348
+# py2rust/frontend/parser.py:1328-1348
 def _parse_with(self, node: Union[ast.With, ast.AsyncWith]) -> WithStmt:
     is_async = isinstance(node, ast.AsyncWith)
     items = []
@@ -555,7 +555,7 @@ def _parse_with(self, node: Union[ast.With, ast.AsyncWith]) -> WithStmt:
 
 To enforce readable and structured control flow, the transpiler rejects ternary conditional expressions. When the expression-dispatch routine `_parse_expr` encounters an `ast.IfExp` node, it immediately raises an error without further tree traversal, preventing subsequent synthesis phases:
 ```python
-# parser.py:1117-1120
+# py2rust/frontend/parser.py:1117-1120
 if isinstance(node, ast.IfExp):
     raise self._err(
         "Ternary expressions are not supported", node, UnsupportedFeatureError
@@ -609,7 +609,7 @@ graph TD
 #### py2rust's `_parse_stmt` — A Predictive Dispatch Table
 
 ```python
-# parser.py:472-750 (condensed)
+# py2rust/frontend/parser.py:558-855 (condensed)
 def _parse_stmt(self, node):
     if isinstance(node, ast.Return):      return self._parse_return(node)  # lookahead: 'return'
     if isinstance(node, ast.Match):       return self._parse_match(node)   # lookahead: 'match'
