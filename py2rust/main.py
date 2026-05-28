@@ -14,123 +14,200 @@ from .utils.logger import setup_logger, get_logger
 import ast
 import re
 
-def extract_rust_fn(rust_code: str, func_name: str) -> str:
-    # Find start of function definition in rust code
-    pattern = re.compile(rf"\bfn\s+{func_name}\b")
-    match = pattern.search(rust_code)
-    if not match:
-        return None
-    start_idx = match.start()
+class RustToken:
+    def __init__(self, token_type: str, value: str, start: int, end: int):
+        self.type = token_type
+        self.value = value
+        self.start = start
+        self.end = end
+
+    def __repr__(self):
+        return f"RustToken({self.type!r}, {self.value!r}, {self.start}, {self.end})"
+
+
+def lex_rust(code: str) -> list[RustToken]:
+    tokens = []
+    idx = 0
+    n = len(code)
     
-    # Robust state tracking scanner to skip comments/literals
-    brace_count = 0
-    started = False
-    in_string = False
-    in_char = False
-    in_line_comment = False
-    in_block_comment = False
-    escaped = False
-    
-    idx = start_idx
-    code_len = len(rust_code)
-    end_idx = code_len
-    
-    while idx < code_len:
-        char = rust_code[idx]
+    while idx < n:
+        char = code[idx]
         
-        if escaped:
-            escaped = False
-            idx += 1
-            continue
-            
-        if in_block_comment:
-            if char == '*' and idx + 1 < code_len and rust_code[idx + 1] == '/':
-                in_block_comment = False
-                idx += 2
-            else:
+        # 1. Whitespace
+        if char.isspace():
+            start = idx
+            while idx < n and code[idx].isspace():
                 idx += 1
+            tokens.append(RustToken("WHITESPACE", code[start:idx], start, idx))
             continue
             
-        if in_line_comment:
-            if char == '\n':
-                in_line_comment = False
-            idx += 1
+        # 2. Line comment
+        if char == '/' and idx + 1 < n and code[idx + 1] == '/':
+            start = idx
+            idx += 2
+            while idx < n and code[idx] != '\n':
+                idx += 1
+            if idx < n:
+                idx += 1
+            tokens.append(RustToken("COMMENT", code[start:idx], start, idx))
             continue
             
-        if in_string:
-            if char == '\\':
-                escaped = True
-            elif char == '"':
-                in_string = False
-            idx += 1
+        # 3. Block comment (supporting nesting)
+        if char == '/' and idx + 1 < n and code[idx + 1] == '*':
+            start = idx
+            idx += 2
+            comment_depth = 1
+            while idx < n and comment_depth > 0:
+                if idx + 1 < n and code[idx] == '/' and code[idx + 1] == '*':
+                    comment_depth += 1
+                    idx += 2
+                elif idx + 1 < n and code[idx] == '*' and code[idx + 1] == '/':
+                    comment_depth -= 1
+                    idx += 2
+                else:
+                    idx += 1
+            tokens.append(RustToken("COMMENT", code[start:idx], start, idx))
             continue
             
-        if in_char:
-            if char == '\\':
-                escaped = True
-            elif char == "'":
-                in_char = False
-            idx += 1
-            continue
-            
-        # Check start of comments, strings, or chars
-        if char == '/' and idx + 1 < code_len:
-            if rust_code[idx + 1] == '/':
-                in_line_comment = True
-                idx += 2
-                continue
-            elif rust_code[idx + 1] == '*':
-                in_block_comment = True
-                idx += 2
-                continue
-                
-        # Check start of raw strings
-        if char == 'r' and idx + 1 < code_len and (rust_code[idx + 1] == '"' or rust_code[idx + 1] == '#'):
+        # 4. Raw String
+        if char == 'r' and idx + 1 < n and (code[idx + 1] == '"' or code[idx + 1] == '#'):
             hashes = 0
             temp_idx = idx + 1
-            while temp_idx < code_len and rust_code[temp_idx] == '#':
+            while temp_idx < n and code[temp_idx] == '#':
                 hashes += 1
                 temp_idx += 1
-            if temp_idx < code_len and rust_code[temp_idx] == '"':
-                end_quote_idx = temp_idx + 1
-                found_match = False
-                while end_quote_idx < code_len:
-                    if rust_code[end_quote_idx] == '"':
-                        check_idx = end_quote_idx + 1
+            if temp_idx < n and code[temp_idx] == '"':
+                start = idx
+                idx = temp_idx + 1
+                found_end = False
+                while idx < n:
+                    if code[idx] == '"':
+                        check_idx = idx + 1
                         match_hashes = 0
-                        while check_idx < code_len and rust_code[check_idx] == '#':
+                        while check_idx < n and code[check_idx] == '#':
                             match_hashes += 1
                             check_idx += 1
                         if match_hashes == hashes:
                             idx = check_idx
-                            found_match = True
+                            found_end = True
                             break
-                    end_quote_idx += 1
-                if found_match:
-                    continue
-
+                    idx += 1
+                if not found_end:
+                    idx = n
+                tokens.append(RustToken("STRING", code[start:idx], start, idx))
+                continue
+                
+        # 5. Normal String
         if char == '"':
-            in_string = True
+            start = idx
             idx += 1
+            escaped = False
+            while idx < n:
+                if escaped:
+                    escaped = False
+                    idx += 1
+                    continue
+                c = code[idx]
+                if c == '\\':
+                    escaped = True
+                    idx += 1
+                elif c == '"':
+                    idx += 1
+                    break
+                else:
+                    idx += 1
+            tokens.append(RustToken("STRING", code[start:idx], start, idx))
             continue
             
+        # 6. Character / Lifetime
         if char == "'":
-            in_char = True
+            start = idx
             idx += 1
+            if idx < n and code[idx] == '\\':
+                idx += 1
+                if idx < n:
+                    idx += 1
+                if idx < n and code[idx] == "'":
+                    idx += 1
+                tokens.append(RustToken("CHAR", code[start:idx], start, idx))
+                continue
+            if idx + 1 < n and code[idx + 1] == "'":
+                idx += 2
+                tokens.append(RustToken("CHAR", code[start:idx], start, idx))
+                continue
+            if idx < n and (code[idx].isalpha() or code[idx] == '_'):
+                while idx < n and (code[idx].isalnum() or code[idx] == '_'):
+                    idx += 1
+                tokens.append(RustToken("LIFETIME", code[start:idx], start, idx))
+                continue
+            tokens.append(RustToken("CHAR", code[start:idx], start, idx))
             continue
             
-        if char == '{':
-            brace_count += 1
-            started = True
-        elif char == '}':
-            brace_count -= 1
+        # 7. Identifier (including keywords)
+        if char.isalpha() or char == '_':
+            start = idx
+            while idx < n and (code[idx].isalnum() or code[idx] == '_'):
+                idx += 1
+            tokens.append(RustToken("IDENTIFIER", code[start:idx], start, idx))
+            continue
             
-        if started and brace_count == 0:
-            end_idx = idx + 1
-            break
+        # 8. Numeric Literals
+        if char.isdigit():
+            start = idx
+            while idx < n and (code[idx].isalnum() or code[idx] in ('.', '_')):
+                idx += 1
+            tokens.append(RustToken("NUMBER", code[start:idx], start, idx))
+            continue
             
+        # 9. Punctuation
+        tokens.append(RustToken("PUNCTUATION", char, idx, idx + 1))
         idx += 1
         
+    return tokens
+
+
+def extract_rust_fn(rust_code: str, func_name: str) -> str:
+    tokens = lex_rust(rust_code)
+    
+    # Filter trivia to check token sequence
+    non_trivia = []
+    for i, t in enumerate(tokens):
+        if t.type not in ("WHITESPACE", "COMMENT"):
+            non_trivia.append((i, t))
+            
+    match_start_token_idx = -1
+    for k in range(len(non_trivia) - 1):
+        idx_in_tokens, tok = non_trivia[k]
+        next_idx_in_tokens, next_tok = non_trivia[k + 1]
+        
+        if tok.type == "IDENTIFIER" and tok.value == "fn" and next_tok.type == "IDENTIFIER" and next_tok.value == func_name:
+            match_start_token_idx = idx_in_tokens
+            break
+            
+    if match_start_token_idx == -1:
+        return None
+        
+    start_idx = tokens[match_start_token_idx].start
+    brace_count = 0
+    started = False
+    end_idx = len(rust_code)
+    
+    for i in range(match_start_token_idx, len(tokens)):
+        t = tokens[i]
+        if t.type == "PUNCTUATION":
+            if t.value == "{":
+                brace_count += 1
+                started = True
+            elif t.value == "}":
+                brace_count -= 1
+            elif t.value == ";" and not started:
+                end_idx = t.end
+                break
+                
+        if started and brace_count == 0:
+            end_idx = t.end
+            break
+            
     return rust_code[start_idx:end_idx]
 
 

@@ -78,3 +78,45 @@ def test_semantic_validator_powershell_hardening(mock_run, mock_which):
         assert cmd_list[-1] == "def safe_func"
     finally:
         sys.platform = original_platform
+
+
+def test_extract_rust_fn_complex_nested():
+    rust_code = """
+    // Pre-declaration comment
+    fn complex_nested_func() {
+        let raw_val = r##"
+            nested {
+                unbalanced braces: } {
+            "##;
+        let c = '}';
+        /*
+        nested comment {
+            comment block
+        }
+        */
+        if true {
+            println!("test");
+        }
+    }
+    """
+    fn_body = extract_rust_fn(rust_code, "complex_nested_func")
+    assert fn_body is not None
+    assert "complex_nested_func" in fn_body
+    assert 'unbalanced braces' in fn_body
+    assert fn_body.strip().endswith("}")
+
+
+def test_extract_rust_fn_trait_semicolon():
+    rust_code = """
+    pub trait MyTrait {
+        fn trait_fn(x: i32) -> String;
+        fn implemented_fn() {
+            println!("trait impl");
+        }
+    }
+    """
+    fn_body = extract_rust_fn(rust_code, "trait_fn")
+    assert fn_body is not None
+    assert "trait_fn" in fn_body
+    assert fn_body.strip().endswith(";")
+
