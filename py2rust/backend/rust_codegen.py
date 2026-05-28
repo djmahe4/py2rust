@@ -1580,38 +1580,17 @@ class RustCodegen(ExprCodegenMixin, GeneratorCodegenMixin):
                     inner = get_mut_target(node.value)
                     idx = self._strip_parens(self._gen_expr(node.index))
                     if isinstance(node.value_type, IRDictType):
-                        return f"({inner}.get_mut(&{idx}).unwrap())"
+                        return f"({inner}.get_mut(&{idx}).ok_or_else(|| PyError::KeyError(format!(\"{{:?}}\", {idx})))?)"
                     return f"(&mut {inner}[{idx} as usize])"
+                if isinstance(node, IRStructAccess):
+                    val = get_mut_target(node.value)
+                    return f"{val}.{_mangle(node.field)}"
                 return self._gen_expr(node)
 
             target_expr = get_mut_target(stmt.target)
-            
-            # Check the type of the IMMEDIATE container being updated
-            container_type = stmt.value_type # This is set in IRBuilder to the container's element/value type?
-            # Wait, IRSubscriptAssign.value_type is the type of the VALUE being assigned?
-            # No, let's check IR node definition.
 
-            # Actually, we can check the target's type if it's a subscript
-            target_is_dict = False
+            # Dispatch based on the target container's result_type (carried by IRSubscript)
             if isinstance(stmt.target, IRSubscript):
-                # If target is d[k], and we assign d[k][final_idx] = v, 
-                # then target_expr refers to d[k] (mutably).
-                # We need to know if d[k] is a dict.
-                if isinstance(stmt.value_type, IRDictType):
-                     # This is confusing. Let's use a simpler check.
-                     pass
-
-            # Fallback: if we are assigning to a dict, use .insert()
-            # We can use the type info from the IR builder if available.
-            # For now, let's check if the target expr "looks like" a call that returns a dict.
-            # Better: IRSubscriptAssign should carry information about whether the target is a dict.
-            
-            # Re-evaluating: let's use the same logic as existing shallow assignment but recursive
-            if isinstance(stmt.target, IRSubscript):
-                # Target is d[k], so we are doing d[k][final_idx] = value
-                # get_mut_target(stmt.target) returns "d.get_mut(&k).unwrap()"
-                # We need to know if d[k] is a dict to use .insert()
-                # IRSubscript has result_type.
                 if isinstance(stmt.target.result_type, IRDictType):
                     self._emit(f"{target_expr}.insert({final_idx}, {value_val});")
                 elif isinstance(stmt.target.result_type, IRStrType):

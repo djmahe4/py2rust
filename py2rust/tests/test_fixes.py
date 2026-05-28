@@ -506,7 +506,7 @@ def main() -> int:
     return x
 """
     code = _compile(src)
-    assert '.get(&"a".to_string()).unwrap().clone()' in code
+    assert '.get(&"a".to_string()).ok_or_else(' in code
 
 
 def test_dict_update():
@@ -1537,3 +1537,33 @@ def main() -> int:
     assert "lst.append(42)?;" in code
 
 
+def test_dict_nested_write_missing_key_no_unwrap():
+    """get_mut_target dict branch must propagate KeyError via ok_or_else, not panic."""
+    src = """
+def main() -> None:
+    d: dict[str, int] = {}
+    x: int = d["x"]
+    return
+"""
+    code = _compile(src)
+    assert '.get(&"x".to_string()).unwrap()' not in code
+    assert '.get(&"x".to_string()).ok_or_else(' in code
+
+
+def test_floor_div_compound_operands():
+    """Floor-division must use _gen_expr_as_float so compound sub-expressions are
+    parenthesised before the cast, preventing `a + b as f64` precedence bugs."""
+    src = """
+def main() -> int:
+    a: int = 3
+    b: int = 2
+    c: int = 1
+    result: int = (a + c) // (b - 1)
+    return result
+"""
+    code = _compile(src)
+    # Raw `as f64` casts on compound expressions must NOT appear
+    assert "a + c as f64" not in code
+    assert "b - 1 as f64" not in code
+    # The floor call must be present
+    assert ".floor() as i32" in code

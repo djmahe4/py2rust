@@ -229,8 +229,9 @@ def _collect_mutated_vars(stmts) -> set:
                     mutated.add(name)
             elif isinstance(stmt, IRTupleUnpack):
                 for t in stmt.targets:
-                    mutated.add(t)
-                    assigned_vars[t] = assigned_vars.get(t, 0) + 1
+                    name = t.name if hasattr(t, "name") else str(t)
+                    mutated.add(name)
+                    assigned_vars[name] = assigned_vars.get(name, 0) + 1
             elif isinstance(stmt, IRFieldAssign):
                 mutated.add("self")
             elif isinstance(stmt, IRVarDecl):

@@ -20,7 +20,8 @@ def update_dict() -> int:
     rust_code = codegen.generate(ir_mod)
     
     # Verify recursively generated mutable access
-    assert "(d.get_mut(&\"a\".to_string()).unwrap()).insert(\"b\".to_string(), 2);" in rust_code
+    assert '(d.get_mut(&"a".to_string()).ok_or_else(' in rust_code
+    assert ').insert("b".to_string(), 2);' in rust_code
 
 def test_deep_list_update():
     source = """
@@ -57,4 +58,5 @@ def update_mixed() -> int:
     codegen = RustCodegen()
     rust_code = codegen.generate(ir_mod)
     
-    assert "(d.get_mut(&\"a\".to_string()).unwrap())[0 as usize] = 3;" in rust_code
+    assert '(d.get_mut(&"a".to_string()).ok_or_else(' in rust_code
+    assert ')[0 as usize] = 3;' in rust_code

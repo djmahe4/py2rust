@@ -494,7 +494,7 @@ py2rust/
 │   │   ├── logger.py        # Logging setup
 │   │   └── visitor.py       # Generic visitor pattern
 │   │
-│   └── tests/               # pytest test suite (351 tests)
+│   └── tests/               # pytest test suite (353 tests)
 │
 ├── examples/                # Input/output examples
 └── pyproject.toml

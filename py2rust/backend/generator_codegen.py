@@ -151,13 +151,19 @@ self.__state = {next_state};"""
             return [(current_state, code)], next_free_state
 
         elif isinstance(stmt, IRIf):
+            # Reconstruct branches from IRIf fields (no .branches attribute exists)
+            branches = [(stmt.condition, stmt.then_body)]
+            branches += list(stmt.elif_clauses)
+            if stmt.else_body is not None:
+                branches.append((None, stmt.else_body))
+
             branch_states = []
-            for _ in stmt.branches:
+            for _ in branches:
                 branch_states.append(next_free_state)
                 next_free_state += 1
-                
+
             cond_lines = []
-            for idx, (cond, _) in enumerate(stmt.branches):
+            for idx, (cond, _) in enumerate(branches):
                 target_state = branch_states[idx]
                 if cond is None:
                     cond_lines.append(f"else {{\n    self.__state = {target_state};\n}}")
@@ -167,20 +173,20 @@ self.__state = {next_state};"""
                         cond_lines.append(f"if {cond_str} {{\n    self.__state = {target_state};\n}}")
                     else:
                         cond_lines.append(f"else if {cond_str} {{\n    self.__state = {target_state};\n}}")
-                        
-            if not any(cond is None for cond, _ in stmt.branches):
+
+            if not any(cond is None for cond, _ in branches):
                 cond_lines.append(f"else {{\n    self.__state = {next_state};\n}}")
-                
+
             current_block = (current_state, "\n".join(cond_lines))
-            
+
             all_blocks = [current_block]
-            for idx, (_, body_stmts) in enumerate(stmt.branches):
+            for idx, (_, body_stmts) in enumerate(branches):
                 body_state = branch_states[idx]
                 body_blocks, next_free_state = self.compile_block(
                     body_stmts, body_state, next_state, next_free_state
                 )
                 all_blocks.extend(body_blocks)
-                
+
             return all_blocks, next_free_state
 
         elif isinstance(stmt, IRWhile):

@@ -184,10 +184,10 @@ class ExprCodegenMixin:
             if expr.trait_info and expr.trait_info[0] == "Index":
                 return f"{val}.__getitem__({idx})?"
 
-            # Handle dict subscript: d[key] -> __d.get(&key).unwrap().clone()
+            # Handle dict subscript: d[key] -> ok_or_else propagates KeyError instead of panicking
             if isinstance(expr.value_type, IRDictType):
                 val_t = self._get_rust_type(expr.value_type.value_type)
-                return f"{val}.get(&{idx}).unwrap().clone()"
+                return f"{val}.get(&{idx}).ok_or_else(|| PyError::KeyError(format!(\"{{:?}}\", {idx})))?.clone()"
 
             # Handle ExternalObject indexing (e.g., json data)
             is_ext = False
@@ -831,9 +831,9 @@ class ExprCodegenMixin:
             right = self._gen_expr_as_float(expr.right)
             return f"{left} / {right}"
         if expr.op == "//":
-            left = self._gen_expr(expr.left)
-            right = self._gen_expr(expr.right)
-            return f"({left} as f64 / {right} as f64).floor() as i32"
+            left = self._gen_expr_as_float(expr.left)
+            right = self._gen_expr_as_float(expr.right)
+            return f"({left} / {right}).floor() as i32"
         if expr.op == "+" and isinstance(expr.result_type, IRStrType):
             left = self._gen_expr(expr.left)
             right = self._gen_expr(expr.right)
