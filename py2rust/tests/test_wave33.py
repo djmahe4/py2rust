@@ -78,69 +78,68 @@ def test_pattern_store_persistence():
     from py2rust.learning_system.learning.pattern_store import PatternStore
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "patterns.jsonl")
-        store = PatternStore(db_path)
-        
-        pattern = {
-            "pattern_id": "float_division",
-            "trigger_pattern": "a / b",
-            "target_rust": "a / b",
-            "replacement_rust": "a as f64 / b as f64",
-            "evidence_count": 2,
-            "confidence": 0.92
-        }
-        store.save_pattern(pattern)
-        
-        patterns = store.get_patterns()
-        assert len(patterns) == 1
-        assert patterns[0]["pattern_id"] == "float_division"
-        assert patterns[0]["evidence_count"] == 2
+        with PatternStore(db_path) as store:
+            pattern = {
+                "pattern_id": "float_division",
+                "trigger_pattern": "a / b",
+                "target_rust": "a / b",
+                "replacement_rust": "a as f64 / b as f64",
+                "evidence_count": 2,
+                "confidence": 0.92
+            }
+            store.save_pattern(pattern)
+
+            patterns = store.get_patterns()
+            assert len(patterns) == 1
+            assert patterns[0]["pattern_id"] == "float_division"
+            assert patterns[0]["evidence_count"] == 2
 
 def test_pattern_extractor():
     from py2rust.learning_system.learning.pattern_extractor import PatternExtractor
     from py2rust.learning_system.learning.pattern_store import PatternStore
-    
+
     with tempfile.TemporaryDirectory() as tmpdir:
         patterns_path = os.path.join(tmpdir, "patterns.jsonl")
-        pattern_store = PatternStore(patterns_path)
-        extractor = PatternExtractor(pattern_store=pattern_store, evidence_threshold=2)
-        
-        # Aggregated validation failures
-        failures = [
-            {
-                "symbol_name": "divide",
-                "python_source": "def divide(a, b): return a / b",
-                "generated_rust": "fn divide(a: i32, b: i32) -> f64 { a / b }",
-                "verdict": "FAIL",
-                "confidence": 0.9,
-                "reasoning": "Integer division truncates, but return type is f64."
-            },
-            {
-                "symbol_name": "divide_floats",
-                "python_source": "def divide_floats(x, y): return x / y",
-                "generated_rust": "fn divide_floats(x: i32, y: i32) -> f64 { x / y }",
-                "verdict": "FAIL",
-                "confidence": 0.9,
-                "reasoning": "Integer division truncates instead of float output."
-            }
-        ]
-        
-        # Mock client to return generalized pattern
-        import unittest.mock as mock
-        mock_client = mock.Mock()
-        mock_client.generate.return_value = """PATTERN_ID: int_to_float_div
+        with PatternStore(patterns_path) as pattern_store:
+            extractor = PatternExtractor(pattern_store=pattern_store, evidence_threshold=2)
+
+            # Aggregated validation failures
+            failures = [
+                {
+                    "symbol_name": "divide",
+                    "python_source": "def divide(a, b): return a / b",
+                    "generated_rust": "fn divide(a: i32, b: i32) -> f64 { a / b }",
+                    "verdict": "FAIL",
+                    "confidence": 0.9,
+                    "reasoning": "Integer division truncates, but return type is f64."
+                },
+                {
+                    "symbol_name": "divide_floats",
+                    "python_source": "def divide_floats(x, y): return x / y",
+                    "generated_rust": "fn divide_floats(x: i32, y: i32) -> f64 { x / y }",
+                    "verdict": "FAIL",
+                    "confidence": 0.9,
+                    "reasoning": "Integer division truncates instead of float output."
+                }
+            ]
+
+            # Mock client to return generalized pattern
+            import unittest.mock as mock
+            mock_client = mock.Mock()
+            mock_client.generate.return_value = """PATTERN_ID: int_to_float_div
 TRIGGER_PATTERN: /
 TARGET_RUST: a / b
 REPLACEMENT_RUST: a as f64 / b as f64
 CONFIDENCE: 0.88"""
-        
-        extractor.client = mock_client
-        extractor.extract_from_failures(failures)
-        
-        patterns = pattern_store.get_patterns()
-        assert len(patterns) == 1
-        assert patterns[0]["pattern_id"] == "int_to_float_div"
-        assert patterns[0]["trigger_pattern"] == "/"
-        assert patterns[0]["replacement_rust"] == "a as f64 / b as f64"
+
+            extractor.client = mock_client
+            extractor.extract_from_failures(failures)
+
+            patterns = pattern_store.get_patterns()
+            assert len(patterns) == 1
+            assert patterns[0]["pattern_id"] == "int_to_float_div"
+            assert patterns[0]["trigger_pattern"] == "/"
+            assert patterns[0]["replacement_rust"] == "a as f64 / b as f64"
 
 def test_pattern_applicator_format():
     from py2rust.learning_system.learning.pattern_applicator import PatternApplicator

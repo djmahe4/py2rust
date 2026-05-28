@@ -167,16 +167,15 @@ def test_pattern_store_sqlite_migration():
         with open(jsonl_path, "w", encoding="utf-8") as f:
             f.write(json.dumps(pattern_record) + "\n")
 
-        # Instantiate PatternStore (which triggers migration and deletion of jsonl)
-        store = PatternStore(db_path)
-
-        # Verify jsonl is gone and database has the record
-        assert not os.path.exists(jsonl_path)
-        patterns = store.get_patterns()
-        assert len(patterns) == 1
-        assert patterns[0]["pattern_id"] == "test_migrated_pattern"
-        assert patterns[0]["evidence_count"] == 5
-        assert patterns[0]["confidence"] == 0.99
+        # Use as context manager so connection is closed before tmpdir is deleted
+        with PatternStore(db_path) as store:
+            # Verify jsonl is gone and database has the record
+            assert not os.path.exists(jsonl_path)
+            patterns = store.get_patterns()
+            assert len(patterns) == 1
+            assert patterns[0]["pattern_id"] == "test_migrated_pattern"
+            assert patterns[0]["evidence_count"] == 5
+            assert patterns[0]["confidence"] == 0.99
 
 
 def test_pattern_store_concurrent_writes():
@@ -187,34 +186,33 @@ def test_pattern_store_concurrent_writes():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "patterns.db")
-        store = PatternStore(db_path)
+        with PatternStore(db_path) as store:
+            def write_pattern(idx):
+                pattern = {
+                    "pattern_id": f"pattern_{idx}",
+                    "trigger_pattern": "trigger",
+                    "target_rust": "target",
+                    "replacement_rust": "replacement",
+                    "evidence_count": 1,
+                    "confidence": 0.5
+                }
+                store.save_pattern(pattern)
 
-        def write_pattern(idx):
-            pattern = {
-                "pattern_id": f"pattern_{idx}",
-                "trigger_pattern": "trigger",
-                "target_rust": "target",
-                "replacement_rust": "replacement",
-                "evidence_count": 1,
-                "confidence": 0.5
-            }
-            store.save_pattern(pattern)
+            # Spawn multiple threads writing to the database concurrently
+            threads = []
+            for i in range(10):
+                t = threading.Thread(target=write_pattern, args=(i,))
+                threads.append(t)
+                t.start()
 
-        # Spawn multiple threads writing to the database concurrently
-        threads = []
-        for i in range(10):
-            t = threading.Thread(target=write_pattern, args=(i,))
-            threads.append(t)
-            t.start()
+            for t in threads:
+                t.join()
 
-        for t in threads:
-            t.join()
-
-        # Verify all patterns were stored safely
-        patterns = store.get_patterns()
-        assert len(patterns) == 10
-        pattern_ids = {p["pattern_id"] for p in patterns}
-        for i in range(10):
-            assert f"pattern_{i}" in pattern_ids
+            # Verify all patterns were stored safely
+            patterns = store.get_patterns()
+            assert len(patterns) == 10
+            pattern_ids = {p["pattern_id"] for p in patterns}
+            for i in range(10):
+                assert f"pattern_{i}" in pattern_ids
 
 
