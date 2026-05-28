@@ -28,22 +28,7 @@ from ..frontend.ast_nodes import (
     GeneratorType,
 )
 from .symbol_table import SymbolTable
-
-
-def _get_iterable_item_type(it_type):
-    if isinstance(it_type, ListType):
-        return it_type.element_type
-    if isinstance(it_type, IteratorType):
-        return it_type.element_type
-    if isinstance(it_type, IterableType):
-        return it_type.element_type
-    if isinstance(it_type, GeneratorType):
-        return it_type.yield_type
-    if isinstance(it_type, StrType):
-        return StrType()
-    if isinstance(it_type, DictType):
-        return it_type.key_type
-    return None
+from .type_helpers import _get_iterable_item_type
 
 
 class TypeInferencer:

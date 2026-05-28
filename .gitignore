@@ -212,3 +212,4 @@ __marimo__/
 docs/plans/*
 scratch_classes/
 .py2rust/
+.free-llm-mcp/

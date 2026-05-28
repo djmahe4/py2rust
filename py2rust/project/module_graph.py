@@ -36,9 +36,12 @@ class ModuleGraph:
                         for alias in imp.names:
                             resolved = alias.name
                             if self.resolver.is_intra_repo(resolved):
-                                for local_name in self.resolver.local_modules:
-                                    if resolved == local_name or local_name.startswith(resolved + "."):
-                                        self.dependencies[mod_name].add(local_name)
+                                if resolved in self.resolver.local_modules:
+                                    self.dependencies[mod_name].add(resolved)
+                                else:
+                                    for local_name in self.resolver.local_modules:
+                                        if local_name.startswith(resolved + "."):
+                                            self.dependencies[mod_name].add(local_name)
                     elif isinstance(imp, ImportFrom):
                         if imp.module or imp.level > 0:
                             if imp.level > 0:
@@ -62,7 +65,9 @@ class ModuleGraph:
                                     self.dependencies[mod_name].add(base_mod_name)
                                 elif base_mod_name:
                                     if self.resolver.is_intra_repo(base_mod_name):
-                                        self.dependencies[mod_name].add(base_mod_name)
+                                        for local_name in self.resolver.local_modules:
+                                            if local_name.startswith(base_mod_name + "."):
+                                                self.dependencies[mod_name].add(local_name)
             except Exception:
                 # If parsing fails or file doesn't exist, we skip
                 pass
