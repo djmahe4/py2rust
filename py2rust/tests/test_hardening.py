@@ -120,3 +120,101 @@ def test_extract_rust_fn_trait_semicolon():
     assert "trait_fn" in fn_body
     assert fn_body.strip().endswith(";")
 
+
+def test_type_mapping_registry():
+    from py2rust.middleend.type_mapping import map_type_to_ir
+    from py2rust.frontend.ast_nodes import IntType, ListType, OptionalType, StrType
+    from py2rust.ir.ir_nodes import IRIntType, IRListType, IROptionType, IRStrType
+
+    # Test basic type mapping
+    ast_int = IntType()
+    ir_int = map_type_to_ir(ast_int)
+    assert isinstance(ir_int, IRIntType)
+
+    # Test nested list type mapping
+    ast_list = ListType(element_type=IntType())
+    ir_list = map_type_to_ir(ast_list)
+    assert isinstance(ir_list, IRListType)
+    assert isinstance(ir_list.element_type, IRIntType)
+
+    # Test nested optional type mapping
+    ast_opt = OptionalType(inner_type=StrType())
+    ir_opt = map_type_to_ir(ast_opt)
+    assert isinstance(ir_opt, IROptionType)
+    assert isinstance(ir_opt.inner_type, IRStrType)
+
+
+def test_pattern_store_sqlite_migration():
+    import tempfile
+    import os
+    import json
+    from py2rust.learning_system.learning.pattern_store import PatternStore
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        jsonl_path = os.path.join(tmpdir, "patterns.jsonl")
+        db_path = os.path.join(tmpdir, "patterns.db")
+
+        # Create a legacy jsonl file
+        pattern_record = {
+            "pattern_id": "test_migrated_pattern",
+            "timestamp": "2026-05-28T00:00:00Z",
+            "trigger_pattern": "x / y",
+            "target_rust": "x / y",
+            "replacement_rust": "x as f64 / y as f64",
+            "evidence_count": 5,
+            "confidence": 0.99
+        }
+        with open(jsonl_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(pattern_record) + "\n")
+
+        # Instantiate PatternStore (which triggers migration and deletion of jsonl)
+        store = PatternStore(db_path)
+
+        # Verify jsonl is gone and database has the record
+        assert not os.path.exists(jsonl_path)
+        patterns = store.get_patterns()
+        assert len(patterns) == 1
+        assert patterns[0]["pattern_id"] == "test_migrated_pattern"
+        assert patterns[0]["evidence_count"] == 5
+        assert patterns[0]["confidence"] == 0.99
+
+
+def test_pattern_store_concurrent_writes():
+    import tempfile
+    import os
+    import threading
+    from py2rust.learning_system.learning.pattern_store import PatternStore
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "patterns.db")
+        store = PatternStore(db_path)
+
+        def write_pattern(idx):
+            pattern = {
+                "pattern_id": f"pattern_{idx}",
+                "trigger_pattern": "trigger",
+                "target_rust": "target",
+                "replacement_rust": "replacement",
+                "evidence_count": 1,
+                "confidence": 0.5
+            }
+            store.save_pattern(pattern)
+
+        # Spawn multiple threads writing to the database concurrently
+        threads = []
+        for i in range(10):
+            t = threading.Thread(target=write_pattern, args=(i,))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        # Verify all patterns were stored safely
+        patterns = store.get_patterns()
+        assert len(patterns) == 10
+        pattern_ids = {p["pattern_id"] for p in patterns}
+        for i in range(10):
+            assert f"pattern_{i}" in pattern_ids
+
+

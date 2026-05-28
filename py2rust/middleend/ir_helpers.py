@@ -141,77 +141,13 @@ from ..ir.ir_nodes import (
 
 from ..utils.errors import SemanticError
 
+from .type_mapping import map_type_to_ir
+
 def _to_ir_type(t):
-    if isinstance(t, str):
-        return IRClassType(name=t)
-    if t is None:
-        return IRUnitType()
-    # If already an IR type, return as is
-    if isinstance(t, (IRIntType, IRFloatType, IRBoolType, IRStrType, IRUnitType, IRListType, IRDictType, IRTupleType, IRFileType, IRClassType, IREnumType, IRTypeParam, IRGenericType, IRExternalPythonType, IROptionType, IRSumType, IRIteratorType, IRIterableType, IRGeneratorType, IRSetType, IRDequeType, IRHeapType)):
-        return t
-        
-    if isinstance(t, IntType):
-        return IRIntType()
-    if isinstance(t, FloatType):
-        return IRFloatType()
-    if isinstance(t, BoolType):
-        return IRBoolType()
-    if isinstance(t, StrType):
-        return IRStrType()
-    if isinstance(t, UnitType):
-        return IRUnitType()
-    if isinstance(t, ListType):
-        return IRListType(element_type=_to_ir_type(t.element_type))
-    elif isinstance(t, DequeType):
-        return IRDequeType(element_type=_to_ir_type(t.element_type))
-    elif isinstance(t, HeapType):
-        return IRHeapType(element_type=_to_ir_type(t.element_type))
-    if isinstance(t, DictType):
-        return IRDictType(
-            key_type=_to_ir_type(t.key_type),
-            value_type=_to_ir_type(t.value_type),
-        )
-    if isinstance(t, FileType):
-        return IRFileType()
-    if isinstance(t, ClassType):
-        return IRClassType(name=t.name, base=t.base)
-    if isinstance(t, EnumType):
-        return IREnumType(name=t.name)
-    if isinstance(t, SetType):
-        return IRSetType(element_type=_to_ir_type(t.element_type))
-    if isinstance(t, FunctionType):
-        return IRFunctionType(
-            param_types=tuple(_to_ir_type(pt) for pt in t.param_types),
-            return_type=_to_ir_type(t.return_type),
-        )
-    if isinstance(t, UnknownType):
-        return IRIntType() # Default to int instead of ExternalObject for non-mock unknown types
-    if isinstance(t, TupleType):
-        return IRTupleType(element_types=tuple(_to_ir_type(et) for et in t.element_types))
-    if isinstance(t, TypeVarType):
-        return IRTypeParam(name=t.name)
-    if isinstance(t, GenericType):
-        return IRGenericType(base=_to_ir_type(t.base), params=tuple(_to_ir_type(p) for p in t.params))
-    if isinstance(t, ExternalPythonType):
-        return IRExternalPythonType(module=t.module, name=t.name, is_local=t.is_local)
-    if isinstance(t, OptionalType):
-        return IROptionType(inner_type=_to_ir_type(t.inner_type))
-    if isinstance(t, UnionType):
-        return IRSumType(variants=tuple(_to_ir_type(v) for v in t.variants))
-    if isinstance(t, SliceType):
-        return IRSliceType()
-    if isinstance(t, IteratorType):
-        return IRIteratorType(element_type=_to_ir_type(t.element_type))
-    if isinstance(t, IterableType):
-        return IRIterableType(element_type=_to_ir_type(t.element_type))
-    if isinstance(t, GeneratorType):
-        return IRGeneratorType(
-            yield_type=_to_ir_type(t.yield_type),
-            send_type=_to_ir_type(t.send_type),
-            return_type=_to_ir_type(t.return_type),
-        )
-    
-    raise SemanticError(f"Unknown type: {t}")
+    try:
+        return map_type_to_ir(t)
+    except ValueError as e:
+        raise SemanticError(str(e))
 
 _MUTEX_NAMES = frozenset({
     "Mutex", "Lock", "RwLock", "Semaphore", "Condition",

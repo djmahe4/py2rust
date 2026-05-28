@@ -33,7 +33,7 @@ Failure Reasoning:
         prompt = f"""TASK: Analyze the following compilation failures and extract a generalized translation adjustment pattern.
 
 FAILURES:
-{"/n".join(failures_summary)}
+{"\n".join(failures_summary)}
 
 RESPOND ONLY WITH THE FOLLOWING SCHEMA:
 PATTERN_ID: [snake_case identifier]

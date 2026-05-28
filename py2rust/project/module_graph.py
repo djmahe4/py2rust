@@ -116,33 +116,44 @@ class ModuleGraph:
             # There is a cycle!
             remaining_nodes = [node for node in self.modules if node not in order]
             
-            # DFS to find a cycle among remaining nodes
+            # DFS to find a cycle among remaining nodes using an iterative stack
             visited: Dict[str, int] = {} # 0=unvisited, 1=visiting, 2=visited
-            cycle_path: List[str] = []
-
-            def dfs(node: str) -> List[str] | None:
-                visited[node] = 1
-                cycle_path.append(node)
-                for dep in sorted(self.dependencies.get(node, set())):
-                    if dep in remaining_nodes:
-                        if visited.get(dep, 0) == 1:
-                            cycle_path.append(dep)
-                            start_idx = cycle_path.index(dep)
-                            return cycle_path[start_idx:]
-                        elif visited.get(dep, 0) == 0:
-                            res = dfs(dep)
-                            if res:
-                                return res
-                cycle_path.pop()
-                visited[node] = 2
-                return None
-
             cycle = None
-            for node in sorted(remaining_nodes):
-                if visited.get(node, 0) == 0:
-                    cycle = dfs(node)
-                    if cycle:
-                        break
+
+            for start_node in sorted(remaining_nodes):
+                if visited.get(start_node, 0) != 0:
+                    continue
+
+                def get_deps(n):
+                    return sorted([d for d in self.dependencies.get(n, set()) if d in remaining_nodes])
+
+                stack = [(start_node, get_deps(start_node), 0)]
+                visited[start_node] = 1
+                path = [start_node]
+                path_set = {start_node}
+
+                while stack:
+                    curr_node, deps, idx = stack[-1]
+                    if idx < len(deps):
+                        dep = deps[idx]
+                        stack[-1] = (curr_node, deps, idx + 1)
+                        if dep in path_set:
+                            dep_idx = path.index(dep)
+                            cycle = path[dep_idx:] + [dep]
+                            break
+                        elif visited.get(dep, 0) == 0:
+                            visited[dep] = 1
+                            path.append(dep)
+                            path_set.add(dep)
+                            stack.append((dep, get_deps(dep), 0))
+                    else:
+                        stack.pop()
+                        visited[curr_node] = 2
+                        path.pop()
+                        path_set.remove(curr_node)
+
+                if cycle:
+                    break
 
             if cycle:
                 unique_cycle = list(dict.fromkeys(cycle[:-1]))
