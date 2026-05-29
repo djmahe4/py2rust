@@ -5,7 +5,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/py2rust.svg)](https://pypi.org/project/py2rust/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.87+-orange.svg)](https://www.rust-lang.org)
-[![CI](https://github.com/djmahe4/py2rust/workflows/CI/badge.svg)](https://github.com/djmahe4/py2rust/actions)
+[![CI](https://github.com/djmahe4/py2rust/actions/workflows/ci.yml/badge.svg)](https://github.com/djmahe4/py2rust/actions/workflows/ci.yml)
 
 A **Python-to-Rust subset compiler** built following formal compiler design principles: frontend, middle-end, and backend, with clear separation of concerns.
 
